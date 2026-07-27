@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>{% block title %}Gardena Tracker{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <nav class="bottom-nav">
+    <a href="{{ url_for('scan_page') }}" class="{{ 'active' if request.endpoint == 'scan_page' }}">📷<span>Scan</span></a>
+    <a href="{{ url_for('summary_page') }}" class="{{ 'active' if request.endpoint == 'summary_page' }}">📊<span>Summary</span></a>
+    <a href="{{ url_for('correct_page') }}" class="{{ 'active' if request.endpoint == 'correct_page' }}">✏️<span>Correct</span></a>
+    <a href="{{ url_for('admin_page') }}" class="{{ 'active' if request.endpoint == 'admin_page' }}">⚙️<span>Admin</span></a>
+  </nav>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

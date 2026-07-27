@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Summary · Gardena Tracker{% endblock %}
+{% block content %}
+<header class="topbar"><h1>Today — {{ date }}</h1></header>
+
+<section class="card">
+  <h2>Raw ingredients used today</h2>
+  <table>
+    {% for r in raw_usage %}
+    <tr><td>{{ r.display_name }}</td><td class="num">{{ r.used|int }} {{ r.unit_of_measure }}{{ 's' if r.used != 1 }}</td></tr>
+    {% else %}
+    <tr><td>No raw ingredients configured.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Premade batches today</h2>
+  <table>
+    <tr class="thead"><td></td><td class="num">Made</td><td class="num">Finished</td><td class="num">Wasted</td></tr>
+    {% for p in premade %}
+    <tr>
+      <td>{{ p.display_name }}</td>
+      <td class="num">{{ p.made|int }}</td>
+      <td class="num">{{ p.finished|int }}</td>
+      <td class="num {{ 'warn' if p.wasted }}">{{ p.wasted|int }}</td>
+    </tr>
+    {% else %}
+    <tr><td>No premade items configured.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Current counts</h2>
+  <table>
+    {% for c in counts %}
+    <tr>
+      <td>{{ c.display_name }}</td>
+      <td class="muted">{{ 'active batches' if c.category == 'PREMADE' else c.unit_of_measure + 's' }}</td>
+      <td class="num big {{ 'warn' if c.current_count < 0 }}">{{ c.current_count|int if c.current_count == c.current_count|int else c.current_count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Today's activity log</h2>
+  <table class="log">
+    {% for e in events %}
+    <tr>
+      <td class="muted">{{ e.timestamp[11:16] }}</td>
+      <td>{{ e.display_name or e.scanned_code }}</td>
+      <td>{{ e.action.replace('_', ' ').title() }}</td>
+      <td class="num">{{ '%+d'|format(e.quantity_delta|int) if e.quantity_delta else '' }}</td>
+      <td class="muted">{{ e.employee_name or '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td>No activity yet today.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

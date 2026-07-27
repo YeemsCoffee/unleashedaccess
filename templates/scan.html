@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Scan · Gardena Tracker{% endblock %}
+{% block content %}
+<header class="topbar">
+  <h1>Scan</h1>
+  <select id="employee" title="Who is scanning?">
+    <option value="">Who? (optional)</option>
+    {% for u in users %}
+    <option value="{{ u.id }}">{{ u.name }}</option>
+    {% endfor %}
+  </select>
+</header>
+
+<div id="reader" class="reader"></div>
+<button id="start-btn" class="btn btn-primary btn-big">Start camera</button>
+
+<div id="result" class="result hidden"></div>
+
+<div id="actions" class="actions hidden"></div>
+
+<form id="manual-form" class="manual">
+  <input id="manual-code" type="text" placeholder="Or type a code, e.g. GDN-WHOLE-MILK-JUG"
+         autocomplete="off" autocapitalize="characters">
+  <button type="submit" class="btn">Go</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/html5-qrcode.min.js') }}"></script>
+<script src="{{ url_for('static', filename='scanner.js') }}"></script>
+{% endblock %}

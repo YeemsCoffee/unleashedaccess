@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Admin · Gardena Tracker{% endblock %}
+{% block content %}
+<header class="topbar"><h1>Admin</h1></header>
+
+<section class="card">
+  <h2>Items</h2>
+  <table>
+    {% for item in items %}
+    <tr class="{{ 'inactive' if not item.active }}">
+      <td>
+        <strong>{{ item.display_name }}</strong><br>
+        <span class="muted mono">{{ item.item_code }}</span>
+      </td>
+      <td class="muted">{{ 'Premade' if item.category == 'PREMADE' else 'Raw' }}</td>
+      <td class="num">{{ item.current_count|int if item.current_count is not none else 0 }}</td>
+      <td class="row-actions">
+        <a class="btn btn-small" href="{{ url_for('labels_page', item_id=item.id) }}">Labels</a>
+        <form method="post" action="{{ url_for('admin_toggle_item', item_id=item.id) }}">
+          <button type="submit" class="btn btn-small">{{ 'Disable' if item.active else 'Enable' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Add item</h2>
+  <form method="post" action="{{ url_for('admin_add_item') }}" class="stack">
+    <input name="display_name" placeholder="Display name (e.g. Oat Milk)" required>
+    <input name="item_code" placeholder="Code (e.g. GDN-OAT-MILK-JUG)" required
+           autocapitalize="characters" pattern="[A-Za-z0-9][A-Za-z0-9-]*">
+    <div class="adjust-row">
+      <select name="category">
+        <option value="RAW_INGREDIENT">Raw ingredient (scan = used 1)</option>
+        <option value="PREMADE">Premade batch (labels track status)</option>
+      </select>
+      <input name="unit_of_measure" placeholder="Unit (jug / container)">
+    </div>
+    <button type="submit" class="btn btn-primary">Add item</button>
+  </form>
+  <p class="muted">Set the starting count on the Correct screen — it's logged like any adjustment.
+    For premade items, print unique labels with the Labels button; new labels register
+    themselves as MADE on first scan.</p>
+</section>
+
+<section class="card">
+  <h2>Employees</h2>
+  <table>
+    {% for u in users %}
+    <tr class="{{ 'inactive' if not u.active }}">
+      <td>{{ u.name }}</td>
+      <td class="muted">{{ u.role.title() }}</td>
+      <td class="row-actions">
+        <form method="post" action="{{ url_for('admin_toggle_user', user_id=u.id) }}">
+          <button type="submit" class="btn btn-small">{{ 'Disable' if u.active else 'Enable' }}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="{{ url_for('admin_add_user') }}" class="adjust-row">
+    <input name="name" placeholder="Name" required>
+    <select name="role">
+      <option value="EMPLOYEE">Employee</option>
+      <option value="MANAGER">Manager</option>
+      <option value="ADMIN">Admin</option>
+    </select>
+    <button type="submit" class="btn btn-primary">Add</button>
+  </form>
+</section>
+{% endblock %}
