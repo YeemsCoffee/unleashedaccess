@@ -6,7 +6,7 @@ def load_env_file(path=None):
     path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if not os.path.exists(path):
         return
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:  # -sig: tolerate a BOM from Windows editors
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:

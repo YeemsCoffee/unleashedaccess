@@ -8,8 +8,8 @@ It includes a **mock Unleashed server**, so the whole dashboard works before
 it's connected to a live account. Switching to real data is one setting.
 
 ```
-Dashboard pages ──► Reports (unleashed/reports.py) ──► UnleashedClient ──┬─► api.unleashedsoftware.com   (UNLEASHED_MODE=live)
-                                                                         └─► mock Unleashed server        (UNLEASHED_MODE=mock, default)
+Dashboard pages ──► Reports (unleashed/reports.py) ──► UnleashedClient ──┬─► api.unleashedsoftware.com   (UNLEASHED_MODE=live, default when credentials are set)
+                                                                         └─► mock Unleashed server        (UNLEASHED_MODE=mock, default without credentials)
 ```
 
 ## Running it
@@ -105,7 +105,7 @@ seconds; later views are instant.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `UNLEASHED_MODE` | `mock` | `mock` or `live` |
+| `UNLEASHED_MODE` | `live` if credentials are set, else `mock` | `live` or `mock` |
 | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` | — | Unleashed API credentials |
 | `UNLEASHED_BASE_URL` | `https://api.unleashedsoftware.com` | API host |
 | `UNLEASHED_CACHE_SECONDS` | `120` | Response cache lifetime |

@@ -297,6 +297,47 @@ class FieldFallbackTests(unittest.TestCase):
         self.assertFalse(_is_historical({"startDate": "2020-01-01"}))
 
 
+class StartupConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = {k: os.environ.get(k) for k in
+                      ("UNLEASHED_API_ID", "UNLEASHED_API_KEY", "UNLEASHED_MODE")}
+        for k in self.saved:
+            os.environ.pop(k, None)
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        os.unlink(self.db_path)
+
+    def _mode(self):
+        from app import create_app
+        return create_app({"DATABASE_PATH": self.db_path}).config["UNLEASHED_MODE"]
+
+    def test_mode_defaults_to_live_only_with_credentials(self):
+        self.assertEqual(self._mode(), "mock")
+        os.environ.update(UNLEASHED_API_ID="id", UNLEASHED_API_KEY="key")
+        self.assertEqual(self._mode(), "live")
+        os.environ["UNLEASHED_MODE"] = " Mock "
+        self.assertEqual(self._mode(), "mock")
+
+    def test_env_file_saved_with_bom_is_read(self):
+        from envfile import load_env_file
+        fd, path = tempfile.mkstemp(suffix=".env")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8-sig") as f:
+            f.write("UNLEASHED_API_ID=abc-123\nUNLEASHED_MODE=live\n")
+        try:
+            load_env_file(path)
+            self.assertEqual(os.environ.get("UNLEASHED_API_ID"), "abc-123")
+            self.assertEqual(os.environ.get("UNLEASHED_MODE"), "live")
+        finally:
+            os.unlink(path)
+
+
 class PortabilityTests(unittest.TestCase):
     def test_no_platform_specific_strftime_flags(self):
         # "%-d" / "%#d" only work on some platforms (e.g. "%-d" raises on Windows).

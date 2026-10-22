@@ -8,6 +8,14 @@ from app import create_app  # noqa: E402
 
 app = create_app()
 
+_ext = app.extensions["unleashed"]
+if _ext["mode"] == "live":
+    print(f" * Unleashed Access: LIVE data from {_ext['base_url']}")
+else:
+    print(" * Unleashed Access: MOCK data (simulated). Set UNLEASHED_MODE=live in .env for real data.")
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1")
+    # .env is already loaded by envfile; load_dotenv=False stops Flask suggesting python-dotenv.
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG") == "1",
+            load_dotenv=False)
