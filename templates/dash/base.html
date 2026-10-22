@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Dashboard{% endblock %} · Gardena Unleashed</title>
+  <title>{% block title %}Dashboard{% endblock %} · Unleashed Access</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
 </head>
 <body class="dash">
   <header class="dash-header">
     <div class="brand">
-      <strong>Gardena</strong> · Unleashed dashboard
+      <strong>Unleashed Access</strong>
       <span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
         {{ 'Mock API (simulated data)' if unleashed_mode == 'mock' else 'Live Unleashed API' }}
       </span>
@@ -18,7 +18,6 @@
       <form method="post" action="{{ url_for('dash.refresh') }}">
         <button class="btn btn-quiet" title="Clear cached API responses and reload">Refresh data</button>
       </form>
-      <a class="btn btn-quiet" href="{{ url_for('scan_page') }}">Scan app</a>
     </div>
   </header>
   {% set nav = [

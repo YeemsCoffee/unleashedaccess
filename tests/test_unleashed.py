@@ -90,24 +90,24 @@ class DashboardPageTests(unittest.TestCase):
                 pass
 
     def test_pages_render(self):
-        for path in ("/unleashed/", "/unleashed/cogs", "/unleashed/stock-on-hand",
-                     "/unleashed/stock-valuation", "/unleashed/stock-movement",
-                     "/unleashed/purchases", "/unleashed/purchases/PO-00000001",
-                     "/unleashed/sales", "/unleashed/sales/SO-00000001",
-                     "/unleashed/adjustments", "/unleashed/transactions",
-                     "/unleashed/api-log", "/unleashed/connection"):
+        for path in ("/", "/cogs", "/stock-on-hand",
+                     "/stock-valuation", "/stock-movement",
+                     "/purchases", "/purchases/PO-00000001",
+                     "/sales", "/sales/SO-00000001",
+                     "/adjustments", "/transactions",
+                     "/api-log", "/connection"):
             res = self.client.get(path)
             self.assertEqual(res.status_code, 200, path)
             self.assertNotIn("Couldn't load data", res.get_data(as_text=True), path)
 
     def test_csv_export(self):
-        res = self.client.get("/unleashed/stock-on-hand?format=csv")
+        res = self.client.get("/stock-on-hand?format=csv")
         self.assertEqual(res.mimetype, "text/csv")
         self.assertTrue(res.get_data(as_text=True).startswith("Product Code,"))
 
     def test_api_calls_are_logged(self):
-        self.client.get("/unleashed/stock-on-hand")
-        html = self.client.get("/unleashed/api-log").get_data(as_text=True)
+        self.client.get("/stock-on-hand")
+        html = self.client.get("/api-log").get_data(as_text=True)
         self.assertIn("/StockOnHand/1", html)
 
 

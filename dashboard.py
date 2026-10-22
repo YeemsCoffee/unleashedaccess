@@ -12,7 +12,7 @@ from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
 
-bp = Blueprint("dash", __name__, url_prefix="/unleashed")
+bp = Blueprint("dash", __name__)
 
 
 def _ext():

@@ -1,8 +1,8 @@
 __pycache__/
 *.pyc
-gardena.db
-gardena.db-wal
-gardena.db-shm
+unleashedaccess.db
+unleashedaccess.db-wal
+unleashedaccess.db-shm
 .venv/
 venv/
 .pytest_cache/
