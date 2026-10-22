@@ -1,16 +1,32 @@
 # Unleashed Access
 
 A finance and inventory dashboard where **Unleashed is the engine**: every
-number on every page is fetched through the Unleashed REST API. Nothing is
-read from a local copy of the data.
+number comes from your Unleashed account through its REST API.
+
+To keep pages fast, the app keeps a **local copy** of your Unleashed data in
+SQLite and pages read from that copy (about 0.1 s per page instead of seconds of
+API calls). A background sync keeps the copy current:
+
+```
+                       background sync (every 15 min: only what changed; weekly: everything)
+Unleashed API ──────────────────────────────────────────────► local SQLite copy ──► Reports ──► Dashboard pages
+(api.unleashedsoftware.com, or the mock server)                (unleashed/store.py)   (reports.py)
+```
+
+- **First start:** the app copies 13 months of purchase orders, sales
+  orders, stock adjustments, products, suppliers and customers, plus the stock
+  snapshots the COGS reports need. This takes a minute or two; the dashboard
+  shows progress meanwhile.
+- **Every 15 minutes:** it fetches documents modified since the last sync
+  (Unleashed `modifiedSince`) and current stock, and re-checks the last 7
+  days of stock snapshots, plus any earlier day an edited document touched,
+  so backdated changes are caught.
+- **Weekly:** a full re-copy, which also drops documents deleted in Unleashed.
+- **Sync now** (header) and **Full re-copy** (Connection page) run one on demand.
+- Date ranges older than the copy fall back to the live API automatically.
 
 It includes a **mock Unleashed server**, so the whole dashboard works before
-it's connected to a live account. Switching to real data is one setting.
-
-```
-Dashboard pages ──► Reports (unleashed/reports.py) ──► UnleashedClient ──┬─► api.unleashedsoftware.com   (UNLEASHED_MODE=live, default when credentials are set)
-                                                                         └─► mock Unleashed server        (UNLEASHED_MODE=mock, default without credentials)
-```
+it's connected to a live account.
 
 ## Running it
 
@@ -94,12 +110,11 @@ on its own with `python mock_unleashed.py` (port 8100).
 3. Set `UNLEASHED_MODE=live` in `.env` and restart. The header badge changes
    to "Live Unleashed API".
 
-In live mode, the daily COGS chart's stock snapshots are fetched four at a
-time, and rate-limited responses (HTTP 429/503) are retried with backoff.
-Responses are cached: queries pinned to a past date for an hour, everything
-else for `UNLEASHED_CACHE_SECONDS` (default 120). **Refresh data** clears the
-cache. Expect the first load of the Overview and COGS pages to take a few
-seconds; later views are instant.
+On first start in live mode the dashboard copies your Unleashed data (a minute
+or two; progress is shown), then pages load instantly. The sync fetches stock
+snapshots four at a time and retries rate-limited responses (HTTP 429/503) with
+backoff. Switching accounts, or between mock and live, starts a fresh local
+copy automatically, so data from different sources never mixes.
 
 ## Configuration
 
@@ -108,8 +123,11 @@ seconds; later views are instant.
 | `UNLEASHED_MODE` | `live` if credentials are set, else `mock` | `live` or `mock` |
 | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` | — | Unleashed API credentials |
 | `UNLEASHED_BASE_URL` | `https://api.unleashedsoftware.com` | API host |
-| `UNLEASHED_CACHE_SECONDS` | `120` | Response cache lifetime |
-| `DATABASE_PATH` | `unleashedaccess.db` | SQLite file for the API call log |
+| `SYNC_INTERVAL_MINUTES` | `15` | How often the local copy updates (0 = only on "Sync now") |
+| `SYNC_HISTORY_MONTHS` | `13` | How far back the local copy goes |
+| `SYNC_ON_STARTUP` | `background` | `background`, `blocking` (finish first sync before serving) or `off` |
+| `UNLEASHED_CACHE_SECONDS` | `120` | In-memory API response cache, used by the sync and live lookups |
+| `DATABASE_PATH` | `unleashedaccess.db` | SQLite file: local copy of Unleashed data, sync history, API call log |
 | `PORT` | `8000` | Web server port |
 
 ## Project structure
@@ -121,10 +139,12 @@ unleashedaccess/
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── mock_unleashed.py   # run the mock Unleashed API standalone
-├── schema.sql          # API call log table
+├── schema.sql          # local copy, sync history and API log tables
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
-│   ├── reports.py      # report enquiries + COGS, all via the client
+│   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
+│   ├── store.py        # local SQLite copy + a client that answers queries from it
+│   ├── sync.py         # full/incremental sync from the API + background scheduler
 │   ├── mock_server.py  # mock Unleashed API
 │   ├── mock_data.py    # simulated dataset + inventory engine
 │   └── charts.py       # server-side SVG charts

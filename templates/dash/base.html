@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Dashboard{% endblock %} · Unleashed Access</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
+  {% block head %}{% endblock %}
 </head>
 <body class="dash">
   <header class="dash-header">
@@ -15,8 +16,17 @@
       </span>
     </div>
     <div class="header-actions">
-      <form method="post" action="{{ url_for('dash.refresh') }}">
-        <button class="btn btn-quiet" title="Clear cached API responses and reload">Refresh data</button>
+      <span class="sync-status">
+        {% if sync_last and sync_last.status == 'running' %}
+          <span class="dot dot-running"></span> Syncing…
+        {% elif sync_last and sync_last.status == 'failed' %}
+          <a href="{{ url_for('dash.connection') }}" class="sync-failed" title="{{ sync_last.error }}"><span class="dot dot-failed"></span> Last sync failed</a>{% if sync_ok %} · data from {{ ago(sync_ok.finished_at) }}{% endif %}
+        {% elif sync_ok %}
+          <span class="dot dot-ok"></span> Synced {{ ago(sync_ok.finished_at) }}
+        {% endif %}
+      </span>
+      <form method="post" action="{{ url_for('dash.sync_now') }}">
+        <button class="btn btn-quiet" title="Fetch the latest changes from Unleashed">Sync now</button>
       </form>
     </div>
   </header>

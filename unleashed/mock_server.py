@@ -111,6 +111,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         start, end = _date_arg("startDate"), _date_arg("endDate")
         items = [a for a in ds.stock_adjustments
                  if _in_range(a["AdjustmentDate"], start, end)
+                 and _modified_since(_modified(a, "AdjustmentDate"))
                  and _match(a["AdjustmentNumber"], "adjustmentNumber")]
         return _paged([_adjustment(ds, a) for a in items], page)
 
@@ -127,6 +128,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         statuses = _statuses()
         items = [p for p in ds.purchase_orders
                  if _in_range(p["OrderDate"], start, end)
+                 and _modified_since(_modified(p, "CompletedDate", "OrderDate"))
                  and (not statuses or p["OrderStatus"].lower() in statuses)
                  and _match(p["SupplierCode"], "supplierCode", exact=True)
                  and _match(p["OrderNumber"], "orderNumber")]
@@ -143,6 +145,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         statuses = _statuses()
         items = [s for s in ds.sales_orders
                  if _in_range(s["OrderDate"], start, end)
+                 and _modified_since(_modified(s, "CompletedDate", "OrderDate"))
                  and (not statuses or s["OrderStatus"].lower() in statuses)
                  and _match(s["CustomerCode"], "customerCode", exact=True)
                  and _match(s["OrderNumber"], "orderNumber")]
@@ -173,6 +176,16 @@ def _ms(d):
 def _date_arg(name):
     v = request.args.get(name)
     return dt.date.fromisoformat(v[:10]) if v else None
+
+
+def _modified(doc, *date_fields):
+    """A document's last-modified date: an explicit "Modified", else its latest event."""
+    return doc.get("Modified") or next((doc[f] for f in date_fields if doc.get(f)), None)
+
+
+def _modified_since(modified):
+    since = _date_arg("modifiedSince")
+    return since is None or (modified is not None and modified >= since)
 
 
 def _in_range(d, start, end):
@@ -250,7 +263,7 @@ def _purchase_order(ds, po):
                        "Supplier": _supplier_ref(ds, po["SupplierCode"]),
                        "Currency": {"CurrencyCode": "USD"}, "Amount": freight}],
         "PurchaseOrderLines": lines,
-        "LastModifiedOn": _ms(po["CompletedDate"] or po["OrderDate"]),
+        "LastModifiedOn": _ms(_modified(po, "CompletedDate", "OrderDate")),
     }
 
 
@@ -273,7 +286,7 @@ def _sales_order(ds, so):
         "SubTotal": so["SubTotal"], "TaxTotal": 0.0, "Total": so["SubTotal"],
         "BCSubTotal": so["SubTotal"], "BCTaxTotal": 0.0, "BCTotal": so["SubTotal"],
         "SalesOrderLines": lines,
-        "LastModifiedOn": _ms(so["CompletedDate"] or so["OrderDate"]),
+        "LastModifiedOn": _ms(_modified(so, "CompletedDate", "OrderDate")),
     }
 
 

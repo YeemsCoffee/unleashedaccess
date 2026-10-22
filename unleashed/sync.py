@@ -1,0 +1,213 @@
+"""Copies Unleashed data into the local store, in full or incrementally.
+
+Full sync (first run, then weekly): reference lists, every document in the
+history window, and the stock snapshots the reports need. Incremental sync
+(every few minutes): reference lists, documents modified since the last sync
+(Unleashed `modifiedSince`), current stock, and re-fetched snapshots for recent
+days plus any day a changed document touched, so backdated edits are caught.
+"""
+import datetime as dt
+import sys
+import threading
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+
+from .reports import add_months, cost_line_keys, month_start
+from .store import CURRENT, DOCUMENT_ENDPOINTS, REFERENCE_ENDPOINTS, now_text
+
+LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
+          "StockAdjustments": "stock adjustments"}
+
+
+class Syncer:
+    def __init__(self, client, store, today_fn=dt.date.today, history_months=13,
+                 po_lookback_days=183, recheck_days=7, full_every_days=7, max_workers=4,
+                 log_retention_days=30):
+        self.client = client
+        self.store = store
+        self.today_fn = today_fn
+        self.history_months = history_months
+        self.po_lookback_days = po_lookback_days
+        self.recheck_days = recheck_days
+        self.full_every_days = full_every_days
+        self.max_workers = max_workers
+        self.log_retention_days = log_retention_days
+        self._lock = threading.Lock()
+
+    @property
+    def running(self):
+        return self._lock.locked()
+
+    def needs_full(self):
+        last = self.store.get_state("last_full_started")
+        if not last or not self.store.has_data():
+            return True
+        age = dt.datetime.now() - dt.datetime.fromisoformat(last)
+        return age > dt.timedelta(days=self.full_every_days)
+
+    def required_snapshot_dates(self, today=None):
+        """Month ends for the history window, plus every day of last month and this month."""
+        today = today or self.today_fn()
+        first = month_start(today)
+        dates = {add_months(first, -i) - dt.timedelta(days=1) for i in range(self.history_months)}
+        day = add_months(first, -1)
+        while day < today:
+            dates.add(day)
+            day += dt.timedelta(days=1)
+        return sorted(d for d in dates if d < today)
+
+    def sync(self, full=None):
+        """Run one sync. Returns the run's summary dict; never raises."""
+        if not self._lock.acquire(blocking=False):
+            return {"status": "busy"}
+        try:
+            return self._sync(self.needs_full() if full is None else full)
+        finally:
+            self._lock.release()
+
+    def fetch_snapshot(self, as_at):
+        """Fetch one stock-on-hand snapshot ('current' or an ISO date) and store it."""
+        params = {} if as_at == CURRENT else {"asAtDate": as_at}
+        rows = self.client.get_all("StockOnHand", params)
+        self.store.save_snapshot(as_at, rows)
+        return rows
+
+    # ------------------------------------------------------------ internals
+
+    def _sync(self, full):
+        store, today = self.store, self.today_fn()
+        run = store.start_run("full" if full else "incremental")
+        started = now_text()
+        last_success = store.get_state("last_success_started")
+        self.client.clear_cache()
+        counts = {}
+        try:
+            store.update_run(run, "Products, suppliers and customers")
+            for endpoint, key in REFERENCE_ENDPOINTS.items():
+                items = self.client.get_all(endpoint)
+                store.replace_records(endpoint, items, key)
+                counts[endpoint] = len(items)
+
+            history_start = add_months(month_start(today), -self.history_months)
+            changed_dates = []
+            for endpoint in DOCUMENT_ENDPOINTS:
+                store.update_run(run, f"Downloading {LABELS[endpoint]}")
+                if full or not last_success:
+                    window = history_start
+                    if endpoint == "PurchaseOrders":
+                        window -= dt.timedelta(days=self.po_lookback_days)
+                    params = {"startDate": window.isoformat()}
+                else:
+                    since = dt.datetime.fromisoformat(last_success).date() - dt.timedelta(days=1)
+                    params = {"modifiedSince": since.isoformat()}
+                items = self.client.get_all(endpoint, params)
+                if endpoint == "PurchaseOrders":
+                    items = self._with_cost_lines(items, run)
+                changed, dates = store.upsert_documents(endpoint, items)
+                changed_dates += dates
+                pruned = 0
+                if full:
+                    pruned = store.prune_documents(endpoint, {i.get("Guid") for i in items})
+                    store.set_state(f"window:{endpoint}", window.isoformat())
+                counts[endpoint] = f"{len(items)} fetched, {changed} changed" + \
+                    (f", {pruned} removed" if pruned else "")
+
+            required = self.required_snapshot_dates(today)
+            if full:
+                store.delete_snapshots(keep={d.isoformat() for d in required})
+                todo = required
+            else:
+                recheck_from = today - dt.timedelta(days=self.recheck_days)
+                if changed_dates:
+                    recheck_from = min(recheck_from, min(changed_dates))
+                have = store.snapshot_dates()
+                required_iso = {d.isoformat() for d in required}
+                # Extra snapshots fetched on demand may be stale now; they refetch when needed.
+                store.delete_snapshots(keep={d for d in have if d in required_iso
+                                             or d < recheck_from.isoformat()})
+                todo = [d for d in required if d >= recheck_from or d.isoformat() not in have]
+            self._fetch_snapshots(todo, run)
+            store.update_run(run, "Current stock on hand")
+            self.fetch_snapshot(CURRENT)
+            counts["stock snapshots"] = len(todo) + 1
+
+            store.prune_api_log(self.log_retention_days)
+            detail = "; ".join(f"{k}: {v}" for k, v in counts.items())
+            store.finish_run(run, "ok", detail=detail)
+            store.set_state("last_success_started", started)
+            if full:
+                store.set_state("last_full_started", started)
+            return {"status": "ok", "full": full, "counts": counts}
+        except Exception as e:  # keep the previous data; record why this run failed
+            traceback.print_exc(file=sys.stderr)
+            store.finish_run(run, "failed", error=str(e) or e.__class__.__name__)
+            return {"status": "failed", "full": full, "error": str(e)}
+
+    def _with_cost_lines(self, items, run):
+        """Fetch PO detail when the list leaves cost lines out (shipping lives there)."""
+        if not items or any(cost_line_keys(i) for i in items) \
+                or self.store.get_state("po_detail_has_cost_lines") == "no":
+            return items
+        self.store.update_run(run, f"Downloading cost lines for {len(items)} purchase orders")
+
+        def detail(i):
+            if not i.get("Guid"):
+                return i
+            d = self.client.get(f"PurchaseOrders/{i['Guid']}")
+            return d if isinstance(d, dict) and d.get("OrderNumber") else i
+
+        details = self._map(detail, items)
+        self.store.set_state("po_detail_has_cost_lines",
+                             "yes" if any(cost_line_keys(d) for d in details) else "no")
+        return details
+
+    def _fetch_snapshots(self, dates, run):
+        if not dates:
+            return
+        done = [0]
+
+        def one(d):
+            self.fetch_snapshot(d.isoformat())
+            done[0] += 1
+            if done[0] % 5 == 0 or done[0] == len(dates):
+                self.store.update_run(run, f"Stock on hand history ({done[0]} of {len(dates)} days)")
+
+        self._map(one, dates)
+
+    def _map(self, fn, args):
+        args = list(args)
+        if self.max_workers <= 1 or len(args) <= 1:
+            return [fn(a) for a in args]
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            return list(pool.map(fn, args))
+
+
+class SyncScheduler:
+    """Background thread: syncs on start, then every `interval_minutes`, or when triggered."""
+
+    def __init__(self, syncer, interval_minutes=15):
+        self.syncer = syncer
+        self.interval = interval_minutes * 60 if interval_minutes > 0 else None
+        self._wake = threading.Event()
+        self._full_requested = False
+        self.thread = None
+
+    @property
+    def started(self):
+        return self.thread is not None and self.thread.is_alive()
+
+    def start(self):
+        if not self.started:
+            self.thread = threading.Thread(target=self._loop, name="unleashed-sync", daemon=True)
+            self.thread.start()
+
+    def trigger(self, full=False):
+        self._full_requested = self._full_requested or full
+        self._wake.set()
+
+    def _loop(self):
+        while True:
+            full, self._full_requested = self._full_requested, False
+            self.syncer.sync(full=True if full else None)
+            self._wake.wait(timeout=self.interval)
+            self._wake.clear()

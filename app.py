@@ -21,6 +21,11 @@ def create_app(test_config=None):
         UNLEASHED_API_KEY=api_key,
         UNLEASHED_BASE_URL=os.environ.get("UNLEASHED_BASE_URL", "https://api.unleashedsoftware.com"),
         UNLEASHED_CACHE_SECONDS=int(os.environ.get("UNLEASHED_CACHE_SECONDS", "120")),
+        # background: sync on start, then every SYNC_INTERVAL_MINUTES; blocking: finish the
+        # first sync before serving; off: only when "Sync now" is pressed.
+        SYNC_ON_STARTUP=os.environ.get("SYNC_ON_STARTUP", "background").strip().lower(),
+        SYNC_INTERVAL_MINUTES=int(os.environ.get("SYNC_INTERVAL_MINUTES", "15")),
+        SYNC_HISTORY_MONTHS=int(os.environ.get("SYNC_HISTORY_MONTHS", "13")),
     )
     if test_config:
         app.config.update(test_config)
@@ -33,6 +38,7 @@ def create_app(test_config=None):
 def init_db(path):
     conn = sqlite3.connect(path)
     try:
+        conn.execute("PRAGMA journal_mode=WAL")  # pages read while the sync writes
         with open(os.path.join(BASE_DIR, "schema.sql"), encoding="utf-8") as f:
             conn.executescript(f.read())
     finally:

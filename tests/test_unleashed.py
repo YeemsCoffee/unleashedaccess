@@ -12,6 +12,8 @@ from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app  # 
 from unleashed.reports import Reports, add_months  # noqa: E402
 
 TODAY = dt.date(2026, 7, 15)
+# Tests finish the first sync before serving and never start the background thread.
+SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
 
 
 class ReportsTests(unittest.TestCase):
@@ -79,7 +81,7 @@ class DashboardPageTests(unittest.TestCase):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         from app import create_app
-        self.app = create_app({"DATABASE_PATH": self.db_path, "TESTING": True})
+        self.app = create_app({"DATABASE_PATH": self.db_path, "TESTING": True, **SYNC_NOW})
         self.client = self.app.test_client()
 
     def tearDown(self):
@@ -119,7 +121,7 @@ class LiveModeTests(unittest.TestCase):
         os.close(fd)
         from app import create_app
         self.app = create_app({
-            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live",
+            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
             "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
             "UNLEASHED_TRANSPORT": WsgiTransport(create_mock_app()),
         })
@@ -202,11 +204,11 @@ class AccountQuirkTests(unittest.TestCase):
                                  for x in ("", "-wal", "-shm")])
         from app import create_app
         app = create_app({
-            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live",
+            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
             "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
             "UNLEASHED_TRANSPORT": RewritingTransport(create_mock_app(today=TODAY), rewrite),
+            "TODAY": TODAY,
         })
-        app.extensions["unleashed"]["reports"].today_fn = lambda: TODAY
         return app
 
     def test_cost_lines_missing_from_list_are_fetched_from_detail(self):
@@ -236,6 +238,139 @@ class AccountQuirkTests(unittest.TestCase):
         self.assertIn("By adjustment status", check)
         self.assertIn("Completed:", check)
         self.assertIn("on active adjustments have no change fields", check)
+
+
+class StoreSyncTests(unittest.TestCase):
+    """The local copy: equivalence with the API, incremental updates, failure handling."""
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.addCleanup(lambda: [os.path.exists(self.db_path + x) and os.unlink(self.db_path + x)
+                                 for x in ("", "-wal", "-shm")])
+        self.mock = create_mock_app(today=TODAY)
+        self.ds = self.mock.config["DATASET"]
+
+    def _app(self, **config):
+        from app import create_app
+        return create_app({
+            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
+            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
+            "UNLEASHED_TRANSPORT": WsgiTransport(self.mock), "TODAY": TODAY, **config,
+        })
+
+    def _api_log(self, like="%"):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return conn.execute("SELECT endpoint, query FROM unleashed_api_log WHERE"
+                                " endpoint || '?' || query LIKE ? ORDER BY id", (like,)).fetchall()
+        finally:
+            conn.close()
+
+    def test_reports_from_store_match_reports_from_api(self):
+        app = self._app()
+        stored = app.extensions["unleashed"]["reports"]
+        direct = Reports(UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(self.mock)),
+                         today_fn=lambda: TODAY)
+        month = TODAY.replace(day=1)
+        for m in (month, add_months(month, -1), add_months(month, -6)):
+            a, b = stored.cogs(m, daily=True), direct.cogs(m, daily=True)
+            for k in ("opening", "goods", "shipping", "closing", "cogs"):
+                self.assertAlmostEqual(a[k], b[k], places=6, msg=f"{m} {k}")
+            self.assertEqual([round(r["cogs_to_date"], 6) for r in a["daily"]],
+                             [round(r["cogs_to_date"], 6) for r in b["daily"]])
+        start = add_months(month, -2)
+        self.assertEqual(stored.purchase_enquiry(start, TODAY)["total"],
+                         direct.purchase_enquiry(start, TODAY)["total"])
+        self.assertEqual(stored.sales_enquiry(start, TODAY)["revenue"],
+                         direct.sales_enquiry(start, TODAY)["revenue"])
+        self.assertEqual(len(stored.transactions(start, TODAY)), len(direct.transactions(start, TODAY)))
+        mv_a = stored.stock_movement("MILK-WHL-GAL", start, TODAY)
+        mv_b = direct.stock_movement("MILK-WHL-GAL", start, TODAY)
+        self.assertEqual((mv_a["closing_qty"], mv_a["reported_qty"]),
+                         (mv_b["closing_qty"], mv_b["reported_qty"]))
+
+    def test_pages_make_no_api_calls_once_synced(self):
+        app = self._app()
+        before = len(self._api_log())
+        c = app.test_client()
+        for path in ("/", "/cogs", "/stock-on-hand", "/stock-valuation", "/stock-movement",
+                     "/purchases", "/sales", "/adjustments", "/transactions"):
+            self.assertEqual(c.get(path).status_code, 200, path)
+        self.assertEqual(len(self._api_log()), before)
+
+    def test_incremental_sync_picks_up_backdated_change(self):
+        app = self._app()
+        syncer = app.extensions["unleashed"]["syncer"]
+        reports = app.extensions["unleashed"]["reports"]
+        last_month = add_months(TODAY.replace(day=1), -1)
+        po = next(p for p in self.ds.purchase_orders
+                  if p["ReceivedDate"] and (TODAY - p["ReceivedDate"]).days > 20
+                  and p["ReceivedDate"].replace(day=1) == last_month)
+        before = reports.purchase_order(po["OrderNumber"])["shipping"]
+        po["Freight"] = round(po["Freight"] + 10, 2)
+        po["Modified"] = dt.date.today()  # Unleashed stamps edits with the real clock
+        result = syncer.sync()
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["full"])
+        self.assertIn("modifiedSince=", self._api_log("/PurchaseOrders/%")[-1][1])
+        self.assertAlmostEqual(reports.purchase_order(po["OrderNumber"])["shipping"], before + 10)
+        # Stock snapshots from that PO's receipt onward were re-fetched.
+        refetched = self._api_log(f"%asAtDate={po['ReceivedDate'].isoformat()}%")
+        self.assertEqual(len(refetched), 2)
+
+    def test_full_sync_removes_documents_deleted_in_unleashed(self):
+        app = self._app()
+        syncer = app.extensions["unleashed"]["syncer"]
+        reports = app.extensions["unleashed"]["reports"]
+        gone = self.ds.sales_orders.pop(-2)
+        syncer.sync(full=False)
+        self.assertIsNotNone(reports.sales_order(gone["OrderNumber"]))
+        syncer.sync(full=True)
+        self.assertIsNone(reports.sales_order(gone["OrderNumber"]))
+
+    def test_failed_sync_keeps_previous_data(self):
+        app = self._app()
+        ext = app.extensions["unleashed"]
+        ext["client"].api_key = "wrong"
+        self.assertEqual(ext["syncer"].sync()["status"], "failed")
+        html = app.test_client().get("/").get_data(as_text=True)
+        self.assertIn("Last sync failed", html)
+        self.assertIn("COGS spend", html)
+
+    def test_first_sync_page_until_data_arrives(self):
+        app = self._app(SYNC_ON_STARTUP="off")
+        c = app.test_client()
+        self.assertIn("No Unleashed data yet", c.get("/").get_data(as_text=True))
+        self.assertEqual(c.get("/connection").status_code, 200)
+        c.post("/sync")
+        self.assertIn("COGS spend", c.get("/").get_data(as_text=True))
+
+    def test_switching_account_starts_a_fresh_copy(self):
+        app = self._app()
+        store = app.extensions["unleashed"]["store"]
+        self.assertTrue(store.has_data())
+        store.ensure_source("live:https://example.invalid:other-account")
+        self.assertFalse(store.has_data())
+        self.assertEqual(store.document_count("SalesOrders"), 0)
+
+    def test_dates_older_than_the_copy_come_from_the_api(self):
+        app = self._app()
+        before = len(self._api_log())
+        html = app.test_client().get("/sales?start=2024-01-01&end=2024-03-31").get_data(as_text=True)
+        self.assertIn("Sales enquiry", html)
+        self.assertEqual(len(self._api_log()) - before, 1)
+        self.assertIn("startDate=2024-01-01", self._api_log("/SalesOrders/%")[-1][1])
+
+    def test_required_snapshot_dates(self):
+        app = self._app(SYNC_ON_STARTUP="off")
+        dates = app.extensions["unleashed"]["syncer"].required_snapshot_dates(TODAY)
+        self.assertIn(dt.date(2026, 6, 30), dates)          # last month end
+        self.assertIn(dt.date(2025, 6, 30), dates)          # 13th month end back
+        self.assertIn(dt.date(2026, 6, 1), dates)           # every day of last month
+        self.assertIn(dt.date(2026, 7, 14), dates)          # yesterday
+        self.assertNotIn(TODAY, dates)                      # today comes from 'current'
 
 
 class RetryTests(unittest.TestCase):
@@ -315,7 +450,8 @@ class StartupConfigTests(unittest.TestCase):
 
     def _mode(self):
         from app import create_app
-        return create_app({"DATABASE_PATH": self.db_path}).config["UNLEASHED_MODE"]
+        return create_app({"DATABASE_PATH": self.db_path,
+                           "SYNC_ON_STARTUP": "off"}).config["UNLEASHED_MODE"]
 
     def test_mode_defaults_to_live_only_with_credentials(self):
         self.assertEqual(self._mode(), "mock")

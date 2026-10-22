@@ -13,3 +13,48 @@ CREATE TABLE IF NOT EXISTS unleashed_api_log (
     item_count  INTEGER,
     error       TEXT
 );
+
+-- Local copy of Unleashed data (filled by unleashed/sync.py; raw API JSON).
+CREATE TABLE IF NOT EXISTS ul_records (
+    kind TEXT NOT NULL,
+    key  TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+
+CREATE TABLE IF NOT EXISTS ul_documents (
+    kind           TEXT NOT NULL,   -- PurchaseOrders | SalesOrders | StockAdjustments
+    guid           TEXT NOT NULL,
+    number         TEXT,
+    status         TEXT,
+    doc_date       TEXT,            -- order/adjustment date (ISO)
+    party_code     TEXT,            -- supplier or customer code
+    effective_date TEXT,            -- when it moved stock (received/completed date)
+    data           TEXT NOT NULL,
+    synced_at      TEXT NOT NULL,
+    PRIMARY KEY (kind, guid)
+);
+CREATE INDEX IF NOT EXISTS idx_ul_documents_date ON ul_documents(kind, doc_date);
+CREATE INDEX IF NOT EXISTS idx_ul_documents_number ON ul_documents(kind, number);
+
+CREATE TABLE IF NOT EXISTS ul_stock_snapshots (
+    as_at      TEXT PRIMARY KEY,    -- ISO date (end of day), or 'current'
+    data       TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ul_sync_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL,      -- full | incremental
+    status      TEXT NOT NULL,      -- running | ok | failed
+    step        TEXT,
+    detail      TEXT,
+    error       TEXT,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ul_sync_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);

@@ -1,4 +1,5 @@
-"""Unleashed dashboard: every number on these pages comes through the Unleashed API."""
+"""Unleashed dashboard. Pages read a local copy of Unleashed data (unleashed/store.py),
+kept current by a background sync from the Unleashed API (unleashed/sync.py)."""
 import csv
 import datetime as dt
 import io
@@ -55,9 +56,39 @@ def month_name(v):
     return v.strftime("%B %Y")
 
 
+def ago(timestamp):
+    if not timestamp:
+        return "never"
+    secs = (dt.datetime.now() - dt.datetime.fromisoformat(timestamp)).total_seconds()
+    if secs < 90:
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)} min ago"
+    if secs < 86400 * 2:
+        return f"{int(secs // 3600)} h ago"
+    return f"{int(secs // 86400)} days ago"
+
+
 @bp.app_context_processor
 def _ctx():
-    return {"unleashed_mode": _ext()["mode"], "money_short": charts.money_short}
+    store = _ext()["store"]
+    return {"unleashed_mode": _ext()["mode"], "money_short": charts.money_short,
+            "sync_last": store.last_run(), "sync_ok": store.last_success(), "ago": ago}
+
+
+# Pages that work before the first sync has finished.
+_OPEN_ENDPOINTS = {"dash.connection", "dash.api_log", "dash.sync_now"}
+
+
+@bp.before_request
+def _require_synced_data():
+    if request.endpoint in _OPEN_ENDPOINTS:
+        return None
+    store = _ext()["store"]
+    if not store.has_data():
+        return render_template("dash/first_sync.html", run=store.last_run(),
+                               running=_ext()["syncer"].running)
+    return None
 
 
 @bp.errorhandler(UnleashedError)
@@ -334,31 +365,47 @@ def connection():
                           + ", ".join(w.get("WarehouseName", "?") for w in whs)}
             except UnleashedError as e:
                 result = {"ok": False, "message": str(e)}
+    store = ext["store"]
+    windows = {LABEL: store.get_state(f"window:{ep}") for ep, LABEL in
+               (("PurchaseOrders", "Purchase orders"), ("SalesOrders", "Sales orders"),
+                ("StockAdjustments", "Stock adjustments"))}
+    counts = {ep: store.document_count(ep) for ep in ("PurchaseOrders", "SalesOrders",
+                                                     "StockAdjustments")}
     return render_template("dash/connection.html", result=result, checks=checks,
-                           fields=fields, ext=ext)
+                           fields=fields, ext=ext, runs=store.runs(10), windows=windows,
+                           counts=counts, running=ext["syncer"].running)
 
 
-@bp.post("/refresh")
-def refresh():
-    _ext()["client"].clear_cache()
+@bp.post("/sync")
+def sync_now():
+    ext = _ext()
+    full = request.form.get("full") == "1"
+    if ext["scheduler"].started:
+        ext["scheduler"].trigger(full=full)
+    else:
+        ext["syncer"].sync(full=full or None)
     return redirect(request.referrer or url_for("dash.overview"))
 
 
 # ---------------------------------------------------------------- wiring
 
 def init_app(app):
-    """Build the API client (mock or live) and register the dashboard."""
+    """Build the API client (mock or live), the local store and its sync, and register pages."""
+    import hashlib
+
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
     from unleashed.client import WsgiTransport
     from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app
     from unleashed.reports import Reports
+    from unleashed.store import LocalStore, LocalStoreClient
+    from unleashed.sync import Syncer, SyncScheduler
 
     cfg = app.config
     db_path = cfg["DATABASE_PATH"]
 
     def log_call(entry):
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         try:
             conn.execute(
                 "INSERT INTO unleashed_api_log (timestamp, mode, method, endpoint, query,"
@@ -386,10 +433,33 @@ def init_app(app):
         # Also expose the mock over HTTP at /mock-unleashed for curl/Postman.
         app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {"/mock-unleashed": mock_app})
 
+    today_fn = (lambda: cfg["TODAY"]) if cfg.get("TODAY") else dt.date.today
+    store = LocalStore(db_path)
+    if mode == "live":
+        account = hashlib.sha256(cfg["UNLEASHED_API_ID"].encode()).hexdigest()[:16]
+        store.ensure_source(f"live:{cfg['UNLEASHED_BASE_URL']}:{account}")
+    else:
+        store.ensure_source("mock")
+    store.mark_interrupted()
+
+    syncer = Syncer(client, store, today_fn=today_fn,
+                    history_months=cfg["SYNC_HISTORY_MONTHS"],
+                    max_workers=4 if mode == "live" else 1)
+    scheduler = SyncScheduler(syncer, cfg["SYNC_INTERVAL_MINUTES"])
+    store_client = LocalStoreClient(store, live=client, today_fn=today_fn,
+                                    fetch_snapshot=syncer.fetch_snapshot)
+
     app.extensions["unleashed"] = {
         "mode": mode, "client": client, "live_client": live_client,
-        "reports": Reports(client, max_workers=4 if mode == "live" else 1),
+        "store": store, "syncer": syncer, "scheduler": scheduler,
+        "reports": Reports(store_client, today_fn=today_fn),
         "base_url": cfg["UNLEASHED_BASE_URL"],
         "has_credentials": bool(cfg["UNLEASHED_API_ID"] and cfg["UNLEASHED_API_KEY"]),
     }
     app.register_blueprint(bp)
+
+    startup = cfg["SYNC_ON_STARTUP"]
+    if startup == "blocking":
+        syncer.sync()
+    if startup == "background":
+        scheduler.start()

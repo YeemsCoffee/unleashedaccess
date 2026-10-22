@@ -2,7 +2,8 @@
 {% block title %}API log{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Unleashed API call log</h1></div>
-<p class="muted">Every request the dashboard has sent to Unleashed (latest 300). Repeat views within the cache window are served from memory and not re-requested.</p>
+<p class="muted">Every request sent to Unleashed (latest 300, kept for 30 days). Almost all come from the background sync;
+  page views read the local copy and only call Unleashed for date ranges older than the copy covers.</p>
 <section class="card">
   <div class="table-wrap"><table>
     <thead><tr><th>Time</th><th>Mode</th><th>Request</th><th class="num">Status</th><th class="num">Items</th><th class="num">ms</th><th>Error</th></tr></thead>

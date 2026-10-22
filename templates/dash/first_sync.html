@@ -1,0 +1,28 @@
+{% extends "dash/base.html" %}
+{% block title %}Setting up{% endblock %}
+{% block head %}{% if running or (run and run.status == 'running') %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block content %}
+<section class="card first-sync">
+  {% if run and run.status == 'failed' and not running %}
+    <h1>The first copy of your Unleashed data didn't finish</h1>
+    <p class="recon recon-warn">! {{ run.error }}</p>
+    <form method="post" action="{{ url_for('dash.sync_now') }}">
+      <button class="btn btn-primary">Try again</button>
+    </form>
+    <p class="muted">The <a href="{{ url_for('dash.connection') }}">Connection page</a> can test your credentials, and the
+      <a href="{{ url_for('dash.api_log') }}">API log</a> shows each request Unleashed answered.</p>
+  {% elif running or (run and run.status == 'running') %}
+    <h1>Copying your Unleashed data</h1>
+    <p>This first copy takes a minute or two. After that, pages load instantly and the copy
+      updates itself in the background every few minutes.</p>
+    <p class="step"><span class="dot dot-running"></span> {{ run.step if run and run.step else 'Starting…' }}</p>
+    <p class="muted">This page refreshes itself.</p>
+  {% else %}
+    <h1>No Unleashed data yet</h1>
+    <p>Start the first copy of your Unleashed data. It takes a minute or two.</p>
+    <form method="post" action="{{ url_for('dash.sync_now') }}">
+      <button class="btn btn-primary">Sync now</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

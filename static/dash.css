@@ -142,7 +142,7 @@ tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--li
 details { margin-top: 10px; }
 summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 
-.pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-0); color: var(--text-secondary); }
+.pill { white-space: nowrap; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-0); color: var(--text-secondary); }
 .pill-complete, .pill-completed, .pill-costed { background: var(--good-bg); color: var(--good-ink); }
 .pill-receipted, .pill-placed { background: var(--series-1-soft); color: var(--text-primary); }
 .pill-parked, .pill-backordered { background: var(--warn-bg); color: var(--warn-ink); }
@@ -190,3 +190,16 @@ td.wrap { white-space: normal; min-width: 280px; }
 .fieldlist dd { margin: 2px 0 0; color: var(--text-secondary); word-break: break-word; }
 .explain { margin-top: 12px; }
 .explain p { margin: 8px 0 0; color: var(--text-secondary); font-size: 14px; max-width: 72ch; }
+
+.header-actions { align-items: center; }
+.sync-status { font-size: 13px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+.sync-failed { color: var(--warn-ink); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot-ok { background: var(--good-ink); }
+.dot-running { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.dot-failed { background: var(--warn-ink); }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .dot-running { animation: none; } }
+.first-sync { max-width: 640px; margin: 40px auto; }
+.first-sync h1 { margin-bottom: 8px; }
+.first-sync .step { display: flex; align-items: center; gap: 8px; font-weight: 600; }
