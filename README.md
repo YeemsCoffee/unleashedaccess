@@ -79,10 +79,14 @@ on its own with `python mock_unleashed.py` (port 8100).
    real account that:
    - historical stock (`asAtDate`) works, which opening inventory depends on;
    - received purchase orders carry a received date;
-   - shipping/freight is found on purchase orders, either in a `Costs` array
-     or on lines coded `FREIGHT`, `SHIPPING` or `DELIVERY`;
+   - shipping is found in each purchase order's **cost lines** (additional
+     costs), with a spot-check PO to compare against Unleashed. Lines coded
+     `FREIGHT`, `SHIPPING` or `DELIVERY` also count. If the PO list leaves
+     cost lines out, the dashboard fetches each PO's detail instead;
    - sales order lines carry their cost (`AverageLandedPriceAtTimeOfSale`);
-   - stock adjustment lines carry quantity and value changes;
+   - stock adjustment lines carry quantity and value changes, broken down by
+     adjustment status. Deleted and parked adjustments never moved stock and
+     are left out of every report;
    - this month's COGS formula agrees with cost of sales plus write-offs.
 
    It also lists the field names your account returns (names only, no

@@ -19,7 +19,11 @@
     <tbody>{% for l in po.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.received_qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>
     <tfoot>
       <tr><td colspan="5">Goods</td><td class="num">{{ po.goods|money }}</td></tr>
-      <tr><td colspan="5">Shipping / freight</td><td class="num">{{ po.shipping|money }}</td></tr>
+      {% for c in po.cost_lines %}
+      <tr><td colspan="5">Cost line: {{ c.description }}{{ ' (' ~ c.supplier ~ ')' if c.supplier }}</td><td class="num">{{ c.amount|money }}</td></tr>
+      {% else %}
+      <tr><td colspan="5">Cost lines (shipping)</td><td class="num">{{ 0|money }}</td></tr>
+      {% endfor %}
       <tr><td colspan="5">Tax</td><td class="num">{{ po.tax|money }}</td></tr>
       <tr><td colspan="5"><strong>Total</strong></td><td class="num"><strong>{{ (po.total + po.tax)|money }}</strong></td></tr>
     </tfoot>

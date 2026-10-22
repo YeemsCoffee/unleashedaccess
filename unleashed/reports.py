@@ -14,6 +14,11 @@ RECEIVED_PO_STATUSES = ("Receipted", "Costed", "Complete")
 OPEN_PO_STATUSES = ("Parked", "Placed")
 PO_STATUSES = ("Parked", "Placed", "Receipted", "Costed", "Complete", "Deleted")
 SO_STATUSES = ("Parked", "Placed", "Backordered", "Completed", "Deleted")
+# Adjustments in these states never moved stock, so reports leave them out.
+INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
+# Where a PO cost line's amount may live, most specific (base currency, ex tax) first.
+COST_LINE_AMOUNT_FIELDS = ("BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
+                           "LineTotal", "Amount", "Total", "Cost", "Value")
 
 
 def month_start(d):
@@ -37,6 +42,7 @@ class Reports:
         self.today_fn = today_fn
         self.shipping_codes = {c.upper() for c in shipping_codes}
         self.max_workers = max_workers
+        self._details_have_cost_lines = None
 
     def _map(self, fn, args):
         """fn over args, concurrently when max_workers > 1 (independent API reads)."""
@@ -121,12 +127,29 @@ class Reports:
             "endDate": end.isoformat() if end else None,
             "orderStatus": status, "supplierCode": supplier,
         })
-        return [self._po(i) for i in items]
+        return [self._po(i) for i in self._with_cost_lines(items)]
 
     def purchase_order(self, order_number):
         items = self.client.get_all("PurchaseOrders", {"orderNumber": order_number})
         exact = [i for i in items if i["OrderNumber"] == order_number]
-        return self._po(exact[0]) if exact else None
+        return self._po(self._with_cost_lines(exact)[0]) if exact else None
+
+    def _with_cost_lines(self, items):
+        """If the list response leaves cost lines out, fetch each PO's detail."""
+        if not items or self._details_have_cost_lines is False \
+                or any(cost_line_keys(i) for i in items):
+            return items
+
+        def detail(i):
+            if not i.get("Guid"):
+                return i
+            d = self.client.get(f"PurchaseOrders/{i['Guid']}",
+                                long_cache=i.get("OrderStatus") in ("Complete", "Costed"))
+            return d if isinstance(d, dict) and d.get("OrderNumber") else i
+
+        details = self._map(detail, items)
+        self._details_have_cost_lines = any(cost_line_keys(d) for d in details)
+        return details
 
     def purchase_enquiry(self, start, end, status=None, supplier=None):
         orders = self.purchase_orders(start, end, status, supplier)
@@ -164,13 +187,15 @@ class Reports:
                       key=lambda o: (o["received_date"], o["number"]))
 
     def _po(self, i):
-        goods, shipping, lines = 0.0, 0.0, []
+        goods, lines, cost_lines = 0.0, [], []
         for l in i.get("PurchaseOrderLines", []):
             prod = l.get("Product") or {}
             code = prod.get("ProductCode", "")
             total = _first(l.get("BCSubTotal"), l.get("BCLineTotal"), l.get("LineTotal"))
             if code.upper() in self.shipping_codes:
-                shipping += total
+                cost_lines.append({"description": prod.get("ProductDescription") or code,
+                                   "supplier": None, "amount": total,
+                                   "field": "PurchaseOrderLines"})
                 continue
             goods += total
             lines.append({"product_code": code, "description": prod.get("ProductDescription"),
@@ -178,7 +203,14 @@ class Reports:
                           "received_qty": l.get("ReceiptQuantity"),
                           "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
                           "line_total": total})
-        shipping += sum(c.get("Total") or 0 for c in i.get("Costs") or [])
+        for key in cost_line_keys(i):
+            for c in i.get(key) or []:
+                field, amount = cost_line_amount(c)
+                cost_lines.append({
+                    "description": c.get("Description") or c.get("Comments") or "Additional cost",
+                    "supplier": (c.get("Supplier") or {}).get("SupplierName"),
+                    "amount": amount, "field": f"{key}.{field}" if field else None})
+        shipping = sum(c["amount"] for c in cost_lines)
         supplier = i.get("Supplier") or {}
         return {
             "guid": i.get("Guid"), "number": i["OrderNumber"], "status": i.get("OrderStatus"),
@@ -189,7 +221,7 @@ class Reports:
             "supplier_code": supplier.get("SupplierCode"),
             "supplier_name": supplier.get("SupplierName"),
             "goods": goods, "shipping": shipping, "tax": _first(i.get("BCTaxTotal"), i.get("TaxTotal")),
-            "total": goods + shipping, "lines": lines,
+            "total": goods + shipping, "lines": lines, "cost_lines": cost_lines,
         }
 
     # ------------------------------------------------------------ sales
@@ -274,18 +306,24 @@ class Reports:
             "startDate": start.isoformat(), "endDate": end.isoformat()})
         rows = []
         for a in items:
-            for l in a.get("StockAdjustmentLines", []):
+            if (a.get("Status") or "").lower() in INACTIVE_ADJUSTMENT_STATUSES:
+                continue
+            for l in a.get("StockAdjustmentLines") or []:
                 prod = l.get("Product") or {}
                 rows.append({"number": a["AdjustmentNumber"],
                              "date": parse_date(a.get("AdjustmentDate")),
                              "reason": a.get("AdjustmentReason"), "status": a.get("Status"),
                              "product_code": prod.get("ProductCode"),
                              "description": prod.get("ProductDescription"),
-                             "qty_change": l.get("QuantityChange") or 0,
-                             "value_change": l.get("ValueChange") or 0,
+                             "qty_change": l.get("QuantityChange"),
+                             "value_change": l.get("ValueChange"),
+                             "new_qty": l.get("NewQuantity"),
+                             "new_value": l.get("NewActualValue"),
                              "comments": l.get("Comments")})
         rows.sort(key=lambda r: (r["date"], r["number"]), reverse=True)
-        return {"rows": rows, "value_change": sum(r["value_change"] for r in rows)}
+        return {"rows": rows,
+                "value_change": sum(r["value_change"] or 0 for r in rows),
+                "missing_change": sum(1 for r in rows if r["value_change"] is None)}
 
     # ------------------------------------------------------------ transactions
 
@@ -325,8 +363,8 @@ class Reports:
         value = open_row["value"] if open_row else 0
         rows = self.transactions(start, end, product=product_code)
         for r in rows:
-            qty += r["qty"]
-            value += r["value"]
+            qty += r["qty"] or 0
+            value += r["value"] or 0
             r["balance_qty"], r["balance_value"] = qty, value
         return {
             "opening_qty": open_row["qty"] if open_row else 0,
@@ -392,8 +430,10 @@ class Reports:
         sales = self.sales_orders(start, through, status="Completed")
         cost_of_sales = sum(o["cost"] for o in sales
                             if start <= (o["completed_date"] or o["order_date"]) <= through)
-        adj = self.stock_adjustments(start, through)["value_change"]
+        adjustments = self.stock_adjustments(start, through)
+        adj = adjustments["value_change"]
         return {"cost_of_sales": cost_of_sales, "adjustments_out": -adj,
+                "adjustments_missing": adjustments["missing_change"],
                 "total": cost_of_sales - adj}
 
     def cogs_history(self, months=12):
@@ -408,6 +448,21 @@ class Reports:
             return c
 
         return self._map(month_row, [add_months(first, i) for i in range(months)])
+
+
+def cost_line_keys(raw_po):
+    """Keys of a PO's additional-cost arrays (Unleashed "Cost Lines"); empty if none."""
+    return [k for k, v in raw_po.items()
+            if "cost" in k.lower() and k != "PurchaseOrderLines"
+            and (isinstance(v, list) or (v is None and k.lower().endswith(("lines", "costs"))))]
+
+
+def cost_line_amount(line):
+    """(field name, amount) for a cost line; (None, 0) if no known amount field."""
+    for field in COST_LINE_AMOUNT_FIELDS:
+        if line.get(field) is not None:
+            return field, line[field]
+    return None, 0
 
 
 def _first(*values):

@@ -6,7 +6,8 @@ listings show keys only, never values, so they are safe to share.
 import datetime as dt
 
 from .client import UnleashedError
-from .reports import RECEIVED_PO_STATUSES, month_start
+from .reports import (INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys,
+                      month_start)
 
 
 def run_checks(reports):
@@ -83,16 +84,42 @@ def run_checks(reports):
 
     def shipping():
         start = today - dt.timedelta(days=90)
-        pos = reports.purchase_orders(start, today, status=",".join(RECEIVED_PO_STATUSES))
-        if not pos:
-            return "warn", "No received purchase orders to check"
-        with_ship = [p for p in pos if p["shipping"]]
-        if not with_ship:
-            return "warn", ("No shipping found on any received PO in 90 days. If you pay freight, "
-                            "it's recorded somewhere the dashboard isn't reading yet — check the "
-                            "purchase order field names below.")
-        total = sum(p["shipping"] for p in with_ship)
-        return "ok", f"Shipping found on {len(with_ship)} of {len(pos)} POs (${total:,.2f} in 90 days)"
+        statuses = ",".join(RECEIVED_PO_STATUSES)
+        raw = client.get_all("PurchaseOrders", {"startDate": start.isoformat(),
+                                                "endDate": today.isoformat(),
+                                                "orderStatus": statuses})
+        if not raw:
+            return "warn", "No received purchase orders in the last 90 days to check"
+        source = "the purchase order list"
+        sample = raw
+        if not any(cost_line_keys(p) for p in raw):
+            sample = [client.get(f"PurchaseOrders/{p['Guid']}") for p in raw[:5] if p.get("Guid")]
+            source = ("each purchase order's detail (the list leaves cost lines out, so the "
+                      "dashboard fetches PO detail; first loads are a bit slower)")
+        for p in sample:
+            for key in cost_line_keys(p):
+                if p.get(key):
+                    fields["Purchase order cost line"] = sorted(p[key][0].keys())
+                    break
+
+        pos = reports.purchase_orders(start, today, status=statuses)
+        found = [p for p in pos if p["cost_lines"]]
+        if not found:
+            if not any(cost_line_keys(p) for p in sample):
+                return "warn", ("No cost-lines field found on purchase orders (checked the list and "
+                                "the detail of 5 POs). See the purchase order field names below.")
+            return "warn", "Cost lines field exists, but no received PO in 90 days has cost lines"
+        unreadable = [p["number"] for p in found if any(c["field"] is None for c in p["cost_lines"])]
+        if unreadable:
+            return "warn", (f"Cost lines found, but no amount field could be read on "
+                            f"{', '.join(unreadable[:3])}. See the cost line field names below.")
+        used = sorted({c["field"] for p in found for c in p["cost_lines"]})
+        total = sum(p["shipping"] for p in found)
+        spot = max(found, key=lambda p: p["shipping"])
+        return "ok", (f"Cost lines on {len(found)} of {len(pos)} received POs in 90 days "
+                      f"(${total:,.2f}), read from {', '.join(used)} via {source}. Spot-check: "
+                      f"{spot['number']} shows ${spot['shipping']:,.2f} in cost lines; compare it "
+                      "with that PO in Unleashed.")
 
     check("Purchase orders: shipping / freight", shipping)
 
@@ -119,18 +146,45 @@ def run_checks(reports):
         start = today - dt.timedelta(days=90)
         raw = client.get_all("StockAdjustments", {"startDate": start.isoformat(),
                                                   "endDate": today.isoformat()})
-        lines = [l for a in raw for l in a.get("StockAdjustmentLines") or []]
+        by_status = {}
+        for a in raw:
+            st = a.get("Status") or "(no status)"
+            entry = by_status.setdefault(st, {"lines": 0, "missing": 0, "examples": []})
+            for l in a.get("StockAdjustmentLines") or []:
+                entry["lines"] += 1
+                if l.get("QuantityChange") is None and l.get("ValueChange") is None:
+                    entry["missing"] += 1
+                    if a["AdjustmentNumber"] not in entry["examples"]:
+                        entry["examples"].append(a["AdjustmentNumber"])
+                    if st.lower() not in INACTIVE_ADJUSTMENT_STATUSES:
+                        fields.setdefault("Stock adjustment line (no change fields)", sorted(l.keys()))
+                elif "Stock adjustment line" not in fields:
+                    fields["Stock adjustment line"] = sorted(l.keys())
         if raw:
             fields["Stock adjustment"] = sorted(raw[0].keys())
-            if lines:
-                fields["Stock adjustment line"] = sorted(lines[0].keys())
-        if not lines:
+        if not any(e["lines"] for e in by_status.values()):
             return "ok", "No stock adjustments in the last 90 days"
-        if not any("QuantityChange" in l or "ValueChange" in l for l in lines):
-            return "warn", (f"{len(lines)} adjustment lines, but none have QuantityChange/ValueChange, "
-                            "so the Adjustments and Transactions pages will show 0 for them. "
-                            "The COGS figure is not affected.")
-        return "ok", f"{len(lines)} adjustment lines with quantity and value changes"
+
+        parts = []
+        for st, e in sorted(by_status.items()):
+            part = f"{st}: {e['lines']} line(s), {e['missing']} without quantity/value change"
+            if e["missing"]:
+                part += f" (e.g. {', '.join(e['examples'][:4])})"
+            parts.append(part)
+        summary = "By adjustment status: " + "; ".join(parts) + "."
+        active_missing = sum(e["missing"] for st, e in by_status.items()
+                             if st.lower() not in INACTIVE_ADJUSTMENT_STATUSES)
+        inactive_missing = sum(e["missing"] for st, e in by_status.items()
+                               if st.lower() in INACTIVE_ADJUSTMENT_STATUSES)
+        if active_missing:
+            return "warn", (summary + f" {active_missing} line(s) on active adjustments have no "
+                            "change fields; those show their new quantity and value instead, and "
+                            "are left out of the COGS cross-check. The COGS figure itself is not "
+                            "affected.")
+        if inactive_missing:
+            return "ok", (summary + " Every line without changes is on a deleted or parked "
+                          "adjustment, which never moved stock; reports leave them out.")
+        return "ok", summary
 
     check("Stock adjustments", adjustments)
 

@@ -143,7 +143,11 @@ class LiveModeTests(unittest.TestCase):
         self.assertIn("Live data check", html)
         self.assertNotIn("! Check", html)
         self.assertNotIn("Failed", html)
-        self.assertIn("Purchase order line", html)
+        self.assertIn("Purchase order cost line", html)
+        self.assertIn("CostLines.Amount", html)
+        self.assertIn("Spot-check", html)
+        self.assertIn("Deleted: 1 line(s), 1 without", html)
+        self.assertIn("Every line without changes is on a deleted or parked adjustment", html)
 
     def test_wrong_credentials_fail_clearly(self):
         self.app.extensions["unleashed"]["live_client"].api_key = "wrong"
@@ -156,6 +160,82 @@ class LiveModeTests(unittest.TestCase):
         html = self.client.get("/api-log").get_data(as_text=True)
         self.assertIn("GET /Warehouses<", html.replace("</td>", "<"))
         self.assertNotIn("/Warehouses/1", html)
+
+
+class RewritingTransport(WsgiTransport):
+    """Mock transport that edits JSON responses, to imitate a real account's quirks."""
+
+    def __init__(self, app, rewrite):
+        super().__init__(app)
+        self.rewrite = rewrite
+
+    def get(self, path, query_string, headers):
+        import json
+        status, body = super().get(path, query_string, headers)
+        if status == 200:
+            body = json.dumps(self.rewrite(path, json.loads(body)))
+        return status, body
+
+
+def _strip_cost_lines_from_lists(path, data):
+    import re
+    if re.fullmatch(r"/PurchaseOrders/\d+", path):
+        for po in data["Items"]:
+            po.pop("CostLines", None)
+    return data
+
+
+def _strip_adjustment_changes(path, data):
+    if path.startswith("/StockAdjustments"):
+        for adj in data["Items"]:
+            for line in adj["StockAdjustmentLines"]:
+                line.pop("QuantityChange", None)
+                line.pop("ValueChange", None)
+    return data
+
+
+class AccountQuirkTests(unittest.TestCase):
+    def _app(self, rewrite):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.addCleanup(lambda: [os.path.exists(self.db_path + x) and os.unlink(self.db_path + x)
+                                 for x in ("", "-wal", "-shm")])
+        from app import create_app
+        app = create_app({
+            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live",
+            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
+            "UNLEASHED_TRANSPORT": RewritingTransport(create_mock_app(today=TODAY), rewrite),
+        })
+        app.extensions["unleashed"]["reports"].today_fn = lambda: TODAY
+        return app
+
+    def test_cost_lines_missing_from_list_are_fetched_from_detail(self):
+        app = self._app(_strip_cost_lines_from_lists)
+        reports = app.extensions["unleashed"]["reports"]
+        stripped = reports.cogs(TODAY)
+        full = ReportsTests.reports.cogs(TODAY)
+        self.assertGreater(stripped["shipping"], 0)
+        self.assertAlmostEqual(stripped["shipping"], full["shipping"], places=6)
+        self.assertAlmostEqual(stripped["cogs"], full["cogs"], places=6)
+        html = app.test_client().post("/connection", data={"action": "check"}).get_data(as_text=True)
+        self.assertIn("each purchase order&#39;s detail", html)
+
+    def test_adjustments_without_change_fields(self):
+        app = self._app(_strip_adjustment_changes)
+        c = app.test_client()
+        start = "?start=2025-07-01&end=2026-07-15"
+        for path in ("/adjustments" + start, "/transactions" + start,
+                     "/stock-movement?product=MILK-WHL-GAL&start=2026-01-01&end=2026-07-15",
+                     "/adjustments?format=csv", "/transactions?format=csv", "/cogs"):
+            res = c.get(path)
+            self.assertEqual(res.status_code, 200, path)
+        html = c.get("/adjustments" + start).get_data(as_text=True)
+        self.assertIn("without a quantity or value change", html)
+        self.assertNotIn("Entered in error", html)  # the deleted adjustment stays out
+        check = c.post("/connection", data={"action": "check"}).get_data(as_text=True)
+        self.assertIn("By adjustment status", check)
+        self.assertIn("Completed:", check)
+        self.assertIn("on active adjustments have no change fields", check)
 
 
 class RetryTests(unittest.TestCase):
@@ -199,6 +279,16 @@ class FieldFallbackTests(unittest.TestCase):
         self.assertEqual(po["shipping"], 7.5)
         self.assertEqual(po["lines"][0]["unit_price"], 5.0)
         self.assertEqual(po["received_date"], TODAY)
+
+    def test_cost_line_amount_field_priority(self):
+        from unleashed.reports import cost_line_amount, cost_line_keys
+        po = {"OrderNumber": "PO-2", "PurchaseOrderLines": [], "CostCentre": None,
+              "CostLines": [{"Description": "Freight", "BCAmount": None, "Amount": 12.5},
+                            {"Description": "Fuel levy", "BCSubTotal": 3.0, "Total": 3.3}]}
+        self.assertEqual(cost_line_keys(po), ["CostLines"])
+        self.assertEqual(cost_line_amount(po["CostLines"][0]), ("Amount", 12.5))
+        self.assertEqual(cost_line_amount(po["CostLines"][1]), ("BCSubTotal", 3.0))
+        self.assertEqual(self.reports._po(po)["shipping"], 15.5)
 
     def test_history_queries_are_detected(self):
         from unleashed.client import _is_historical

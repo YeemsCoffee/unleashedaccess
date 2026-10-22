@@ -95,8 +95,9 @@ class UnleashedClient:
         self.mode = mode
         self._cache = {}
 
-    def get(self, endpoint, params=None, page=None):
-        """One GET. `page` appends /{page} for paged list endpoints."""
+    def get(self, endpoint, params=None, page=None, long_cache=False):
+        """One GET. `page` appends /{page} for paged list endpoints; `long_cache`
+        keeps the response for the history TTL (records that no longer change)."""
         params = {k: v for k, v in (params or {}).items() if v not in (None, "")}
         # Commas stay literal (orderStatus=Parked,Placed) so the signed string
         # is byte-for-byte what the server reads.
@@ -104,7 +105,8 @@ class UnleashedClient:
         path = f"/{endpoint}" + (f"/{page}" if page is not None else "")
         key = (path, query_string)
 
-        ttl = self.history_cache_seconds if _is_historical(params) else self.cache_seconds
+        long_cache = long_cache or _is_historical(params)
+        ttl = self.history_cache_seconds if long_cache else self.cache_seconds
         cached = self._cache.get(key)
         if cached and time.monotonic() - cached[0] < ttl:
             return cached[1]

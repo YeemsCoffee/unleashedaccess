@@ -299,6 +299,14 @@ class MockDataset:
             "SupplierCode": sup["SupplierCode"], "Lines": lines, "Freight": 22.50, "SubTotal": 264.00,
         })
         self._sale(self.today, "WHSL-01", [("COF-ESP-5LB", 2, 120.00)], status="Placed")
+        # A deleted adjustment: never moved stock and carries no change fields.
+        self.stock_adjustments.append({
+            "Guid": self._guid(), "AdjustmentNumber": self._next("SA"),
+            "AdjustmentDate": self.today - dt.timedelta(days=2), "AdjustmentReason": "Entered in error",
+            "Status": "Deleted",
+            "Lines": [{"ProductCode": "MILK-WHL-GAL", "NewQuantity": 0, "NewActualValue": 0.0,
+                       "Comments": "Wrong product"}],
+        })
 
     # ------------------------------------------------------------ primitives
 

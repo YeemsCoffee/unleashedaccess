@@ -92,6 +92,10 @@ def _wants_csv():
     return request.args.get("format") == "csv"
 
 
+def _round(v, places=2):
+    return "" if v is None else round(v, places)
+
+
 def _csv(filename, columns, rows):
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -205,7 +209,7 @@ def stock_movement():
     if _wants_csv() and mv:
         return _csv(f"stock-movement-{product}", [
             ("Date", lambda x: x["date"].isoformat()), ("Type", "type"), ("Number", "number"),
-            ("Party", "party"), ("Qty", "qty"), ("Value", lambda x: round(x["value"], 4)),
+            ("Party", "party"), ("Qty", "qty"), ("Value", lambda x: _round(x["value"], 4)),
             ("Balance Qty", "balance_qty"), ("Balance Value", lambda x: round(x["balance_value"], 4)),
         ], mv["rows"])
     return render_template("dash/movement.html", mv=mv, products=products, product=product,
@@ -275,7 +279,7 @@ def adjustments():
         return _csv("stock-adjustments", [
             ("Number", "number"), ("Date", lambda x: x["date"].isoformat()), ("Reason", "reason"),
             ("Product Code", "product_code"), ("Qty Change", "qty_change"),
-            ("Value Change", lambda x: round(x["value_change"], 4)), ("Comments", "comments"),
+            ("Value Change", lambda x: _round(x["value_change"], 4)), ("Comments", "comments"),
         ], adj["rows"])
     return render_template("dash/adjustments.html", adj=adj, start=start, end=end,
                            csv_url=_csv_url())
@@ -292,7 +296,7 @@ def transactions():
         return _csv("transactions", [
             ("Date", lambda x: x["date"].isoformat()), ("Type", "type"), ("Number", "number"),
             ("Party", "party"), ("Product Code", "product_code"), ("Qty", "qty"),
-            ("Value", lambda x: round(x["value"], 4)),
+            ("Value", lambda x: _round(x["value"], 4)),
         ], rows)
     return render_template("dash/transactions.html", rows=rows, start=start, end=end,
                            doc_type=doc_type, product=product, products=r.products(),
@@ -321,7 +325,8 @@ def connection():
         client = ext["live_client"]
         client.clear_cache()
         if request.form.get("action") == "check":
-            checks, fields = run_checks(Reports(client, max_workers=4))
+            checks, fields = run_checks(Reports(client, today_fn=ext["reports"].today_fn,
+                                                max_workers=4))
         else:
             try:
                 whs = client.get_all("Warehouses")

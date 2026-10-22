@@ -246,8 +246,9 @@ def _purchase_order(ds, po):
         "Tax": {"TaxCode": "NONE"}, "TaxRate": 0.0,
         "SubTotal": po["SubTotal"], "TaxTotal": 0.0, "Total": round(po["SubTotal"] + freight, 2),
         "BCSubTotal": po["SubTotal"], "BCTaxTotal": 0.0, "BCTotal": round(po["SubTotal"] + freight, 2),
-        "Costs": [{"Description": "Freight", "Supplier": _supplier_ref(ds, po["SupplierCode"]),
-                   "Total": freight, "CurrencyCode": "USD"}],
+        "CostLines": [{"LineNumber": 1, "Description": "Freight",
+                       "Supplier": _supplier_ref(ds, po["SupplierCode"]),
+                       "Currency": {"CurrencyCode": "USD"}, "Amount": freight}],
         "PurchaseOrderLines": lines,
         "LastModifiedOn": _ms(po["CompletedDate"] or po["OrderDate"]),
     }
@@ -282,9 +283,9 @@ def _adjustment(ds, a):
         "AdjustmentDate": _ms(a["AdjustmentDate"]), "AdjustmentReason": a["AdjustmentReason"],
         "Status": a["Status"], "Warehouse": WAREHOUSE_REF,
         "StockAdjustmentLines": [
-            {"Product": _product_ref(ds, l["ProductCode"]), "QuantityChange": l["QuantityChange"],
-             "ValueChange": l["ValueChange"], "NewQuantity": l["NewQuantity"],
-             "NewActualValue": l["NewActualValue"], "Comments": l["Comments"]}
+            {"Product": _product_ref(ds, l["ProductCode"]),
+             **{k: l[k] for k in ("QuantityChange", "ValueChange", "NewQuantity",
+                                  "NewActualValue", "Comments") if k in l}}
             for l in a["Lines"]
         ],
     }

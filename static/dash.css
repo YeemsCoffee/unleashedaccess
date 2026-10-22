@@ -188,3 +188,5 @@ td.wrap { white-space: normal; min-width: 280px; }
 .fieldlist { margin: 0; display: grid; gap: 12px; }
 .fieldlist dt { font-weight: 600; font-size: 13px; }
 .fieldlist dd { margin: 2px 0 0; color: var(--text-secondary); word-break: break-word; }
+.explain { margin-top: 12px; }
+.explain p { margin: 8px 0 0; color: var(--text-secondary); font-size: 14px; max-width: 72ch; }

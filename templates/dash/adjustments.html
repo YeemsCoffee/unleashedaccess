@@ -8,13 +8,17 @@
 </div>
 <section class="card">
   <p>Net value change in period: <strong>{{ adj.value_change|money }}</strong></p>
+  {% if adj.missing_change %}
+  <p class="recon recon-warn">! {{ adj.missing_change }} line(s) came from Unleashed without a quantity or value change, so they show "—" there and aren't in the total above. Their new quantity and value are shown instead. Deleted and parked adjustments are excluded entirely.</p>
+  {% endif %}
   <div class="table-wrap"><table>
-    <thead><tr><th>Number</th><th>Date</th><th>Reason</th><th>Product</th><th class="num">Qty change</th><th class="num">Value change</th><th>Comments</th></tr></thead>
+    <thead><tr><th>Number</th><th>Date</th><th>Reason</th><th>Product</th><th class="num">Qty change</th><th class="num">Value change</th><th class="num">New qty</th><th class="num">New value</th><th>Comments</th></tr></thead>
     <tbody>
     {% for a in adj.rows %}
     <tr><td>{{ a.number }}</td><td>{{ a.date|d }}</td><td>{{ a.reason }}</td><td>{{ a.description or a.product_code }}</td>
-      <td class="num">{{ a.qty_change|qty }}</td><td class="num">{{ a.value_change|money }}</td><td>{{ a.comments or '' }}</td></tr>
-    {% else %}<tr><td colspan="7" class="muted">No stock adjustments in this period.</td></tr>{% endfor %}
+      <td class="num">{{ a.qty_change|qty }}</td><td class="num">{{ a.value_change|money }}</td>
+      <td class="num">{{ a.new_qty|qty }}</td><td class="num">{{ a.new_value|money }}</td><td>{{ a.comments or '' }}</td></tr>
+    {% else %}<tr><td colspan="9" class="muted">No stock adjustments in this period.</td></tr>{% endfor %}
     </tbody>
   </table></div>
 </section>

@@ -28,8 +28,22 @@
     {{ '✓' if diff|abs < 1 else '!' }}
     Cross-check: cost of sales {{ recon.cost_of_sales|money }} + stock write-offs {{ recon.adjustments_out|money }}
     = {{ recon.total|money }}{% if diff|abs >= 1 %} — differs from the formula by {{ diff|money }}
-    (usually purchase costing or backdated documents){% else %} — matches the formula{% endif %}.
+    (see "COGS vs cost of sales" below){% else %} — matches the formula{% endif %}.
+    {% if recon.adjustments_missing %}{{ recon.adjustments_missing }} adjustment line(s) without a value change aren't included in this cross-check.{% endif %}
   </p>
+  <details class="explain">
+    <summary>COGS vs cost of sales — what's the difference?</summary>
+    <p><strong>COGS</strong> (the big number) is the inventory-value method: last month's ending
+      inventory, plus everything received this month including shipping cost lines, minus what's on
+      hand now. It captures <em>every</em> reason stock value left: items sold, used in drinks,
+      spoiled, wasted, or lost in a stocktake.</p>
+    <p><strong>Cost of sales</strong> only counts stock that went out on completed sales orders,
+      valued at Unleashed's average landed cost at the time of sale (which already includes
+      shipping). <strong>Write-offs</strong> are stock adjustments that reduced inventory value.</p>
+    <p>The two should land close together. A gap means stock value moved without a sales order or
+      an adjustment explaining it: usage not recorded as sales, unrecorded waste, purchase costs
+      changed after receipt, or documents entered with an earlier date.</p>
+  </details>
 </section>
 
 <section class="card">
