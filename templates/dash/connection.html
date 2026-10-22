@@ -8,14 +8,46 @@
     <div><dt>Live API URL</dt><dd class="mono">{{ ext.base_url }}</dd></div>
     <div><dt>Live credentials</dt><dd>{{ 'Configured' if ext.has_credentials else 'Not set' }}</dd></div>
   </dl>
-  <form method="post">
-    <button class="btn btn-primary">Test live connection</button>
+  <form method="post" class="filters">
+    <button class="btn" name="action" value="test">Test live connection</button>
+    <button class="btn btn-primary" name="action" value="check">Check live data</button>
   </form>
   {% if result %}
   <p class="recon {{ 'recon-ok' if result.ok else 'recon-warn' }}">{{ '✓' if result.ok else '!' }} {{ result.message }}</p>
   {% endif %}
-  <p class="muted">To switch the dashboard to live data, set <code>UNLEASHED_MODE=live</code> in <code>.env</code> and restart.
-    The API ID and key live only in <code>.env</code> (never committed). The mock API is also reachable at
-    <code>/mock-unleashed/…</code> when in mock mode.</p>
+  <p class="muted">Both buttons always use your <em>live</em> Unleashed account, even while the dashboard shows mock data.
+    "Check live data" takes a little longer: it pulls recent purchases, sales, adjustments and stock to confirm the
+    COGS math will work on your data. To switch the dashboard to live data, set <code>UNLEASHED_MODE=live</code>
+    in <code>.env</code> and restart.</p>
 </section>
+
+{% if checks %}
+<section class="card">
+  <h2>Live data check</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for c in checks %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td><span class="pill {{ {'ok': 'pill-complete', 'warn': 'pill-parked', 'fail': 'pill-deleted'}[c.status] }}">{{ {'ok': '✓ OK', 'warn': '! Check', 'fail': '✕ Failed'}[c.status] }}</span></td>
+      <td class="wrap">{{ c.detail }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+{% if fields %}
+<section class="card">
+  <h2>Field names returned by your account</h2>
+  <p class="muted">Names only, no values, so this is safe to copy and share if a check above needs adjusting.</p>
+  <dl class="fieldlist">
+    {% for name, keys in fields.items() %}
+    <div><dt>{{ name }}</dt><dd class="mono">{{ keys|join(', ') }}</dd></div>
+    {% endfor %}
+  </dl>
+</section>
+{% endif %}
 {% endblock %}

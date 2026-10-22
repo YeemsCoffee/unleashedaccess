@@ -312,18 +312,25 @@ def api_log():
 
 @bp.route("/connection", methods=["GET", "POST"])
 def connection():
+    from unleashed.diagnostics import run_checks
+    from unleashed.reports import Reports
+
     ext = _ext()
-    result = None
+    result, checks, fields = None, None, None
     if request.method == "POST":
         client = ext["live_client"]
-        try:
-            client.clear_cache()
-            whs = client.get_all("Warehouses")
-            result = {"ok": True, "message": f"Connected to Unleashed. {len(whs)} warehouse(s): "
-                      + ", ".join(w.get("WarehouseName", "?") for w in whs)}
-        except UnleashedError as e:
-            result = {"ok": False, "message": str(e)}
-    return render_template("dash/connection.html", result=result, ext=ext)
+        client.clear_cache()
+        if request.form.get("action") == "check":
+            checks, fields = run_checks(Reports(client, max_workers=4))
+        else:
+            try:
+                whs = client.get_all("Warehouses")
+                result = {"ok": True, "message": f"Connected to Unleashed. {len(whs)} warehouse(s): "
+                          + ", ".join(w.get("WarehouseName", "?") for w in whs)}
+            except UnleashedError as e:
+                result = {"ok": False, "message": str(e)}
+    return render_template("dash/connection.html", result=result, checks=checks,
+                           fields=fields, ext=ext)
 
 
 @bp.post("/refresh")
@@ -359,8 +366,9 @@ def init_app(app):
             conn.close()
 
     live_client = UnleashedClient(cfg["UNLEASHED_API_ID"], cfg["UNLEASHED_API_KEY"],
-                                  HttpTransport(cfg["UNLEASHED_BASE_URL"]), log_fn=log_call,
-                                  cache_seconds=cfg["UNLEASHED_CACHE_SECONDS"], mode="live")
+                                  cfg.get("UNLEASHED_TRANSPORT") or HttpTransport(cfg["UNLEASHED_BASE_URL"]),
+                                  log_fn=log_call, cache_seconds=cfg["UNLEASHED_CACHE_SECONDS"],
+                                  mode="live")
     mode = cfg["UNLEASHED_MODE"]
     if mode == "live":
         client = live_client
@@ -375,7 +383,8 @@ def init_app(app):
 
     app.extensions["unleashed"] = {
         "mode": mode, "client": client, "live_client": live_client,
-        "reports": Reports(client), "base_url": cfg["UNLEASHED_BASE_URL"],
+        "reports": Reports(client, max_workers=4 if mode == "live" else 1),
+        "base_url": cfg["UNLEASHED_BASE_URL"],
         "has_credentials": bool(cfg["UNLEASHED_API_ID"] and cfg["UNLEASHED_API_KEY"]),
     }
     app.register_blueprint(bp)

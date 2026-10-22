@@ -6,6 +6,7 @@ reproduces the same reports from live data.
 """
 import datetime as dt
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from .client import parse_date
 
@@ -31,10 +32,19 @@ def add_months(d, n):
 
 class Reports:
     def __init__(self, client, today_fn=dt.date.today,
-                 shipping_codes=("FREIGHT", "SHIPPING", "DELIVERY")):
+                 shipping_codes=("FREIGHT", "SHIPPING", "DELIVERY"), max_workers=1):
         self.client = client
         self.today_fn = today_fn
         self.shipping_codes = {c.upper() for c in shipping_codes}
+        self.max_workers = max_workers
+
+    def _map(self, fn, args):
+        """fn over args, concurrently when max_workers > 1 (independent API reads)."""
+        args = list(args)
+        if self.max_workers <= 1 or len(args) <= 1:
+            return [fn(a) for a in args]
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            return list(pool.map(fn, args))
 
     @property
     def today(self):
@@ -147,7 +157,7 @@ class Reports:
 
     def received_purchases(self, start, end):
         """POs whose stock was received between start and end (inclusive)."""
-        lookback = start - dt.timedelta(days=60)
+        lookback = start - dt.timedelta(days=180)
         orders = self.purchase_orders(lookback, end, status=",".join(RECEIVED_PO_STATUSES))
         return sorted((o for o in orders
                        if o["received_date"] and start <= o["received_date"] <= end),
@@ -158,7 +168,7 @@ class Reports:
         for l in i.get("PurchaseOrderLines", []):
             prod = l.get("Product") or {}
             code = prod.get("ProductCode", "")
-            total = l.get("BCSubTotal", l.get("LineTotal")) or 0
+            total = _first(l.get("BCSubTotal"), l.get("BCLineTotal"), l.get("LineTotal"))
             if code.upper() in self.shipping_codes:
                 shipping += total
                 continue
@@ -166,7 +176,7 @@ class Reports:
             lines.append({"product_code": code, "description": prod.get("ProductDescription"),
                           "qty": l.get("OrderQuantity") or 0,
                           "received_qty": l.get("ReceiptQuantity"),
-                          "unit_price": l.get("BCUnitPrice", l.get("UnitPrice")) or 0,
+                          "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
                           "line_total": total})
         shipping += sum(c.get("Total") or 0 for c in i.get("Costs") or [])
         supplier = i.get("Supplier") or {}
@@ -174,11 +184,11 @@ class Reports:
             "guid": i.get("Guid"), "number": i["OrderNumber"], "status": i.get("OrderStatus"),
             "order_date": parse_date(i.get("OrderDate")),
             "required_date": parse_date(i.get("RequiredDate")),
-            "received_date": parse_date(i.get("ReceivedDate")),
+            "received_date": parse_date(i.get("ReceivedDate") or i.get("CompletedDate")),
             "completed_date": parse_date(i.get("CompletedDate")),
             "supplier_code": supplier.get("SupplierCode"),
             "supplier_name": supplier.get("SupplierName"),
-            "goods": goods, "shipping": shipping, "tax": i.get("BCTaxTotal") or 0,
+            "goods": goods, "shipping": shipping, "tax": _first(i.get("BCTaxTotal"), i.get("TaxTotal")),
             "total": goods + shipping, "lines": lines,
         }
 
@@ -240,11 +250,11 @@ class Reports:
             unit_cost = l.get("AverageLandedPriceAtTimeOfSale") or 0
             lines.append({"product_code": prod.get("ProductCode"),
                           "description": prod.get("ProductDescription"),
-                          "qty": qty, "unit_price": l.get("BCUnitPrice", l.get("UnitPrice")) or 0,
-                          "line_total": l.get("BCLineTotal", l.get("LineTotal")) or 0,
+                          "qty": qty, "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
+                          "line_total": _first(l.get("BCLineTotal"), l.get("LineTotal")),
                           "unit_cost": unit_cost, "cost": qty * unit_cost})
         customer = i.get("Customer") or {}
-        subtotal = i.get("BCSubTotal", i.get("SubTotal")) or 0
+        subtotal = _first(i.get("BCSubTotal"), i.get("SubTotal"))
         cost = sum(l["cost"] for l in lines)
         return {
             "guid": i.get("Guid"), "number": i["OrderNumber"], "status": i.get("OrderStatus"),
@@ -252,8 +262,8 @@ class Reports:
             "completed_date": parse_date(i.get("CompletedDate")),
             "customer_code": customer.get("CustomerCode"),
             "customer_name": customer.get("CustomerName"),
-            "subtotal": subtotal, "tax": i.get("BCTaxTotal") or 0,
-            "total": i.get("BCTotal", i.get("Total")) or 0,
+            "subtotal": subtotal, "tax": _first(i.get("BCTaxTotal"), i.get("TaxTotal")),
+            "total": _first(i.get("BCTotal"), i.get("Total")),
             "cost": cost, "margin": subtotal - cost, "lines": lines,
         }
 
@@ -363,15 +373,16 @@ class Reports:
         by_day = defaultdict(float)
         for o in received:
             by_day[o["received_date"]] += o["goods"] + o["shipping"]
-        rows, purchases, day = [], 0.0, start
-        while day <= through:
+        days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
+        closings = self._map(
+            lambda d: self.inventory_value(as_at=None if d >= self.today else d), days)
+        rows, purchases = [], 0.0
+        for day, closing in zip(days, closings):
             purchases += by_day[day]
-            closing = self.inventory_value(as_at=None if day >= self.today else day)
             running = opening + purchases - closing
             rows.append({"date": day, "purchases_to_date": purchases,
                          "inventory": closing, "cogs_to_date": running,
                          "cogs_day": running - (rows[-1]["cogs_to_date"] if rows else 0)})
-            day += dt.timedelta(days=1)
         return rows
 
     def cogs_reconciliation(self, month=None):
@@ -386,17 +397,22 @@ class Reports:
                 "total": cost_of_sales - adj}
 
     def cogs_history(self, months=12):
-        rows = []
         first = add_months(month_start(self.today), -(months - 1))
-        for i in range(months):
-            m = add_months(first, i)
+
+        def month_row(m):
             c = self.cogs(m)
             sales = self.sales_enquiry(m, min(month_end(m), self.today), status="Completed")
             c["revenue"] = sales["revenue"]
             c["gross_margin"] = sales["revenue"] - c["cogs"]
             c["cogs_pct"] = c["cogs"] / sales["revenue"] if sales["revenue"] else None
-            rows.append(c)
-        return rows
+            return c
+
+        return self._map(month_row, [add_months(first, i) for i in range(months)])
+
+
+def _first(*values):
+    """First value that isn't None (a null BC field falls back to the plain one)."""
+    return next((v for v in values if v is not None), 0)
 
 
 def _txn(date, kind, number, party, line, qty, value):

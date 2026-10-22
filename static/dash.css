@@ -183,3 +183,8 @@ summary { cursor: pointer; color: var(--accent); font-size: 14px; }
   .chart svg { min-width: 640px; }
   td { white-space: nowrap; }
 }
+
+td.wrap { white-space: normal; min-width: 280px; }
+.fieldlist { margin: 0; display: grid; gap: 12px; }
+.fieldlist dt { font-weight: 600; font-size: 13px; }
+.fieldlist dd { margin: 2px 0 0; color: var(--text-secondary); word-break: break-word; }

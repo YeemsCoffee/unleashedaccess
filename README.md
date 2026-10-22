@@ -72,17 +72,30 @@ on its own with `python mock_unleashed.py` (port 8100).
 ## Going live
 
 1. In `.env`, set `UNLEASHED_API_ID` and `UNLEASHED_API_KEY` (Unleashed →
-   Integration → Unleashed API Access) and `UNLEASHED_MODE=live`. `.env` is
-   gitignored, so keys are never committed.
-2. Restart, then use **Connection → Test live connection**.
-3. On first connect, verify against your account (both handled in
-   `unleashed/reports.py`):
-   - how freight is recorded on purchase orders: read from a PO `Costs` array,
-     or from lines whose product code is `FREIGHT`, `SHIPPING` or `DELIVERY`;
-   - stock adjustment line fields (`QuantityChange` / `ValueChange`).
+   Integration → Unleashed API Access). `.env` is gitignored, so keys are
+   never committed.
+2. Restart, open **Connection**, and click **Check live data**. This works
+   even while the dashboard still shows mock data. It confirms against your
+   real account that:
+   - historical stock (`asAtDate`) works, which opening inventory depends on;
+   - received purchase orders carry a received date;
+   - shipping/freight is found on purchase orders, either in a `Costs` array
+     or on lines coded `FREIGHT`, `SHIPPING` or `DELIVERY`;
+   - sales order lines carry their cost (`AverageLandedPriceAtTimeOfSale`);
+   - stock adjustment lines carry quantity and value changes;
+   - this month's COGS formula agrees with cost of sales plus write-offs.
 
-API responses are cached for `UNLEASHED_CACHE_SECONDS` (default 120) to stay
-within Unleashed's rate limits; **Refresh data** clears the cache.
+   It also lists the field names your account returns (names only, no
+   values) so a mismatch can be fixed quickly.
+3. Set `UNLEASHED_MODE=live` in `.env` and restart. The header badge changes
+   to "Live Unleashed API".
+
+In live mode, the daily COGS chart's stock snapshots are fetched four at a
+time, and rate-limited responses (HTTP 429/503) are retried with backoff.
+Responses are cached: queries pinned to a past date for an hour, everything
+else for `UNLEASHED_CACHE_SECONDS` (default 120). **Refresh data** clears the
+cache. Expect the first load of the Overview and COGS pages to take a few
+seconds; later views are instant.
 
 ## Configuration
 

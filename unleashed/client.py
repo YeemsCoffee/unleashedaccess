@@ -21,6 +21,11 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_BASE_URL = "https://api.unleashedsoftware.com"
+# Rate-limited / temporarily unavailable responses are retried after these waits.
+RETRY_STATUSES = {429, 502, 503, 504}
+RETRY_WAITS = (1, 3, 8, None)
+# Reference lists Unleashed returns whole, without /{pageNumber} paging.
+UNPAGED_ENDPOINTS = {"Warehouses", "ProductGroups", "Currencies", "UnitOfMeasures"}
 _DATE_RE = re.compile(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/")
 
 
@@ -70,21 +75,22 @@ class WsgiTransport:
     """Calls a WSGI app (the mock server) in-process, through the full HTTP stack."""
 
     def __init__(self, wsgi_app):
-        self.client = wsgi_app.test_client()
+        self.app = wsgi_app
 
     def get(self, path, query_string, headers):
-        resp = self.client.get(path, query_string=query_string, headers=headers)
+        resp = self.app.test_client().get(path, query_string=query_string, headers=headers)
         return resp.status_code, resp.get_data(as_text=True)
 
 
 class UnleashedClient:
     def __init__(self, api_id, api_key, transport, log_fn=None, cache_seconds=120,
-                 client_type="yeems/gardena-dashboard", mode="live"):
+                 history_cache_seconds=3600, client_type="yeems/unleashedaccess", mode="live"):
         self.api_id = api_id
         self.api_key = api_key
         self.transport = transport
         self.log_fn = log_fn
         self.cache_seconds = cache_seconds
+        self.history_cache_seconds = max(history_cache_seconds, cache_seconds)
         self.client_type = client_type
         self.mode = mode
         self._cache = {}
@@ -92,12 +98,15 @@ class UnleashedClient:
     def get(self, endpoint, params=None, page=None):
         """One GET. `page` appends /{page} for paged list endpoints."""
         params = {k: v for k, v in (params or {}).items() if v not in (None, "")}
-        query_string = urllib.parse.urlencode(params)
+        # Commas stay literal (orderStatus=Parked,Placed) so the signed string
+        # is byte-for-byte what the server reads.
+        query_string = urllib.parse.urlencode(params, safe=",")
         path = f"/{endpoint}" + (f"/{page}" if page is not None else "")
         key = (path, query_string)
 
+        ttl = self.history_cache_seconds if _is_historical(params) else self.cache_seconds
         cached = self._cache.get(key)
-        if cached and time.monotonic() - cached[0] < self.cache_seconds:
+        if cached and time.monotonic() - cached[0] < ttl:
             return cached[1]
 
         if not self.api_id or not self.api_key:
@@ -113,7 +122,11 @@ class UnleashedClient:
         started = time.monotonic()
         status, body, error = None, None, None
         try:
-            status, body = self.transport.get(path, query_string, headers)
+            for wait in RETRY_WAITS:
+                status, body = self.transport.get(path, query_string, headers)
+                if status not in RETRY_STATUSES or wait is None:
+                    break
+                time.sleep(_retry_after(body, wait))
             if status != 200:
                 error = _error_message(body) or f"HTTP {status}"
                 raise UnleashedError(f"Unleashed {path} failed: {error}", status)
@@ -130,15 +143,20 @@ class UnleashedClient:
         self._cache[key] = (time.monotonic(), data)
         return data
 
-    def get_all(self, endpoint, params=None, page_size=500, max_pages=100):
+    def get_all(self, endpoint, params=None, page_size=500, max_pages=200):
         """Follow Pagination across pages and return the combined Items list."""
+        if endpoint in UNPAGED_ENDPOINTS:
+            return _items(self.get(endpoint, params))
         items, page = [], 1
-        while page <= max_pages:
+        while True:
             data = self.get(endpoint, {**(params or {}), "pageSize": page_size}, page=page)
-            items.extend(data.get("Items", []))
-            pages = data.get("Pagination", {}).get("NumberOfPages", 1)
+            items.extend(_items(data))
+            pages = (data.get("Pagination") or {}).get("NumberOfPages", 1) if isinstance(data, dict) else 1
             if page >= pages:
                 break
+            if page >= max_pages:
+                raise UnleashedError(f"{endpoint}: more than {max_pages * page_size} records; "
+                                     "narrow the date range")
             page += 1
         return items
 
@@ -164,6 +182,26 @@ class UnleashedClient:
             "error": error,
             "mode": self.mode,
         })
+
+
+def _retry_after(body, default):
+    try:
+        return min(float(json.loads(body).get("RetryAfter", default)), 30)
+    except (ValueError, TypeError, AttributeError):
+        return default
+
+
+def _items(data):
+    if isinstance(data, list):
+        return data
+    return data.get("Items") or []
+
+
+def _is_historical(params):
+    """Queries pinned to a past date (as-at or end date) change rarely."""
+    today = dt.date.today().isoformat()
+    pinned = [str(params[k])[:10] for k in ("asAtDate", "endDate") if params.get(k)]
+    return bool(pinned) and all(p < today for p in pinned)
 
 
 def _error_message(body):

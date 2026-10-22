@@ -111,6 +111,102 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("/StockOnHand/1", html)
 
 
+class LiveModeTests(unittest.TestCase):
+    """Runs the app in live mode, with the live client's transport pointed at the mock."""
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        from app import create_app
+        self.app = create_app({
+            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live",
+            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
+            "UNLEASHED_TRANSPORT": WsgiTransport(create_mock_app()),
+        })
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(self.db_path + suffix)
+            except FileNotFoundError:
+                pass
+
+    def test_pages_render_in_live_mode(self):
+        for path in ("/", "/cogs", "/stock-on-hand", "/purchases", "/sales", "/transactions"):
+            html = self.client.get(path).get_data(as_text=True)
+            self.assertIn("Live Unleashed API", html, path)
+            self.assertNotIn("Couldn't load data", html, path)
+
+    def test_live_data_check_passes_on_mock_data(self):
+        html = self.client.post("/connection", data={"action": "check"}).get_data(as_text=True)
+        self.assertIn("Live data check", html)
+        self.assertNotIn("! Check", html)
+        self.assertNotIn("Failed", html)
+        self.assertIn("Purchase order line", html)
+
+    def test_wrong_credentials_fail_clearly(self):
+        self.app.extensions["unleashed"]["live_client"].api_key = "wrong"
+        html = self.client.post("/connection", data={"action": "check"}).get_data(as_text=True)
+        self.assertIn("Failed", html)
+        self.assertIn("Forbidden", html)
+
+    def test_unpaged_endpoints_are_called_without_page_number(self):
+        self.client.post("/connection", data={"action": "test"})
+        html = self.client.get("/api-log").get_data(as_text=True)
+        self.assertIn("GET /Warehouses<", html.replace("</td>", "<"))
+        self.assertNotIn("/Warehouses/1", html)
+
+
+class RetryTests(unittest.TestCase):
+    def test_rate_limited_request_is_retried(self):
+        import unleashed.client as client_mod
+
+        class FlakyTransport:
+            calls = 0
+
+            def get(self, path, query_string, headers):
+                FlakyTransport.calls += 1
+                if FlakyTransport.calls == 1:
+                    return 429, '{"description": "Too many requests"}'
+                return 200, '{"Items": [{"WarehouseCode": "GDN"}]}'
+
+        saved = client_mod.RETRY_WAITS
+        client_mod.RETRY_WAITS = (0, 0, None)
+        try:
+            c = UnleashedClient("id", "key", FlakyTransport())
+            self.assertEqual(c.get_all("Warehouses"), [{"WarehouseCode": "GDN"}])
+            self.assertEqual(FlakyTransport.calls, 2)
+        finally:
+            client_mod.RETRY_WAITS = saved
+
+
+class FieldFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.reports = Reports(client=None, today_fn=lambda: TODAY)
+
+    def test_null_base_currency_fields_fall_back(self):
+        po = self.reports._po({
+            "OrderNumber": "PO-1", "OrderStatus": "Complete",
+            "ReceivedDate": None, "CompletedDate": "/Date(1784073600000)/",
+            "PurchaseOrderLines": [
+                {"Product": {"ProductCode": "MILK"}, "OrderQuantity": 2, "BCSubTotal": None,
+                 "LineTotal": 10.0, "BCUnitPrice": None, "UnitPrice": 5.0},
+                {"Product": {"ProductCode": "FREIGHT"}, "OrderQuantity": 1, "LineTotal": 7.5},
+            ],
+        })
+        self.assertEqual(po["goods"], 10.0)
+        self.assertEqual(po["shipping"], 7.5)
+        self.assertEqual(po["lines"][0]["unit_price"], 5.0)
+        self.assertEqual(po["received_date"], TODAY)
+
+    def test_history_queries_are_detected(self):
+        from unleashed.client import _is_historical
+        self.assertTrue(_is_historical({"asAtDate": "2020-01-31"}))
+        self.assertFalse(_is_historical({"asAtDate": "2999-01-01"}))
+        self.assertFalse(_is_historical({"startDate": "2020-01-01"}))
+
+
 class PortabilityTests(unittest.TestCase):
     def test_no_platform_specific_strftime_flags(self):
         # "%-d" / "%#d" only work on some platforms (e.g. "%-d" raises on Windows).
