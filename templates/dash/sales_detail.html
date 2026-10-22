@@ -1,0 +1,25 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill %}
+{% block title %}{{ so.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Sales order {{ so.number }} {{ status_pill(so.status) }}</h1>
+  <a href="{{ url_for('dash.sales') }}">← Sales enquiry</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Customer</dt><dd>{{ so.customer_name }} ({{ so.customer_code }})</dd></div>
+    <div><dt>Order date</dt><dd>{{ so.order_date|d }}</dd></div>
+    <div><dt>Completed</dt><dd>{{ so.completed_date|d }}</dd></div>
+  </dl>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Line total</th><th class="num">Avg landed cost</th><th class="num">Line cost</th></tr></thead>
+    <tbody>{% for l in so.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td><td class="num">{{ l.unit_cost|money }}</td><td class="num">{{ l.cost|money }}</td></tr>{% endfor %}</tbody>
+    <tfoot>
+      <tr><td colspan="4">Sub total</td><td class="num">{{ so.subtotal|money }}</td><td></td><td class="num">{{ so.cost|money }}</td></tr>
+      <tr><td colspan="4">Tax</td><td class="num">{{ so.tax|money }}</td><td colspan="2"></td></tr>
+      <tr><td colspan="4"><strong>Total</strong></td><td class="num"><strong>{{ so.total|money }}</strong></td><td>Margin</td><td class="num">{{ so.margin|money }}</td></tr>
+    </tfoot>
+  </table></div>
+</section>
+{% endblock %}

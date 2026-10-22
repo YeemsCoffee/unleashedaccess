@@ -1,6 +1,10 @@
 import os
 
-from app import create_app
+from envfile import load_env_file
+
+load_env_file()
+
+from app import create_app  # noqa: E402
 
 app = create_app()
 

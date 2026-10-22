@@ -1,0 +1,89 @@
+{% extends "dash/base.html" %}
+{% block title %}COGS{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Cost of goods sold</h1>
+  <form method="get" class="filters">
+    <label>Month <input type="month" name="month" value="{{ month.strftime('%Y-%m') }}"></label>
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+</div>
+
+<section class="hero card">
+  <div class="hero-label">{{ c.month|month_name }}{{ ' · running through ' ~ (c.through|d) if c.is_current else ' · full month' }}</div>
+  <div class="hero-value">{{ c.cogs|money }}</div>
+  <div class="formula">
+    <div><span class="f-label">Ending inventory {{ c.prior_end|d }}</span><span class="f-val">{{ c.opening|money }}</span></div>
+    <div class="op">+</div>
+    <div><span class="f-label">Purchases received</span><span class="f-val">{{ c.purchases|money }}</span>
+      <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping</span></div>
+    <div class="op">−</div>
+    <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span></div>
+    <div class="op">=</div>
+    <div class="f-result"><span class="f-label">COGS</span><span class="f-val">{{ c.cogs|money }}</span></div>
+  </div>
+  {% set diff = c.cogs - recon.total %}
+  <p class="recon {{ 'recon-ok' if diff|abs < 1 else 'recon-warn' }}">
+    {{ '✓' if diff|abs < 1 else '!' }}
+    Cross-check: cost of sales {{ recon.cost_of_sales|money }} + stock write-offs {{ recon.adjustments_out|money }}
+    = {{ recon.total|money }}{% if diff|abs >= 1 %} — differs from the formula by {{ diff|money }}
+    (usually purchase costing or backdated documents){% else %} — matches the formula{% endif %}.
+  </p>
+</section>
+
+<section class="card">
+  <h2>COGS to date by day</h2>
+  {{ chart }}
+  <details>
+    <summary>Show as a table</summary>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th class="num">Purchases to date</th><th class="num">Inventory value</th><th class="num">COGS that day</th><th class="num">COGS to date</th></tr></thead>
+      <tbody>
+      {% for r in c.daily|default([]) %}
+      <tr><td>{{ r.date|d }}</td><td class="num">{{ r.purchases_to_date|money }}</td><td class="num">{{ r.inventory|money }}</td><td class="num">{{ r.cogs_day|money }}</td><td class="num">{{ r.cogs_to_date|money }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+</section>
+
+<section class="card">
+  <h2>Purchases counted in {{ c.month|month_name }} (by received date)</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Received</th><th>Order</th><th>Supplier</th><th>Status</th><th class="num">Goods</th><th class="num">Shipping</th><th class="num">Total</th></tr></thead>
+    <tbody>
+    {% for o in c.received %}
+    <tr><td>{{ o.received_date|d }}</td><td><a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.supplier_name }}</td><td>{{ o.status }}</td><td class="num">{{ o.goods|money }}</td>
+      <td class="num">{{ o.shipping|money }}</td><td class="num">{{ o.total|money }}</td></tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No purchases received yet this month.</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="4">Total</td><td class="num">{{ c.goods|money }}</td><td class="num">{{ c.shipping|money }}</td><td class="num">{{ c.purchases|money }}</td></tr></tfoot>
+  </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Last 12 months</h2>
+  {{ history_chart }}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Month</th><th class="num">Opening inventory</th><th class="num">Purchases incl. shipping</th><th class="num">Closing inventory</th><th class="num">COGS</th><th class="num">Sales</th><th class="num">COGS % of sales</th></tr></thead>
+    <tbody>
+    {% for h in history|reverse %}
+    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m')) }}">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
+      <td class="num">{{ h.opening|money }}</td><td class="num">{{ h.purchases|money }}</td>
+      <td class="num">{{ h.closing|money }}</td><td class="num"><strong>{{ h.cogs|money }}</strong></td>
+      <td class="num">{{ h.revenue|money }}</td><td class="num">{{ h.cogs_pct|pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

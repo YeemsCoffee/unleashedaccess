@@ -6,6 +6,7 @@ import re
 import segno
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 
+import dashboard
 import db as database
 import scan_logic
 
@@ -18,12 +19,18 @@ def create_app(test_config=None):
         STORE_CODE=os.environ.get("STORE_CODE", "GDN"),
         DATABASE_PATH=os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "gardena.db")),
         DUPLICATE_SCAN_SECONDS=int(os.environ.get("DUPLICATE_SCAN_SECONDS", "10")),
+        UNLEASHED_MODE=os.environ.get("UNLEASHED_MODE", "mock").lower(),
+        UNLEASHED_API_ID=os.environ.get("UNLEASHED_API_ID", ""),
+        UNLEASHED_API_KEY=os.environ.get("UNLEASHED_API_KEY", ""),
+        UNLEASHED_BASE_URL=os.environ.get("UNLEASHED_BASE_URL", "https://api.unleashedsoftware.com"),
+        UNLEASHED_CACHE_SECONDS=int(os.environ.get("UNLEASHED_CACHE_SECONDS", "120")),
     )
     if test_config:
         app.config.update(test_config)
 
     database.init_db(app.config["DATABASE_PATH"], app.config["STORE_CODE"])
     database.register(app)
+    dashboard.init_app(app)
 
     store = lambda: app.config["STORE_CODE"]
 

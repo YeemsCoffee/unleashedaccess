@@ -1,0 +1,28 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill %}
+{% block title %}{{ po.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Purchase order {{ po.number }} {{ status_pill(po.status) }}</h1>
+  <a href="{{ url_for('dash.purchases') }}">← Purchase enquiry</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Supplier</dt><dd>{{ po.supplier_name }} ({{ po.supplier_code }})</dd></div>
+    <div><dt>Order date</dt><dd>{{ po.order_date|d }}</dd></div>
+    <div><dt>Required</dt><dd>{{ po.required_date|d }}</dd></div>
+    <div><dt>Received</dt><dd>{{ po.received_date|d }}</dd></div>
+    <div><dt>Completed</dt><dd>{{ po.completed_date|d }}</dd></div>
+  </dl>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th>Description</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Unit price</th><th class="num">Line total</th></tr></thead>
+    <tbody>{% for l in po.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.received_qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>
+    <tfoot>
+      <tr><td colspan="5">Goods</td><td class="num">{{ po.goods|money }}</td></tr>
+      <tr><td colspan="5">Shipping / freight</td><td class="num">{{ po.shipping|money }}</td></tr>
+      <tr><td colspan="5">Tax</td><td class="num">{{ po.tax|money }}</td></tr>
+      <tr><td colspan="5"><strong>Total</strong></td><td class="num"><strong>{{ (po.total + po.tax)|money }}</strong></td></tr>
+    </tfoot>
+  </table></div>
+</section>
+{% endblock %}

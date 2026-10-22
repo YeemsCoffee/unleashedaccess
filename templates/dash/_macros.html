@@ -1,0 +1,13 @@
+{% macro range_filters(start, end, extra=None, csv_url=None) %}
+<form method="get" class="filters">
+  <label>From <input type="date" name="start" value="{{ start.isoformat() }}"></label>
+  <label>To <input type="date" name="end" value="{{ end.isoformat() }}"></label>
+  {{ caller() if caller }}
+  <button class="btn btn-primary">Run enquiry</button>
+  {% if csv_url %}<a class="btn" href="{{ csv_url }}">Export CSV</a>{% endif %}
+</form>
+{% endmacro %}
+
+{% macro status_pill(status) %}
+<span class="pill pill-{{ (status or '')|lower }}">{{ status }}</span>
+{% endmacro %}

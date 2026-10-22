@@ -1,0 +1,77 @@
+{% extends "dash/base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<section class="hero card">
+  <div class="hero-label">COGS spend, {{ cogs.month|month_name }} · running through {{ cogs.through|d }}</div>
+  <div class="hero-value">{{ cogs.cogs|money }}</div>
+  {% set diff = cogs.cogs - last.cogs %}
+  <div class="hero-delta">
+    {{ '▲' if diff > 0 else '▼' }} {{ diff|abs|money }} vs the same point last month ({{ last.cogs|money }} through {{ last.through|d }})
+  </div>
+  <div class="formula">
+    <div><span class="f-label">Ending inventory {{ cogs.prior_end|d }}</span><span class="f-val">{{ cogs.opening|money }}</span></div>
+    <div class="op">+</div>
+    <div><span class="f-label">Purchases received this month</span><span class="f-val">{{ cogs.purchases|money }}</span>
+      <span class="f-sub">{{ cogs.goods|money }} goods + {{ cogs.shipping|money }} shipping</span></div>
+    <div class="op">−</div>
+    <div><span class="f-label">Current inventory value</span><span class="f-val">{{ cogs.closing|money }}</span></div>
+    <div class="op">=</div>
+    <div class="f-result"><span class="f-label">COGS month to date</span><span class="f-val">{{ cogs.cogs|money }}</span></div>
+  </div>
+</section>
+
+<section class="tiles">
+  <div class="tile card">
+    <div class="tile-label">Sales month to date</div>
+    <div class="tile-value">{{ sales.revenue|money(false) }}</div>
+    <div class="tile-sub">{{ sales.orders|length }} completed sales orders</div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Gross margin month to date</div>
+    <div class="tile-value">{{ (gross_margin / sales.revenue)|pct if sales.revenue else '—' }}</div>
+    <div class="tile-sub">{{ gross_margin|money(false) if gross_margin is not none else '—' }} after COGS</div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Inventory value now</div>
+    <div class="tile-value">{{ cogs.closing|money(false) }}</div>
+    <div class="tile-sub"><a href="{{ url_for('dash.stock_on_hand') }}">Stock on hand →</a></div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Open purchase orders</div>
+    <div class="tile-value">{{ open_pos|length }}</div>
+    <div class="tile-sub">{{ open_po_value|money(false) }} incl. shipping · <a href="{{ url_for('dash.purchases', status='Placed') }}">view</a></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>COGS to date, {{ cogs.month|month_name }}</h2>
+    <a href="{{ url_for('dash.cogs_page') }}">Daily breakdown & 12-month history →</a>
+  </div>
+  {{ chart }}
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Latest stock transactions</h2>
+    <a href="{{ url_for('dash.transactions') }}">All transactions →</a>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Product</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+    <tbody>
+    {% for t in recent %}
+    <tr>
+      <td>{{ t.date|d }}</td><td>{{ t.type }}</td>
+      <td>{% if t.type == 'Purchase' %}<a href="{{ url_for('dash.purchase_detail', number=t.number) }}">{{ t.number }}</a>{% elif t.type == 'Sale' %}<a href="{{ url_for('dash.sales_detail', number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif %}</td>
+      <td>{{ t.description or t.product_code }}</td>
+      <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No transactions in the last few days.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

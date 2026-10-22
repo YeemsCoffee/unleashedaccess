@@ -1,0 +1,52 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters, status_pill %}
+{% block title %}Sales enquiry{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Sales enquiry</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}
+    <label>Status <select name="status"><option value="">All</option>
+      {% for s in statuses %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}</select></label>
+    <label>Customer <select name="customer"><option value="">All</option>
+      {% for c in customers %}<option value="{{ c.CustomerCode }}" {{ 'selected' if c.CustomerCode == customer }}>{{ c.CustomerName }}</option>{% endfor %}</select></label>
+  {% endcall %}
+</div>
+
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Orders</div><div class="tile-value">{{ se.orders|length }}</div></div>
+  <div class="tile card"><div class="tile-label">Revenue (ex tax)</div><div class="tile-value">{{ se.revenue|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Cost of sales</div><div class="tile-value">{{ se.cost|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Margin</div><div class="tile-value">{{ se.margin_pct|pct }}</div><div class="tile-sub">{{ se.margin|money(false) }}</div></div>
+</section>
+
+<div class="two-col">
+<section class="card">
+  <h2>By product</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Margin</th></tr></thead>
+    <tbody>{% for p in se.by_product %}<tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.qty|qty }}</td><td class="num">{{ p.revenue|money }}</td><td class="num">{{ p.cost|money }}</td><td class="num">{{ p.margin_pct|pct }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="card">
+  <h2>By customer</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Customer</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Margin</th></tr></thead>
+    <tbody>{% for c in se.by_customer %}<tr><td>{{ c.customer }}</td><td class="num">{{ c.orders }}</td><td class="num">{{ c.revenue|money }}</td><td class="num">{{ c.margin_pct|pct }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+</div>
+
+<section class="card">
+  <h2>Sales orders</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th class="num">Sub total</th><th class="num">Cost</th><th class="num">Margin</th></tr></thead>
+    <tbody>
+    {% for o in se.orders %}
+    <tr><td><a href="{{ url_for('dash.sales_detail', number=o.number) }}">{{ o.number }}</a></td><td>{{ o.order_date|d }}</td>
+      <td>{{ o.customer_name }}</td><td>{{ status_pill(o.status) }}</td><td class="num">{{ o.subtotal|money }}</td>
+      <td class="num">{{ o.cost|money }}</td><td class="num">{{ o.margin|money }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No sales orders match.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

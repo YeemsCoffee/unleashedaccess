@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Admin · Gardena Tracker{% endblock %}
 {% block content %}
-<header class="topbar"><h1>Admin</h1></header>
+<header class="topbar"><h1>Admin</h1><a class="btn btn-small" href="{{ url_for('dash.overview') }}">Unleashed dashboard →</a></header>
 
 <section class="card">
   <h2>Items</h2>

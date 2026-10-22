@@ -1,0 +1,53 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters, status_pill %}
+{% block title %}Purchase enquiry{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Purchase enquiry</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}
+    <label>Status <select name="status"><option value="">All</option>
+      {% for s in statuses %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}</select></label>
+    <label>Supplier <select name="supplier"><option value="">All</option>
+      {% for s in suppliers %}<option value="{{ s.SupplierCode }}" {{ 'selected' if s.SupplierCode == supplier }}>{{ s.SupplierName }}</option>{% endfor %}</select></label>
+  {% endcall %}
+</div>
+<p class="muted">Filtered by order date. COGS counts purchases by <em>received</em> date.</p>
+
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Orders</div><div class="tile-value">{{ pe.orders|length }}</div></div>
+  <div class="tile card"><div class="tile-label">Goods</div><div class="tile-value">{{ pe.goods|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Shipping</div><div class="tile-value">{{ pe.shipping|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Total incl. shipping</div><div class="tile-value">{{ pe.total|money(false) }}</div></div>
+</section>
+
+<div class="two-col">
+<section class="card">
+  <h2>By supplier</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Supplier</th><th class="num">Orders</th><th class="num">Goods</th><th class="num">Shipping</th><th class="num">Total</th></tr></thead>
+    <tbody>{% for s in pe.by_supplier %}<tr><td>{{ s.supplier }}</td><td class="num">{{ s.orders }}</td><td class="num">{{ s.goods|money }}</td><td class="num">{{ s.shipping|money }}</td><td class="num">{{ s.total|money }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="card">
+  <h2>By product</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+    <tbody>{% for p in pe.by_product %}<tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.qty|qty }}</td><td class="num">{{ p.value|money }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+</div>
+
+<section class="card">
+  <h2>Purchase orders</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Order date</th><th>Received</th><th>Supplier</th><th>Status</th><th class="num">Goods</th><th class="num">Shipping</th><th class="num">Total</th></tr></thead>
+    <tbody>
+    {% for o in pe.orders %}
+    <tr><td><a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.order_date|d }}</td><td>{{ o.received_date|d }}</td><td>{{ o.supplier_name }}</td>
+      <td>{{ status_pill(o.status) }}</td><td class="num">{{ o.goods|money }}</td><td class="num">{{ o.shipping|money }}</td><td class="num">{{ o.total|money }}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">No purchase orders match.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

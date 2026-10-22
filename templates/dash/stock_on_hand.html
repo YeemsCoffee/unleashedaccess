@@ -1,0 +1,38 @@
+{% extends "dash/base.html" %}
+{% block title %}Stock on hand{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Stock on hand{{ ' as at ' ~ (as_at|d) if as_at }}</h1>
+  <form method="get" class="filters">
+    <label>As at <input type="date" name="as_at" value="{{ as_at.isoformat() if as_at }}"></label>
+    <label>Group
+      <select name="group"><option value="">All groups</option>
+        {% for g in groups %}<option {{ 'selected' if g == group }}>{{ g }}</option>{% endfor %}
+      </select></label>
+    <button class="btn btn-primary">Run enquiry</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+</div>
+<section class="card">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Product</th><th>Description</th><th>Group</th><th class="num">On hand</th>
+      {% if not as_at %}<th class="num">Allocated</th><th class="num">Available</th><th class="num">On purchase</th>{% endif %}
+      <th class="num">Avg cost</th><th class="num">Total value</th><th class="num">Days since sale</th></tr></thead>
+    <tbody>
+    {% for r in soh.rows %}
+    <tr class="{{ 'row-warn' if r.qty <= 0 }}">
+      <td><a href="{{ url_for('dash.stock_movement', product=r.product_code) }}">{{ r.product_code }}</a></td>
+      <td>{{ r.description }}</td><td>{{ r.group }}</td><td class="num">{{ r.qty|qty }}</td>
+      {% if not as_at %}<td class="num">{{ r.allocated|qty }}</td><td class="num">{{ r.available|qty }}</td><td class="num">{{ r.on_purchase|qty }}</td>{% endif %}
+      <td class="num">{{ r.avg_cost|money }}</td><td class="num">{{ r.value|money }}</td>
+      <td class="num">{{ r.days_since_sale if r.days_since_sale is not none else '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="3">Total</td><td class="num">{{ soh.total_qty|qty }}</td>
+      {% if not as_at %}<td colspan="3"></td>{% endif %}<td></td><td class="num">{{ soh.total_value|money }}</td><td></td></tr></tfoot>
+  </table>
+  </div>
+</section>
+{% endblock %}

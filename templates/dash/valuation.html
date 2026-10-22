@@ -1,0 +1,40 @@
+{% extends "dash/base.html" %}
+{% block title %}Stock valuation{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Stock valuation{{ ' as at ' ~ (as_at|d) if as_at else ' (now)' }}</h1>
+  <form method="get" class="filters">
+    <label>As at <input type="date" name="as_at" value="{{ as_at.isoformat() if as_at }}"></label>
+    <button class="btn btn-primary">Run enquiry</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+</div>
+<section class="card">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Product group</th><th class="num">Products</th><th class="num">Qty</th><th class="num">Value</th><th>Share of value</th></tr></thead>
+    <tbody>
+    {% for r in val.rows %}
+    <tr><td>{{ r.group }}</td><td class="num">{{ r.products }}</td><td class="num">{{ r.qty|qty }}</td>
+      <td class="num">{{ r.value|money }}</td>
+      <td><div class="meter" title="{{ r.share|pct }}"><span style="width: {{ (r.share * 100)|round(1) }}%"></span></div> {{ r.share|pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="3">Total</td><td class="num">{{ val.total_value|money }}</td><td></td></tr></tfoot>
+  </table>
+  </div>
+</section>
+<section class="card">
+  <h2>Detail</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Group</th><th>Product</th><th>Description</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Value</th></tr></thead>
+    <tbody>
+    {% for r in val.detail %}
+    <tr><td>{{ r.group }}</td><td>{{ r.product_code }}</td><td>{{ r.description }}</td><td class="num">{{ r.qty|qty }}</td><td class="num">{{ r.avg_cost|money }}</td><td class="num">{{ r.value|money }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

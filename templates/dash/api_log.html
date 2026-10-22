@@ -1,0 +1,19 @@
+{% extends "dash/base.html" %}
+{% block title %}API log{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Unleashed API call log</h1></div>
+<p class="muted">Every request the dashboard has sent to Unleashed (latest 300). Repeat views within the cache window are served from memory and not re-requested.</p>
+<section class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Time</th><th>Mode</th><th>Request</th><th class="num">Status</th><th class="num">Items</th><th class="num">ms</th><th>Error</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr class="{{ 'row-warn' if r.error }}"><td>{{ r.timestamp }}</td><td>{{ r.mode }}</td>
+      <td class="mono">{{ r.method }} {{ r.endpoint }}{{ '?' ~ r.query if r.query }}</td>
+      <td class="num">{{ r.status_code or '—' }}</td><td class="num">{{ r.item_count if r.item_count is not none else '—' }}</td>
+      <td class="num">{{ r.duration_ms }}</td><td>{{ r.error or '' }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No API calls yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

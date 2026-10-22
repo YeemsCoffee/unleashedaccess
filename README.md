@@ -151,7 +151,10 @@ gardenaconsumption/
 ├── scan_logic.py       # core rules: code resolution, count math, event logging
 ├── db.py               # SQLite connection, init, seed
 ├── schema.sql          # tables (matches the data model above)
-├── run.py              # dev entry point
+├── run.py              # dev entry point (loads .env)
+├── dashboard.py        # Unleashed dashboard pages (/unleashed)
+├── mock_unleashed.py   # run the mock Unleashed API standalone
+├── unleashed/          # client.py, reports.py, mock_server.py, mock_data.py, charts.py
 ├── requirements.txt
 ├── templates/          # base, scan, summary, correct, admin, labels
 ├── static/
@@ -161,11 +164,75 @@ gardenaconsumption/
 └── tests/test_scan_logic.py
 ```
 
+## Unleashed dashboard (`/unleashed`)
+
+A finance/inventory dashboard where **Unleashed is the engine**: every number
+is fetched through the Unleashed REST API via one client
+(`unleashed/client.py` — signed requests, paging, `/Date()` parsing). Nothing
+is read from a local copy.
+
+```
+Dashboard pages ──► Reports (unleashed/reports.py) ──► UnleashedClient ──┬─► real api.unleashedsoftware.com  (UNLEASHED_MODE=live)
+                                                                         └─► mock Unleashed server            (UNLEASHED_MODE=mock, default)
+```
+
+The **mock Unleashed server** (`unleashed/mock_server.py`) implements the same
+endpoints, auth and JSON shapes (`/Products`, `/ProductGroups`, `/Warehouses`,
+`/Suppliers`, `/Customers`, `/StockOnHand` incl. `asAtDate`, `/PurchaseOrders`,
+`/SalesOrders`, `/StockAdjustments`) over ~13 months of simulated Gardena
+history: dairy/coffee/syrup/packaging purchase orders with freight, daily POS
+sales orders, wholesale/catering orders, and month-end spoilage adjustments.
+It's driven by a small weighted-average-cost inventory engine, so the books
+reconcile exactly. It also runs standalone: `python mock_unleashed.py` (port 8100).
+
+| Page | Mirrors Unleashed |
+|------|-------------------|
+| Overview | Running month-to-date COGS, sales, margin, inventory value, open POs, latest transactions |
+| COGS | Formula breakdown, daily running COGS chart + table, purchases counted, cross-check, 12-month history |
+| Stock on hand | Stock On Hand enquiry (now or as at any date, by group) |
+| Valuation | Stock Valuation by product group |
+| Stock movement | Stock Movement enquiry per product with running balance, reconciled to stock on hand |
+| Purchases | Purchase Enquiry (status/supplier/date) + by supplier, by product, PO detail |
+| Sales | Sales Enquiry with cost & margin, by product, by customer, SO detail |
+| Adjustments | Stock Adjustment enquiry |
+| Transactions | Full transaction history across purchases, sales, adjustments |
+| API log | Every API call made (endpoint, query, status, timing, item count) |
+| Connection | Mode, credentials status, "Test live connection" button |
+
+Every report has **Export CSV**.
+
+### COGS (running, month to date)
+
+```
+COGS = ending inventory value of last month (StockOnHand?asAtDate=<last day of prior month>)
+     + purchases received this month incl. shipping (POs by ReceivedDate: line totals + freight)
+     − current inventory value (StockOnHand now)
+```
+
+The page also cross-checks the result against cost of sales (`AverageLandedPriceAtTimeOfSale`
+× qty on completed sales orders) plus stock write-offs, and flags any gap.
+
+### Going live
+
+1. Copy `.env.example` to `.env`, fill `UNLEASHED_API_ID` / `UNLEASHED_API_KEY`
+   (Unleashed → Integration → Unleashed API Access), set `UNLEASHED_MODE=live`.
+   `.env` is gitignored — keys are never committed.
+2. Use **Connection → Test live connection** to confirm.
+3. Fields to verify against your live account on first connect (isolated in
+   `unleashed/reports.py`): how freight is recorded on POs (read from a PO
+   `Costs` array **or** from lines whose product code is `FREIGHT`/`SHIPPING`/
+   `DELIVERY`), and stock-adjustment line fields (`QuantityChange`/`ValueChange`).
+   The mock follows the published API shapes, but your account's setup decides
+   where shipping lands.
+
+Responses are cached for `UNLEASHED_CACHE_SECONDS` (default 120) to respect
+Unleashed's rate limits; **Refresh data** clears the cache.
+
 ## Running it
 
 ```bash
 pip install -r requirements.txt
-python run.py                 # http://localhost:8000
+python run.py                 # http://localhost:8000  (dashboard: /unleashed)
 ```
 
 The database (`gardena.db`) is created and seeded on first run. Config via env

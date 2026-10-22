@@ -1,0 +1,21 @@
+{% extends "dash/base.html" %}
+{% block title %}Connection{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Unleashed connection</h1></div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Dashboard data source</dt><dd>{{ 'Mock Unleashed API (simulated data)' if ext.mode == 'mock' else 'Live Unleashed API' }}</dd></div>
+    <div><dt>Live API URL</dt><dd class="mono">{{ ext.base_url }}</dd></div>
+    <div><dt>Live credentials</dt><dd>{{ 'Configured' if ext.has_credentials else 'Not set' }}</dd></div>
+  </dl>
+  <form method="post">
+    <button class="btn btn-primary">Test live connection</button>
+  </form>
+  {% if result %}
+  <p class="recon {{ 'recon-ok' if result.ok else 'recon-warn' }}">{{ '✓' if result.ok else '!' }} {{ result.message }}</p>
+  {% endif %}
+  <p class="muted">To switch the dashboard to live data, set <code>UNLEASHED_MODE=live</code> in <code>.env</code> and restart.
+    The API ID and key live only in <code>.env</code> (never committed). The mock API is also reachable at
+    <code>/mock-unleashed/…</code> when in mock mode.</p>
+</section>
+{% endblock %}

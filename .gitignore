@@ -6,3 +6,4 @@ gardena.db-shm
 .venv/
 venv/
 .pytest_cache/
+.env

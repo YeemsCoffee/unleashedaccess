@@ -59,3 +59,17 @@ CREATE TABLE IF NOT EXISTS users (
     role   TEXT NOT NULL DEFAULT 'EMPLOYEE' CHECK (role IN ('EMPLOYEE', 'MANAGER', 'ADMIN')),
     active INTEGER NOT NULL DEFAULT 1
 );
+
+-- Every call the dashboard makes to the Unleashed API (mock or live).
+CREATE TABLE IF NOT EXISTS unleashed_api_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    mode        TEXT NOT NULL,
+    method      TEXT NOT NULL,
+    endpoint    TEXT NOT NULL,
+    query       TEXT,
+    status_code INTEGER,
+    duration_ms INTEGER,
+    item_count  INTEGER,
+    error       TEXT
+);

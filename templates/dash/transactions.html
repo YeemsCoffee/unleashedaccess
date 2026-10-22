@@ -1,0 +1,28 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters %}
+{% block title %}Transactions{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Transaction history</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}
+    <label>Type <select name="type"><option value="">All</option>
+      {% for t in ('Purchase', 'Sale', 'Adjustment') %}<option {{ 'selected' if t == doc_type }}>{{ t }}</option>{% endfor %}</select></label>
+    <label>Product <select name="product"><option value="">All</option>
+      {% for p in products %}<option value="{{ p.ProductCode }}" {{ 'selected' if p.ProductCode == product }}>{{ p.ProductCode }}</option>{% endfor %}</select></label>
+  {% endcall %}
+</div>
+<p class="muted">Every stock-affecting document from Unleashed: purchase receipts, completed sales, stock adjustments. Newest first.</p>
+<section class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Supplier / customer / reason</th><th>Product</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+    <tbody>
+    {% for t in rows %}
+    <tr><td>{{ t.date|d }}</td><td>{{ t.type }}</td>
+      <td>{% if t.type == 'Purchase' %}<a href="{{ url_for('dash.purchase_detail', number=t.number) }}">{{ t.number }}</a>{% elif t.type == 'Sale' %}<a href="{{ url_for('dash.sales_detail', number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif %}</td>
+      <td>{{ t.party }}</td><td>{{ t.description or t.product_code }}</td>
+      <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No transactions in this period.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

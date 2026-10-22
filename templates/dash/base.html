@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Dashboard{% endblock %} · Gardena Unleashed</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
+</head>
+<body class="dash">
+  <header class="dash-header">
+    <div class="brand">
+      <strong>Gardena</strong> · Unleashed dashboard
+      <span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
+        {{ 'Mock API (simulated data)' if unleashed_mode == 'mock' else 'Live Unleashed API' }}
+      </span>
+    </div>
+    <div class="header-actions">
+      <form method="post" action="{{ url_for('dash.refresh') }}">
+        <button class="btn btn-quiet" title="Clear cached API responses and reload">Refresh data</button>
+      </form>
+      <a class="btn btn-quiet" href="{{ url_for('scan_page') }}">Scan app</a>
+    </div>
+  </header>
+  {% set nav = [
+    ('dash.overview', 'Overview'), ('dash.cogs_page', 'COGS'),
+    ('dash.stock_on_hand', 'Stock on hand'), ('dash.stock_valuation', 'Valuation'),
+    ('dash.stock_movement', 'Stock movement'), ('dash.purchases', 'Purchases'),
+    ('dash.sales', 'Sales'), ('dash.adjustments', 'Adjustments'),
+    ('dash.transactions', 'Transactions'), ('dash.api_log', 'API log'),
+    ('dash.connection', 'Connection')] %}
+  <nav class="dash-nav">
+    {% for ep, label in nav %}
+    <a href="{{ url_for(ep) }}" class="{{ 'active' if request.endpoint == ep or (request.endpoint or '').startswith(ep + '_') }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <main class="dash-main">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="{{ url_for('static', filename='dash.js') }}"></script>
+</body>
+</html>

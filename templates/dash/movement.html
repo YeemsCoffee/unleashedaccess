@@ -1,0 +1,34 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters %}
+{% block title %}Stock movement{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Stock movement enquiry</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}
+    <label>Product
+      <select name="product">
+        {% for p in products %}<option value="{{ p.ProductCode }}" {{ 'selected' if p.ProductCode == product }}>{{ p.ProductCode }} — {{ p.ProductDescription }}</option>{% endfor %}
+      </select></label>
+  {% endcall %}
+</div>
+{% if mv %}
+<section class="card">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Supplier / customer / reason</th><th class="num">Qty</th><th class="num">Value</th><th class="num">Balance qty</th><th class="num">Balance value</th></tr></thead>
+    <tbody>
+    <tr class="row-sub"><td>{{ (start)|d }}</td><td colspan="5">Opening balance</td><td class="num">{{ mv.opening_qty|qty }}</td><td class="num">{{ mv.opening_value|money }}</td></tr>
+    {% for t in mv.rows %}
+    <tr><td>{{ t.date|d }}</td><td>{{ t.type }}</td>
+      <td>{% if t.type == 'Purchase' %}<a href="{{ url_for('dash.purchase_detail', number=t.number) }}">{{ t.number }}</a>{% elif t.type == 'Sale' %}<a href="{{ url_for('dash.sales_detail', number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif %}</td>
+      <td>{{ t.party }}</td><td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td>
+      <td class="num">{{ t.balance_qty|qty }}</td><td class="num">{{ t.balance_value|money }}</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="6">Closing balance (from movements)</td><td class="num">{{ mv.closing_qty|qty }}</td><td class="num">{{ mv.closing_value|money }}</td></tr>
+      <tr><td colspan="6">Stock on hand reported by Unleashed</td><td class="num">{{ mv.reported_qty|qty }}</td><td class="num">{{ mv.reported_value|money }}</td></tr></tfoot>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

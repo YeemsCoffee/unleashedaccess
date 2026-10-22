@@ -1,0 +1,21 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters %}
+{% block title %}Stock adjustments{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Stock adjustment enquiry</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}{% endcall %}
+</div>
+<section class="card">
+  <p>Net value change in period: <strong>{{ adj.value_change|money }}</strong></p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Number</th><th>Date</th><th>Reason</th><th>Product</th><th class="num">Qty change</th><th class="num">Value change</th><th>Comments</th></tr></thead>
+    <tbody>
+    {% for a in adj.rows %}
+    <tr><td>{{ a.number }}</td><td>{{ a.date|d }}</td><td>{{ a.reason }}</td><td>{{ a.description or a.product_code }}</td>
+      <td class="num">{{ a.qty_change|qty }}</td><td class="num">{{ a.value_change|money }}</td><td>{{ a.comments or '' }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No stock adjustments in this period.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}
