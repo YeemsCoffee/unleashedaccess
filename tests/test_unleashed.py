@@ -14,6 +14,40 @@ from unleashed.reports import Reports, add_months  # noqa: E402
 TODAY = dt.date(2026, 7, 15)
 # Tests finish the first sync before serving and never start the background thread.
 SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
+# Set TEST_DATABASE_URL=postgresql://... to run the app tests against PostgreSQL.
+# Every table the app owns in that database is dropped before each test.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
+APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snapshots",
+              "ul_sync_runs", "ul_sync_state", "ul_sync_lock")
+
+
+def sqlite_database(testcase):
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    testcase.addCleanup(lambda: [os.path.exists(path + x) and os.unlink(path + x)
+                                 for x in ("", "-wal", "-shm")])
+    # DATABASE_URL blanked so a real shared database in the environment is never touched.
+    return {"DATABASE_PATH": path, "DATABASE_URL": ""}
+
+
+def fresh_database(testcase):
+    """Config for an empty database: a temp SQLite file, or the wiped TEST_DATABASE_URL."""
+    if not TEST_DATABASE_URL:
+        return sqlite_database(testcase)
+    import psycopg
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        for table in APP_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+    return {"DATABASE_URL": TEST_DATABASE_URL}
+
+
+def make_app(testcase, database=None, **config):
+    """create_app on `database` (default: a fresh one); its connection pool closes after the test."""
+    from app import create_app
+    app = create_app({"TESTING": True, **SYNC_NOW, **(database or fresh_database(testcase)),
+                      **config})
+    testcase.addCleanup(app.extensions["db"].close)
+    return app
 
 
 class ReportsTests(unittest.TestCase):
@@ -78,18 +112,8 @@ class ReportsTests(unittest.TestCase):
 
 class DashboardPageTests(unittest.TestCase):
     def setUp(self):
-        fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        from app import create_app
-        self.app = create_app({"DATABASE_PATH": self.db_path, "TESTING": True, **SYNC_NOW})
+        self.app = make_app(self, UNLEASHED_MODE="mock")
         self.client = self.app.test_client()
-
-    def tearDown(self):
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.unlink(self.db_path + suffix)
-            except FileNotFoundError:
-                pass
 
     def test_pages_render(self):
         for path in ("/", "/cogs", "/stock-on-hand",
@@ -117,22 +141,10 @@ class LiveModeTests(unittest.TestCase):
     """Runs the app in live mode, with the live client's transport pointed at the mock."""
 
     def setUp(self):
-        fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        from app import create_app
-        self.app = create_app({
-            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
-            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
-            "UNLEASHED_TRANSPORT": WsgiTransport(create_mock_app()),
-        })
+        self.app = make_app(self, UNLEASHED_MODE="live", UNLEASHED_API_ID=MOCK_API_ID,
+                            UNLEASHED_API_KEY=MOCK_API_KEY,
+                            UNLEASHED_TRANSPORT=WsgiTransport(create_mock_app()))
         self.client = self.app.test_client()
-
-    def tearDown(self):
-        for suffix in ("", "-wal", "-shm"):
-            try:
-                os.unlink(self.db_path + suffix)
-            except FileNotFoundError:
-                pass
 
     def test_pages_render_in_live_mode(self):
         for path in ("/", "/cogs", "/stock-on-hand", "/purchases", "/sales", "/transactions"):
@@ -198,18 +210,9 @@ def _strip_adjustment_changes(path, data):
 
 class AccountQuirkTests(unittest.TestCase):
     def _app(self, rewrite):
-        fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        self.addCleanup(lambda: [os.path.exists(self.db_path + x) and os.unlink(self.db_path + x)
-                                 for x in ("", "-wal", "-shm")])
-        from app import create_app
-        app = create_app({
-            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
-            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
-            "UNLEASHED_TRANSPORT": RewritingTransport(create_mock_app(today=TODAY), rewrite),
-            "TODAY": TODAY,
-        })
-        return app
+        return make_app(self, UNLEASHED_MODE="live", UNLEASHED_API_ID=MOCK_API_ID,
+                        UNLEASHED_API_KEY=MOCK_API_KEY, TODAY=TODAY,
+                        UNLEASHED_TRANSPORT=RewritingTransport(create_mock_app(today=TODAY), rewrite))
 
     def test_cost_lines_missing_from_list_are_fetched_from_detail(self):
         app = self._app(_strip_cost_lines_from_lists)
@@ -244,29 +247,25 @@ class StoreSyncTests(unittest.TestCase):
     """The local copy: equivalence with the API, incremental updates, failure handling."""
 
     def setUp(self):
-        fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
-        self.addCleanup(lambda: [os.path.exists(self.db_path + x) and os.unlink(self.db_path + x)
-                                 for x in ("", "-wal", "-shm")])
+        self.database = fresh_database(self)  # every app in a test shares this one
         self.mock = create_mock_app(today=TODAY)
         self.ds = self.mock.config["DATASET"]
 
     def _app(self, **config):
-        from app import create_app
-        return create_app({
-            "DATABASE_PATH": self.db_path, "TESTING": True, "UNLEASHED_MODE": "live", **SYNC_NOW,
-            "UNLEASHED_API_ID": MOCK_API_ID, "UNLEASHED_API_KEY": MOCK_API_KEY,
-            "UNLEASHED_TRANSPORT": WsgiTransport(self.mock), "TODAY": TODAY, **config,
-        })
+        settings = {"UNLEASHED_MODE": "live", "UNLEASHED_API_ID": MOCK_API_ID,
+                    "UNLEASHED_API_KEY": MOCK_API_KEY, "TODAY": TODAY,
+                    "UNLEASHED_TRANSPORT": WsgiTransport(self.mock), **config}
+        app = make_app(self, database=self.database, **settings)
+        self.app_db = app.extensions["db"]
+        return app
 
     def _api_log(self, like="%"):
-        import sqlite3
-        conn = sqlite3.connect(self.db_path)
-        try:
-            return conn.execute("SELECT endpoint, query FROM unleashed_api_log WHERE"
-                                " endpoint || '?' || query LIKE ? ORDER BY id", (like,)).fetchall()
-        finally:
-            conn.close()
+        """API log rows (endpoint, query) whose "endpoint?query" matches a LIKE-style pattern."""
+        import fnmatch
+        rows = self.app_db.query("SELECT endpoint, query FROM unleashed_api_log ORDER BY id")
+        pattern = like.replace("%", "*")
+        return [(r["endpoint"], r["query"]) for r in rows
+                if fnmatch.fnmatchcase(f"{r['endpoint']}?{r['query']}", pattern)]
 
     def test_reports_from_store_match_reports_from_api(self):
         app = self._app()
@@ -351,7 +350,13 @@ class StoreSyncTests(unittest.TestCase):
         app = self._app()
         store = app.extensions["unleashed"]["store"]
         self.assertTrue(store.has_data())
-        store.ensure_source("live:https://example.invalid:other-account")
+        other = "live:https://example.invalid:other-account"
+        if store.db.shared:  # other people's data: only replaced when explicitly allowed
+            from unleashed.store import SourceMismatch
+            with self.assertRaises(SourceMismatch):
+                store.ensure_source(other, "live")
+            self.assertTrue(store.has_data())
+        store.ensure_source(other, "live", allow_reset=True)
         self.assertFalse(store.has_data())
         self.assertEqual(store.document_count("SalesOrders"), 0)
 
@@ -371,6 +376,127 @@ class StoreSyncTests(unittest.TestCase):
         self.assertIn(dt.date(2026, 6, 1), dates)           # every day of last month
         self.assertIn(dt.date(2026, 7, 14), dates)          # yesterday
         self.assertNotIn(TODAY, dates)                      # today comes from 'current'
+
+
+class SharedDatabaseTests(unittest.TestCase):
+    """Several app instances on one database: viewers, the sync lock, never wiping shared data."""
+
+    def setUp(self):
+        self.database = fresh_database(self)
+        self.mock = create_mock_app(today=TODAY)
+
+    def _syncing_app(self, **config):
+        return make_app(self, database=self.database, UNLEASHED_MODE="live",
+                        UNLEASHED_API_ID=MOCK_API_ID, UNLEASHED_API_KEY=MOCK_API_KEY,
+                        UNLEASHED_TRANSPORT=WsgiTransport(self.mock), TODAY=TODAY, **config)
+
+    def _viewer_app(self):
+        return make_app(self, database=self.database, UNLEASHED_MODE="viewer",
+                        UNLEASHED_API_ID="", UNLEASHED_API_KEY="", TODAY=TODAY)
+
+    def _api_calls(self, app):
+        return app.extensions["db"].query("SELECT COUNT(*) AS n FROM unleashed_api_log")[0]["n"]
+
+    def test_viewer_reads_the_shared_copy_without_an_api_key(self):
+        syncing = self._syncing_app()
+        viewer = self._viewer_app()
+        self.assertIsNone(viewer.extensions["unleashed"]["syncer"])
+        before = self._api_calls(viewer)
+        c = viewer.test_client()
+        for path in ("/", "/cogs", "/purchases", "/sales", "/stock-on-hand", "/transactions"):
+            html = c.get(path).get_data(as_text=True)
+            self.assertIn("view only", html, path)
+            self.assertNotIn("Couldn't load data", html, path)
+            self.assertNotIn(">Sync now<", html, path)
+        self.assertEqual(self._api_calls(viewer), before)
+        self.assertAlmostEqual(viewer.extensions["unleashed"]["reports"].cogs(TODAY)["cogs"],
+                               syncing.extensions["unleashed"]["reports"].cogs(TODAY)["cogs"])
+
+    def test_viewer_needs_the_syncing_instance_to_set_up_the_database(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._viewer_app()
+        self.assertIn("Start the instance that has the Unleashed API key first", str(ctx.exception))
+
+    def test_viewer_waits_for_first_sync(self):
+        self._syncing_app(SYNC_ON_STARTUP="off")  # creates the tables, hasn't synced yet
+        viewer = self._viewer_app()
+        html = viewer.test_client().get("/").get_data(as_text=True)
+        self.assertIn("Waiting for the first copy", html)
+
+    def test_only_one_instance_syncs_at_a_time(self):
+        first = self._syncing_app()
+        second = self._syncing_app(SYNC_ON_STARTUP="off")
+        store = first.extensions["unleashed"]["store"]
+        self.assertTrue(store.acquire_lock("other-machine", 600))
+        self.assertEqual(second.extensions["unleashed"]["syncer"].sync()["status"], "busy")
+        self.assertTrue(second.extensions["unleashed"]["syncer"].running)
+        store.release_lock("other-machine")
+        self.assertEqual(second.extensions["unleashed"]["syncer"].sync()["status"], "ok")
+
+    def test_a_stalled_sync_lock_expires(self):
+        app = self._syncing_app()
+        store = app.extensions["unleashed"]["store"]
+        self.assertTrue(store.acquire_lock("crashed-machine", -1))  # already expired
+        self.assertEqual(app.extensions["unleashed"]["syncer"].sync()["status"], "ok")
+
+    def test_shared_database_is_not_wiped_by_another_setup(self):
+        from unittest import mock as umock
+
+        from unleashed.db import Database
+        self._syncing_app()
+        with umock.patch.object(Database, "shared", new_callable=umock.PropertyMock,
+                                return_value=True):
+            other = make_app(self, database=self.database, UNLEASHED_MODE="mock")
+            ext = other.extensions["unleashed"]
+            self.assertIn("different Unleashed account", ext["source_error"])
+            self.assertIsNone(ext["syncer"])
+            self.assertGreater(ext["store"].document_count("SalesOrders"), 0)
+            self.assertIn("different Unleashed account",
+                          other.test_client().get("/").get_data(as_text=True))
+
+            replaced = make_app(self, database=self.database, UNLEASHED_MODE="mock",
+                                ALLOW_DATABASE_RESET=True)
+            self.assertIsNone(replaced.extensions["unleashed"]["source_error"])
+            self.assertEqual(replaced.extensions["unleashed"]["store"].get_state("source"), "mock")
+
+    @unittest.skipUnless(TEST_DATABASE_URL, "needs TEST_DATABASE_URL (PostgreSQL)")
+    def test_shared_database_without_key_defaults_to_viewer(self):
+        self._syncing_app(SYNC_ON_STARTUP="off")
+        app = make_app(self, database=self.database, UNLEASHED_MODE="", UNLEASHED_API_ID="",
+                       UNLEASHED_API_KEY="")
+        self.assertEqual(app.config["UNLEASHED_MODE"], "viewer")
+
+
+class LoginTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(self, UNLEASHED_MODE="mock", DASHBOARD_PASSWORD="latte-art")
+        self.client = self.app.test_client()
+
+    def test_dashboard_requires_the_password(self):
+        res = self.client.get("/cogs")
+        self.assertEqual(res.status_code, 302)
+        self.assertIn("/login", res.headers["Location"])
+        bad = self.client.post("/login", data={"password": "nope"}).get_data(as_text=True)
+        self.assertIn("isn&#39;t right", bad)
+        self.assertNotIn("COGS spend", bad)
+        ok = self.client.post("/login?next=/cogs", data={"password": "latte-art"})
+        self.assertEqual(ok.headers["Location"], "/cogs")
+        self.assertIn("Cost of goods sold", self.client.get("/cogs").get_data(as_text=True))
+        self.client.post("/logout")
+        self.assertEqual(self.client.get("/").status_code, 302)
+
+    def test_login_only_redirects_within_the_site(self):
+        res = self.client.post("/login?next=//evil.example/x", data={"password": "latte-art"})
+        self.assertEqual(res.headers["Location"], "/")
+
+
+class TimezoneTests(unittest.TestCase):
+    def test_today_follows_the_business_time_zone(self):
+        def today_in(zone):
+            app = make_app(self, UNLEASHED_MODE="mock", SYNC_ON_STARTUP="off", TIMEZONE=zone)
+            return app.extensions["unleashed"]["reports"].today
+        # UTC+14 is always a day or two ahead of UTC-11.
+        self.assertGreater(today_in("Pacific/Kiritimati"), today_in("Pacific/Pago_Pago"))
 
 
 class RetryTests(unittest.TestCase):
@@ -438,20 +564,16 @@ class StartupConfigTests(unittest.TestCase):
                       ("UNLEASHED_API_ID", "UNLEASHED_API_KEY", "UNLEASHED_MODE")}
         for k in self.saved:
             os.environ.pop(k, None)
-        fd, self.db_path = tempfile.mkstemp(suffix=".db")
-        os.close(fd)
 
     def tearDown(self):
         for k, v in self.saved.items():
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-        os.unlink(self.db_path)
 
     def _mode(self):
-        from app import create_app
-        return create_app({"DATABASE_PATH": self.db_path,
-                           "SYNC_ON_STARTUP": "off"}).config["UNLEASHED_MODE"]
+        return make_app(self, database=sqlite_database(self),
+                        SYNC_ON_STARTUP="off").config["UNLEASHED_MODE"]
 
     def test_mode_defaults_to_live_only_with_credentials(self):
         self.assertEqual(self._mode(), "mock")

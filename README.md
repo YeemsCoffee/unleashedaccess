@@ -3,14 +3,16 @@
 A finance and inventory dashboard where **Unleashed is the engine**: every
 number comes from your Unleashed account through its REST API.
 
-To keep pages fast, the app keeps a **local copy** of your Unleashed data in
-SQLite and pages read from that copy (about 0.1 s per page instead of seconds of
-API calls). A background sync keeps the copy current:
+To keep pages fast, the app keeps a **copy** of your Unleashed data in a
+database and pages read from that copy (about 0.1 s per page instead of seconds
+of API calls). The database is either a SQLite file on your computer (the
+default) or a **shared PostgreSQL database**, so several people can use the same
+data (see [Sharing with others](#sharing-with-others)). A background sync keeps the copy current:
 
 ```
                        background sync (every 15 min: only what changed; weekly: everything)
-Unleashed API ──────────────────────────────────────────────► local SQLite copy ──► Reports ──► Dashboard pages
-(api.unleashedsoftware.com, or the mock server)                (unleashed/store.py)   (reports.py)
+Unleashed API ──────────────────────────────────────────────► database copy ──────► Reports ──► Dashboard pages
+(api.unleashedsoftware.com, or the mock server)                (SQLite or PostgreSQL)  (reports.py)
 ```
 
 - **First start:** the app copies 13 months of purchase orders, sales
@@ -36,7 +38,9 @@ cp .env.example .env          # optional: add API credentials
 python run.py                 # http://localhost:8000
 ```
 
-Tests: `python -m pytest tests/ -q`
+Tests: `python -m pytest tests/ -q` (SQLite). To run them against PostgreSQL,
+set `TEST_DATABASE_URL` to an **empty, throwaway** database; the tests drop the
+app's tables in it.
 
 ## Pages
 
@@ -113,21 +117,93 @@ on its own with `python mock_unleashed.py` (port 8100).
 On first start in live mode the dashboard copies your Unleashed data (a minute
 or two; progress is shown), then pages load instantly. The sync fetches stock
 snapshots four at a time and retries rate-limited responses (HTTP 429/503) with
-backoff. Switching accounts, or between mock and live, starts a fresh local
-copy automatically, so data from different sources never mixes.
+backoff. With a local SQLite file, switching accounts (or between mock and
+live) starts a fresh copy automatically, so data from different sources never
+mixes. A shared database is never replaced automatically (see below).
+
+## Sharing with others
+
+Put the data in a hosted **PostgreSQL** database and point the app at it with
+`DATABASE_URL`. Any provider works: Supabase, Neon, Render, Railway, AWS RDS and
+others. Use the connection string they give you, e.g.
+`postgresql://user:password@host:5432/dbname?sslmode=require`.
+
+There are two ways to share. In both, **only one instance has the Unleashed API
+key and syncs**; everyone else just reads.
+
+### Option A (recommended): host the dashboard, share a link
+
+Run one copy of the app on a hosting service next to the database. People
+open a web address and sign in with a password. Nobody else installs anything,
+and the API key and database password stay on the server.
+
+1. Create the PostgreSQL database and copy its connection string.
+2. Deploy this repository as a web service (Render, Railway, Fly.io, Heroku and
+   similar read the `Procfile`; the start command is
+   `gunicorn run:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT`).
+3. Set these environment variables on the service:
+
+   | Variable | Value |
+   |----------|-------|
+   | `DATABASE_URL` | the PostgreSQL connection string |
+   | `UNLEASHED_API_ID`, `UNLEASHED_API_KEY` | your Unleashed API credentials |
+   | `DASHBOARD_PASSWORD` | a strong password to share with your team |
+   | `TIMEZONE` | `America/Los_Angeles` (servers run on UTC; this sets "today" and month boundaries) |
+
+4. Open the service's address, sign in, and wait for the first copy to finish.
+
+Keep `--workers 1`: the background sync runs inside the web process. (Several
+workers or servers are still safe, because a lock in the database lets only one
+of them sync at a time; they would just repeat the startup work.)
+
+### Option B: everyone runs the app, sharing the database
+
+1. On **one** machine, the one that syncs, put `DATABASE_URL` and the Unleashed
+   API ID and key in `.env`, then run `python run.py`. It creates the tables and
+   keeps the shared copy current.
+2. Everyone else clones the repository and puts **only** `DATABASE_URL` in their
+   `.env` (no API key). Their app starts in **view-only** mode and reads the
+   shared copy.
+
+For view-only people, create a read-only database login rather than sharing the
+main password (run once, as the database owner):
+
+```sql
+CREATE ROLE dashboard_viewer LOGIN PASSWORD 'choose-a-password';
+GRANT USAGE ON SCHEMA public TO dashboard_viewer;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dashboard_viewer;
+```
+
+Start the syncing instance at least once **before** running that `GRANT`, so the
+tables exist.
+
+### Safety rules for a shared database
+
+- Only one instance syncs at a time, coordinated through the database. A
+  crashed sync's lock expires after 15 minutes.
+- An instance configured for a different Unleashed account (or mock data) will
+  **not** overwrite a shared database. It shows a warning and stays read-only. To
+  deliberately replace the data, start it once with `ALLOW_DATABASE_RESET=1`.
+- View-only instances never write to the database and don't need the API key.
+- Times are stored in UTC and shown in `TIMEZONE` (or the computer's own time zone).
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `UNLEASHED_MODE` | `live` if credentials are set, else `mock` | `live` or `mock` |
+| `UNLEASHED_MODE` | `live` with credentials; `viewer` with a PostgreSQL `DATABASE_URL` and no credentials; else `mock` | `live`, `viewer` (read a shared copy, no syncing) or `mock` |
 | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` | — | Unleashed API credentials |
 | `UNLEASHED_BASE_URL` | `https://api.unleashedsoftware.com` | API host |
 | `SYNC_INTERVAL_MINUTES` | `15` | How often the local copy updates (0 = only on "Sync now") |
 | `SYNC_HISTORY_MONTHS` | `13` | How far back the local copy goes |
 | `SYNC_ON_STARTUP` | `background` | `background`, `blocking` (finish first sync before serving) or `off` |
 | `UNLEASHED_CACHE_SECONDS` | `120` | In-memory API response cache, used by the sync and live lookups |
-| `DATABASE_PATH` | `unleashedaccess.db` | SQLite file: local copy of Unleashed data, sync history, API call log |
+| `DATABASE_URL` | — | PostgreSQL connection string for a shared database |
+| `DATABASE_PATH` | `unleashedaccess.db` | SQLite file used when `DATABASE_URL` isn't set |
+| `ALLOW_DATABASE_RESET` | — | `1` lets this instance replace a shared database holding another account's data |
+| `DASHBOARD_PASSWORD` | — | When set, everyone signs in with this password |
+| `SECRET_KEY` | derived from the password | Signs the sign-in cookie; set your own when hosting |
+| `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
 | `PORT` | `8000` | Web server port |
 
 ## Project structure
@@ -135,15 +211,17 @@ copy automatically, so data from different sources never mixes.
 ```
 unleashedaccess/
 ├── app.py              # Flask app factory
-├── dashboard.py        # dashboard pages and wiring (mock or live client)
+├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── mock_unleashed.py   # run the mock Unleashed API standalone
-├── schema.sql          # local copy, sync history and API log tables
+├── Procfile            # start command for hosting services (gunicorn)
+├── schema.sql          # data copy, sync history, sync lock and API log tables
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
-│   ├── store.py        # local SQLite copy + a client that answers queries from it
+│   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)
+│   ├── store.py        # the data copy + a client that answers queries from it
 │   ├── sync.py         # full/incremental sync from the API + background scheduler
 │   ├── mock_server.py  # mock Unleashed API
 │   ├── mock_data.py    # simulated dataset + inventory engine

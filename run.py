@@ -16,9 +16,16 @@ app = create_app()
 _ext = app.extensions["unleashed"]
 if _ext["mode"] == "live":
     print(f" * Unleashed Access: LIVE data from {_ext['base_url']}")
+elif _ext["mode"] == "viewer":
+    print(" * Unleashed Access: VIEW-ONLY, reading the shared database (another instance syncs it)")
 else:
     print(" * Unleashed Access: MOCK data (simulated). Set UNLEASHED_MODE=live in .env for real data.")
-if app.config["SYNC_ON_STARTUP"] == "background":
+print(f" * Database: {_ext['db'].label}")
+if _ext["source_error"]:
+    print(f" ! {_ext['source_error']}")
+if not app.config["DASHBOARD_PASSWORD"]:
+    print(" * No DASHBOARD_PASSWORD set: anyone who can reach this address can see the dashboard")
+if _ext["syncer"] and app.config["SYNC_ON_STARTUP"] == "background":
     print(f" * Syncing Unleashed data in the background, then every "
           f"{app.config['SYNC_INTERVAL_MINUTES']} minutes")
 

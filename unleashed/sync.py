@@ -7,13 +7,18 @@ history window, and the stock snapshots the reports need. Incremental sync
 days plus any day a changed document touched, so backdated edits are caught.
 """
 import datetime as dt
+import os
+import socket
 import sys
 import threading
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from .reports import add_months, cost_line_keys, month_start
-from .store import CURRENT, DOCUMENT_ENDPOINTS, REFERENCE_ENDPOINTS, now_text
+from .store import CURRENT, DOCUMENT_ENDPOINTS, REFERENCE_ENDPOINTS, utc_now
+
+LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it lapse
 
 LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
           "StockAdjustments": "stock adjustments"}
@@ -33,17 +38,19 @@ class Syncer:
         self.max_workers = max_workers
         self.log_retention_days = log_retention_days
         self._lock = threading.Lock()
+        self.owner = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
+        self.on_complete = []  # called after each successful sync (e.g. to drop read caches)
 
     @property
     def running(self):
-        return self._lock.locked()
+        """A sync is running here or in another instance sharing the database."""
+        return self._lock.locked() or self.store.sync_in_progress()
 
     def needs_full(self):
         last = self.store.get_state("last_full_started")
         if not last or not self.store.has_data():
             return True
-        age = dt.datetime.now() - dt.datetime.fromisoformat(last)
-        return age > dt.timedelta(days=self.full_every_days)
+        return last < utc_now(-self.full_every_days * 86400)
 
     def required_snapshot_dates(self, today=None):
         """Month ends for the history window, plus every day of last month and this month."""
@@ -61,7 +68,12 @@ class Syncer:
         if not self._lock.acquire(blocking=False):
             return {"status": "busy"}
         try:
-            return self._sync(self.needs_full() if full is None else full)
+            if not self.store.acquire_lock(self.owner, LOCK_SECONDS):
+                return {"status": "busy", "reason": "another instance is syncing"}
+            try:
+                return self._sync(self.needs_full() if full is None else full)
+            finally:
+                self.store.release_lock(self.owner)
         finally:
             self._lock.release()
 
@@ -77,12 +89,12 @@ class Syncer:
     def _sync(self, full):
         store, today = self.store, self.today_fn()
         run = store.start_run("full" if full else "incremental")
-        started = now_text()
+        started = utc_now()
         last_success = store.get_state("last_success_started")
         self.client.clear_cache()
         counts = {}
         try:
-            store.update_run(run, "Products, suppliers and customers")
+            self._step(run, "Products, suppliers and customers")
             for endpoint, key in REFERENCE_ENDPOINTS.items():
                 items = self.client.get_all(endpoint)
                 store.replace_records(endpoint, items, key)
@@ -91,14 +103,14 @@ class Syncer:
             history_start = add_months(month_start(today), -self.history_months)
             changed_dates = []
             for endpoint in DOCUMENT_ENDPOINTS:
-                store.update_run(run, f"Downloading {LABELS[endpoint]}")
+                self._step(run, f"Downloading {LABELS[endpoint]}")
                 if full or not last_success:
                     window = history_start
                     if endpoint == "PurchaseOrders":
                         window -= dt.timedelta(days=self.po_lookback_days)
                     params = {"startDate": window.isoformat()}
                 else:
-                    since = dt.datetime.fromisoformat(last_success).date() - dt.timedelta(days=1)
+                    since = dt.date.fromisoformat(last_success[:10]) - dt.timedelta(days=1)
                     params = {"modifiedSince": since.isoformat()}
                 items = self.client.get_all(endpoint, params)
                 if endpoint == "PurchaseOrders":
@@ -127,33 +139,43 @@ class Syncer:
                                              or d < recheck_from.isoformat()})
                 todo = [d for d in required if d >= recheck_from or d.isoformat() not in have]
             self._fetch_snapshots(todo, run)
-            store.update_run(run, "Current stock on hand")
+            self._step(run, "Current stock on hand")
             self.fetch_snapshot(CURRENT)
             counts["stock snapshots"] = len(todo) + 1
 
             store.prune_api_log(self.log_retention_days)
             detail = "; ".join(f"{k}: {v}" for k, v in counts.items())
-            store.finish_run(run, "ok", detail=detail)
             store.set_state("last_success_started", started)
             if full:
                 store.set_state("last_full_started", started)
+            store.finish_run(run, "ok", detail=detail)
+            for callback in self.on_complete:
+                callback()
             return {"status": "ok", "full": full, "counts": counts}
         except Exception as e:  # keep the previous data; record why this run failed
             traceback.print_exc(file=sys.stderr)
             store.finish_run(run, "failed", error=str(e) or e.__class__.__name__)
             return {"status": "failed", "full": full, "error": str(e)}
 
+    def _step(self, run, text):
+        self.store.update_run(run, text)
+        self.store.renew_lock(self.owner, LOCK_SECONDS)
+
     def _with_cost_lines(self, items, run):
         """Fetch PO detail when the list leaves cost lines out (shipping lives there)."""
         if not items or any(cost_line_keys(i) for i in items) \
                 or self.store.get_state("po_detail_has_cost_lines") == "no":
             return items
-        self.store.update_run(run, f"Downloading cost lines for {len(items)} purchase orders")
+        self._step(run, f"Downloading cost lines for {len(items)} purchase orders")
+        done = [0]
 
         def detail(i):
             if not i.get("Guid"):
                 return i
             d = self.client.get(f"PurchaseOrders/{i['Guid']}")
+            done[0] += 1
+            if done[0] % 25 == 0:
+                self._step(run, f"Downloading cost lines ({done[0]} of {len(items)} purchase orders)")
             return d if isinstance(d, dict) and d.get("OrderNumber") else i
 
         details = self._map(detail, items)
@@ -170,7 +192,7 @@ class Syncer:
             self.fetch_snapshot(d.isoformat())
             done[0] += 1
             if done[0] % 5 == 0 or done[0] == len(dates):
-                self.store.update_run(run, f"Stock on hand history ({done[0]} of {len(dates)} days)")
+                self._step(run, f"Stock on hand history ({done[0]} of {len(dates)} days)")
 
         self._map(one, dates)
 

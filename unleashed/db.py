@@ -1,0 +1,134 @@
+"""Database access: a local SQLite file, or a shared PostgreSQL server via DATABASE_URL.
+
+SQL is written once with `?` placeholders and portable syntax (ON CONFLICT
+upserts, RETURNING); this module adapts placeholders and the few schema types
+that differ, and returns rows as dicts on both.
+"""
+import os
+import re
+import sqlite3
+from contextlib import contextmanager
+
+
+def is_postgres_url(url):
+    return bool(url) and url.split(":", 1)[0] in ("postgres", "postgresql")
+
+
+class Database:
+    def __init__(self, url):
+        """`url`: postgresql://... for PostgreSQL; a file path or sqlite:///path for SQLite."""
+        self.url = url
+        self.dialect = "postgres" if is_postgres_url(url) else "sqlite"
+        self._pool = None
+        if self.dialect == "postgres":
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
+
+            pool_args = {}
+            if hasattr(ConnectionPool, "check_connection"):
+                pool_args["check"] = ConnectionPool.check_connection  # drop dead idle connections
+            self._pool = ConnectionPool(
+                _postgres_url(url), min_size=1, max_size=10, open=True,
+                # prepare_threshold=None: poolers like PgBouncer/Supavisor reject prepared statements
+                kwargs={"row_factory": dict_row, "prepare_threshold": None,
+                        "client_encoding": "utf8"}, **pool_args)
+        else:
+            self.path = url[len("sqlite:///"):] if url.startswith("sqlite:///") else url
+
+    @property
+    def shared(self):
+        """True for a database other machines may also be using."""
+        return self.dialect == "postgres"
+
+    @property
+    def label(self):
+        if self.dialect == "sqlite":
+            return f"SQLite file {os.path.basename(self.path)} (this computer only)"
+        host = re.sub(r"^[^@]*@", "", self.url.split("://", 1)[1]).split("/", 1)[0]
+        return f"PostgreSQL at {host} (shared)"
+
+    @contextmanager
+    def connect(self):
+        """A connection that commits on success and rolls back on error."""
+        if self._pool is not None:
+            with self._pool.connection() as raw:
+                yield _Connection(raw, "postgres")
+            return
+        raw = sqlite3.connect(self.path, timeout=30)
+        raw.row_factory = sqlite3.Row
+        try:
+            yield _Connection(raw, "sqlite")
+            raw.commit()
+        except BaseException:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
+
+    def query(self, sql, args=()):
+        with self.connect() as conn:
+            return conn.query(sql, args)
+
+    def execute(self, sql, args=()):
+        with self.connect() as conn:
+            return conn.execute(sql, args)
+
+    def executemany(self, sql, rows):
+        with self.connect() as conn:
+            conn.executemany(sql, rows)
+
+    def init_schema(self, path):
+        with open(path, encoding="utf-8") as f:
+            script = f.read()
+        statements = [s.strip() for s in re.sub(r"--[^\n]*", "", script).split(";") if s.strip()]
+        with self.connect() as conn:
+            if self.dialect == "sqlite":
+                conn.raw.execute("PRAGMA journal_mode=WAL")  # pages read while the sync writes
+            for statement in statements:
+                if self.dialect == "postgres":
+                    statement = statement.replace("INTEGER PRIMARY KEY AUTOINCREMENT",
+                                                  "BIGSERIAL PRIMARY KEY")
+                conn.raw.execute(statement)
+
+    def require_schema(self):
+        """For view-only instances, which may connect with a read-only login."""
+        try:
+            self.query("SELECT COUNT(*) AS n FROM ul_sync_runs")
+        except Exception as e:
+            raise RuntimeError(
+                "The shared database has no Unleashed Access tables yet. Start the instance that "
+                "has the Unleashed API key first (it creates them), then start this one.") from e
+
+    def close(self):
+        if self._pool is not None:
+            self._pool.close()
+
+
+class _Connection:
+    def __init__(self, raw, dialect):
+        self.raw = raw
+        self.dialect = dialect
+
+    def _sql(self, sql):
+        return sql.replace("?", "%s") if self.dialect == "postgres" else sql
+
+    def execute(self, sql, args=()):
+        """Run a statement; returns the number of rows it changed."""
+        return self.raw.execute(self._sql(sql), tuple(args)).rowcount
+
+    def executemany(self, sql, rows):
+        rows = [tuple(r) for r in rows]
+        if rows:
+            self.raw.cursor().executemany(self._sql(sql), rows)
+
+    def query(self, sql, args=()):
+        return [dict(r) for r in self.raw.execute(self._sql(sql), tuple(args)).fetchall()]
+
+    def query_one(self, sql, args=()):
+        rows = self.query(sql, args)
+        return rows[0] if rows else None
+
+
+def _postgres_url(url):
+    # Heroku-style "postgres://" is accepted by libpq, but normalise for clarity.
+    return "postgresql://" + url.split("://", 1)[1]

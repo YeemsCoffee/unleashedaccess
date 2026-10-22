@@ -58,3 +58,12 @@ CREATE TABLE IF NOT EXISTS ul_sync_state (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- One row: which app instance is syncing, so instances sharing a database
+-- never sync at the same time. Times are UTC.
+CREATE TABLE IF NOT EXISTS ul_sync_lock (
+    id         INTEGER PRIMARY KEY,
+    owner      TEXT,
+    expires_at TEXT
+);
+INSERT INTO ul_sync_lock (id, owner, expires_at) VALUES (1, NULL, NULL) ON CONFLICT (id) DO NOTHING;

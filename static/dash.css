@@ -203,3 +203,9 @@ td.wrap { white-space: normal; min-width: 280px; }
 .first-sync { max-width: 640px; margin: 40px auto; }
 .first-sync h1 { margin-bottom: 8px; }
 .first-sync .step { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.banner { padding: 10px 20px; font-size: 14px; }
+.banner-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.login { max-width: 380px; margin: 60px auto; }
+.login form { display: grid; gap: 12px; margin-top: 12px; }
+.stack-label { display: grid; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.stack-label input { font: inherit; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-1); color: var(--text-primary); }

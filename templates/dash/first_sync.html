@@ -6,9 +6,11 @@
   {% if run and run.status == 'failed' and not running %}
     <h1>The first copy of your Unleashed data didn't finish</h1>
     <p class="recon recon-warn">! {{ run.error }}</p>
+    {% if can_sync %}
     <form method="post" action="{{ url_for('dash.sync_now') }}">
       <button class="btn btn-primary">Try again</button>
     </form>
+    {% endif %}
     <p class="muted">The <a href="{{ url_for('dash.connection') }}">Connection page</a> can test your credentials, and the
       <a href="{{ url_for('dash.api_log') }}">API log</a> shows each request Unleashed answered.</p>
   {% elif running or (run and run.status == 'running') %}
@@ -17,6 +19,12 @@
       updates itself in the background every few minutes.</p>
     <p class="step"><span class="dot dot-running"></span> {{ run.step if run and run.step else 'Starting…' }}</p>
     <p class="muted">This page refreshes itself.</p>
+  {% elif not can_sync %}
+    <h1>Waiting for the first copy of Unleashed data</h1>
+    <p>This instance reads a shared database that another instance (the one with the Unleashed
+      API key) keeps in sync. No data has arrived yet; once that instance finishes its first sync,
+      this page will show the dashboard.</p>
+    <meta http-equiv="refresh" content="15">
   {% else %}
     <h1>No Unleashed data yet</h1>
     <p>Start the first copy of your Unleashed data. It takes a minute or two.</p>
