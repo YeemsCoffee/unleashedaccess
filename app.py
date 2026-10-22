@@ -30,7 +30,7 @@ def create_app(test_config=None):
 def init_db(path):
     conn = sqlite3.connect(path)
     try:
-        with open(os.path.join(BASE_DIR, "schema.sql")) as f:
+        with open(os.path.join(BASE_DIR, "schema.sql"), encoding="utf-8") as f:
             conn.executescript(f.read())
     finally:
         conn.close()

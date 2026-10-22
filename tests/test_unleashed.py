@@ -111,5 +111,23 @@ class DashboardPageTests(unittest.TestCase):
         self.assertIn("/StockOnHand/1", html)
 
 
+class PortabilityTests(unittest.TestCase):
+    def test_no_platform_specific_strftime_flags(self):
+        # "%-d" / "%#d" only work on some platforms (e.g. "%-d" raises on Windows).
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        offenders = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in (".git", ".venv", "venv", "__pycache__")]
+            for name in filenames:
+                if name.endswith((".py", ".html")):
+                    path = os.path.join(dirpath, name)
+                    with open(path, encoding="utf-8") as f:
+                        if re.search(r"%[-#][a-zA-Z]", f.read()):
+                            offenders.append(os.path.relpath(path, root))
+        offenders = [o for o in offenders if not o.endswith("test_unleashed.py")]
+        self.assertEqual(offenders, [])
+
+
 if __name__ == "__main__":
     unittest.main()

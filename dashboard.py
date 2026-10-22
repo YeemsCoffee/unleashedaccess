@@ -47,7 +47,7 @@ def pct(v):
 
 @bp.app_template_filter("d")
 def fmt_date(v):
-    return v.strftime("%b %-d, %Y") if v else "—"
+    return f"{v:%b} {v.day}, {v:%Y}" if v else "—"
 
 
 @bp.app_template_filter("month_name")
@@ -109,8 +109,8 @@ def _csv_url():
 
 
 def _cogs_chart(daily, month):
-    pts = [(r["date"].strftime("%b %-d"), r["cogs_to_date"],
-            f'{r["date"].strftime("%a %b %-d")} · COGS to date {money(r["cogs_to_date"])} '
+    pts = [(f'{r["date"]:%b} {r["date"].day}', r["cogs_to_date"],
+            f'{r["date"]:%a %b} {r["date"].day} · COGS to date {money(r["cogs_to_date"])} '
             f'(day {money(r["cogs_day"])})') for r in daily]
     return charts.line_chart(pts, f"Cumulative COGS, {month_name(month)}")
 
