@@ -4,14 +4,52 @@ SQL is written once with `?` placeholders and portable syntax (ON CONFLICT
 upserts, RETURNING); this module adapts placeholders and the few schema types
 that differ, and returns rows as dicts on both.
 """
+import json
 import os
 import re
 import sqlite3
 from contextlib import contextmanager
+from urllib.parse import quote
 
 
 def is_postgres_url(url):
     return bool(url) and url.split(":", 1)[0] in ("postgres", "postgresql")
+
+
+def database_url_from_env(env):
+    """DATABASE_URL, or a PostgreSQL URL assembled from AWS-style settings.
+
+    Checked in order: DATABASE_URL; DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD;
+    Elastic Beanstalk's RDS_HOSTNAME/RDS_PORT/RDS_DB_NAME/RDS_USERNAME/RDS_PASSWORD;
+    and DB_SECRET, the JSON of an RDS secret from Secrets Manager (username,
+    password, and optionally host, port, dbname). Separate settings avoid having to
+    URL-encode generated passwords, which often contain symbols.
+    """
+    if env.get("DATABASE_URL", "").strip():
+        return env["DATABASE_URL"].strip()
+    secret = {}
+    if env.get("DB_SECRET", "").strip():
+        try:
+            secret = json.loads(env["DB_SECRET"])
+        except ValueError as e:
+            raise ValueError("DB_SECRET must be the secret's JSON text") from e
+
+    def pick(names, secret_key, default=None):
+        for name in names:
+            if env.get(name, "").strip():
+                return env[name].strip()
+        return secret.get(secret_key) or default
+
+    host = pick(("DB_HOST", "RDS_HOSTNAME"), "host")
+    if not host:
+        return ""
+    user = pick(("DB_USER", "RDS_USERNAME"), "username", "postgres")
+    password = pick(("DB_PASSWORD", "RDS_PASSWORD"), "password", "")
+    port = pick(("DB_PORT", "RDS_PORT"), "port", 5432)
+    name = pick(("DB_NAME", "RDS_DB_NAME"), "dbname", "postgres")
+    sslmode = env.get("DB_SSLMODE", "").strip() or "require"  # RDS expects encrypted connections
+    return (f"postgresql://{quote(str(user), safe='')}:{quote(str(password), safe='')}"
+            f"@{host}:{port}/{quote(str(name), safe='')}?sslmode={sslmode}")
 
 
 class Database:

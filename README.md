@@ -124,8 +124,8 @@ mixes. A shared database is never replaced automatically (see below).
 ## Sharing with others
 
 Put the data in a hosted **PostgreSQL** database and point the app at it with
-`DATABASE_URL`. Any provider works: Supabase, Neon, Render, Railway, AWS RDS and
-others. Use the connection string they give you, e.g.
+`DATABASE_URL`. Any provider works: AWS RDS (see [Deploying on AWS](#deploying-on-aws)),
+Supabase, Neon, Render, Railway and others. Use the connection string they give you, e.g.
 `postgresql://user:password@host:5432/dbname?sslmode=require`.
 
 There are two ways to share. In both, **only one instance has the Unleashed API
@@ -138,9 +138,9 @@ open a web address and sign in with a password. Nobody else installs anything,
 and the API key and database password stay on the server.
 
 1. Create the PostgreSQL database and copy its connection string.
-2. Deploy this repository as a web service (Render, Railway, Fly.io, Heroku and
-   similar read the `Procfile`; the start command is
-   `gunicorn run:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT`).
+2. Deploy this repository as a web service. Elastic Beanstalk, Render, Railway,
+   Heroku and similar read the `Procfile` (`gunicorn run:app`, configured by
+   `gunicorn.conf.py`); container services use the `Dockerfile`.
 3. Set these environment variables on the service:
 
    | Variable | Value |
@@ -152,9 +152,11 @@ and the API key and database password stay on the server.
 
 4. Open the service's address, sign in, and wait for the first copy to finish.
 
-Keep `--workers 1`: the background sync runs inside the web process. (Several
-workers or servers are still safe, because a lock in the database lets only one
-of them sync at a time; they would just repeat the startup work.)
+Run one worker (the default in `gunicorn.conf.py`): the background sync runs
+inside the web process. Several workers or servers are still safe, because a
+lock in the database lets only one of them sync at a time; they would just repeat
+the startup work. Health checks should use `/healthz`, which answers without
+signing in.
 
 ### Option B: everyone runs the app, sharing the database
 
@@ -187,6 +189,91 @@ tables exist.
 - View-only instances never write to the database and don't need the API key.
 - Times are stored in UTC and shown in `TIMEZONE` (or the computer's own time zone).
 
+## Deploying on AWS
+
+The recommended setup keeps everything in your AWS account:
+
+```
+Your team ──HTTPS──► Load balancer ──► Elastic Beanstalk (Python): the app + background sync
+                                              │                           │
+                                              ▼                           ▼
+                                  Amazon RDS for PostgreSQL     api.unleashedsoftware.com
+```
+
+The database only holds a **copy** of your Unleashed data. If it's ever lost, a
+full sync rebuilds it, so RDS defaults (automated backups) are plenty.
+
+### 1. Create the database (Amazon RDS for PostgreSQL)
+
+1. RDS console → **Create database** → **PostgreSQL** (16 or newer).
+2. A small instance is plenty: `db.t4g.micro`, 20 GB storage.
+3. Set a master username and password. Letting RDS manage it in Secrets
+   Manager also works; see `DB_SECRET` below.
+4. Under **Additional configuration**, set **Initial database name** to
+   `unleashedaccess`.
+5. **Public access: No.** Put it in the same VPC as the app (the default VPC is fine).
+6. Note the **endpoint** (e.g. `unleashedaccess.abc123.us-west-2.rds.amazonaws.com`).
+
+Create the database separately rather than with Elastic Beanstalk's "add
+database" option; that one is deleted along with the environment. (The app
+still reads that option's `RDS_*` settings if you use it.)
+
+### 2. Create the app (Elastic Beanstalk, Python platform)
+
+1. Make a zip of the code: `git archive -o unleashedaccess.zip HEAD`. Your
+   `.env` isn't included.
+2. Elastic Beanstalk console → **Create application** → web server environment,
+   platform **Python 3.12** (Amazon Linux 2023), upload the zip. The `Procfile`,
+   `gunicorn.conf.py` and `.ebextensions/` in the zip configure the rest,
+   including the `/healthz` health check and `TIMEZONE=America/Los_Angeles`.
+3. Choose a **load balanced** environment with **1 instance** (`t4g.small` or
+   `t3.small`). The load balancer is what serves HTTPS.
+4. Add these **environment properties**:
+
+   | Property | Value |
+   |----------|-------|
+   | `DB_HOST` | the RDS endpoint |
+   | `DB_NAME` | `unleashedaccess` |
+   | `DB_USER`, `DB_PASSWORD` | the RDS master username and password (no URL-encoding needed) |
+   | `UNLEASHED_API_ID`, `UNLEASHED_API_KEY` | your Unleashed API credentials |
+   | `DASHBOARD_PASSWORD` | the password your team signs in with |
+   | `SECURE_COOKIES` | `1` once HTTPS is set up (step 3) |
+
+5. Let the app reach the database: in the RDS instance's **security group**,
+   add an inbound rule for **PostgreSQL (5432)** whose source is the Elastic
+   Beanstalk instances' security group.
+6. The instances also need outbound internet access to reach Unleashed. That's
+   automatic in the default VPC; in private subnets it needs a NAT gateway.
+
+### 3. HTTPS
+
+Request a certificate in **AWS Certificate Manager** for a name like
+`dashboard.yourdomain.com`, add an **HTTPS (443) listener** with it to the
+environment's load balancer (Configuration → Load balancer), and point that name
+at the environment (Route 53 alias or CNAME). Then set `SECURE_COOKIES=1`.
+Don't share the dashboard over plain HTTP: the sign-in password would travel unencrypted.
+
+### 4. Open it
+
+Go to the address, sign in, and wait a minute or two for the first copy. Deploy
+updates with a new zip, or with the EB CLI (`eb init`, `eb create`, `eb deploy`).
+
+### Other AWS options
+
+- **ECS on Fargate:** build the `Dockerfile` (it listens on port 8000), push
+  it to ECR, and run **one task** as a service behind a load balancer with health
+  check path `/healthz`. ECS can inject the RDS secret from Secrets Manager as
+  `DB_SECRET` (plus `DB_HOST` if the secret holds only the login).
+- **App Runner:** works for serving pages, but App Runner limits CPU for idle
+  instances, which can stall the background sync. If you use it, also run
+  `python sync_once.py` on a schedule (e.g. an ECS scheduled task every 15 minutes).
+- **EC2 or Lightsail:** run `gunicorn run:app` (or the Docker image) behind a
+  reverse proxy with HTTPS.
+
+Rough monthly cost for the recommended setup (`db.t4g.micro`, one small
+instance, a load balancer) is in the tens of dollars; check the AWS Pricing
+Calculator for your region.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -199,11 +286,17 @@ tables exist.
 | `SYNC_ON_STARTUP` | `background` | `background`, `blocking` (finish first sync before serving) or `off` |
 | `UNLEASHED_CACHE_SECONDS` | `120` | In-memory API response cache, used by the sync and live lookups |
 | `DATABASE_URL` | — | PostgreSQL connection string for a shared database |
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | port `5432` | The same as separate settings (no URL-encoding); Elastic Beanstalk's `RDS_*` names also work |
+| `DB_SECRET` | — | JSON of an RDS secret from Secrets Manager (username, password, and optionally host, port, dbname) |
+| `DB_SSLMODE` | `require` | SSL mode when the URL is built from the settings above |
 | `DATABASE_PATH` | `unleashedaccess.db` | SQLite file used when `DATABASE_URL` isn't set |
 | `ALLOW_DATABASE_RESET` | — | `1` lets this instance replace a shared database holding another account's data |
 | `DASHBOARD_PASSWORD` | — | When set, everyone signs in with this password |
 | `SECRET_KEY` | derived from the password | Signs the sign-in cookie; set your own when hosting |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
+| `SECURE_COOKIES` | — | `1` when served over HTTPS (sign-in cookie only sent over HTTPS) |
+| `WEB_CONCURRENCY`, `GUNICORN_THREADS` | `1`, `8` | gunicorn workers and threads (`gunicorn.conf.py`) |
+| `ENV_FILE` | `.env` | Settings file to load instead of `.env` |
 | `PORT` | `8000` | Web server port |
 
 ## Project structure
@@ -214,8 +307,12 @@ unleashedaccess/
 ├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
+├── sync_once.py        # run one sync and exit (scheduled jobs)
 ├── mock_unleashed.py   # run the mock Unleashed API standalone
-├── Procfile            # start command for hosting services (gunicorn)
+├── Procfile            # start command for hosting services: gunicorn run:app
+├── gunicorn.conf.py    # port (PORT, default 8000), workers, threads
+├── Dockerfile          # container image for ECS/Fargate, App Runner, EB Docker
+├── .ebextensions/      # Elastic Beanstalk settings (/healthz health check, TIMEZONE)
 ├── schema.sql          # data copy, sync history, sync lock and API log tables
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging

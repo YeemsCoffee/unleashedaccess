@@ -1,0 +1,12 @@
+# What `eb deploy` leaves out (it otherwise follows .gitignore).
+.git
+.env
+.venv
+venv
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+.pytest_cache/
+tests/

@@ -111,14 +111,15 @@ def _ctx():
 
 # Pages that work before the first sync has finished.
 _OPEN_ENDPOINTS = {"dash.connection", "dash.api_log", "dash.sync_now", "dash.login",
-                   "dash.logout"}
+                   "dash.logout", "dash.healthz"}
+# Pages that work without signing in.
+_PUBLIC_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz"}
 
 
 @bp.before_request
 def _require_login():
     password = current_app.config["DASHBOARD_PASSWORD"]
-    if password and not session.get("signed_in") and request.endpoint not in (
-            "dash.login", "dash.logout"):
+    if password and not session.get("signed_in") and request.endpoint not in _PUBLIC_ENDPOINTS:
         return redirect(url_for("dash.login", next=request.full_path))
     return None
 
@@ -131,6 +132,16 @@ def _require_synced_data():
     if ok is None:
         return render_template("dash/first_sync.html", run=last, running=_sync_running())
     return None
+
+
+@bp.get("/healthz")
+def healthz():
+    """For load balancer / container health checks: the web process is up.
+
+    Deliberately doesn't touch Unleashed or the database, so an outage there
+    doesn't make AWS replace healthy servers in a loop.
+    """
+    return {"status": "ok"}
 
 
 @bp.route("/login", methods=["GET", "POST"])

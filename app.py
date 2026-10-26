@@ -5,7 +5,7 @@ import os
 from flask import Flask
 
 import dashboard
-from unleashed.db import Database, is_postgres_url
+from unleashed.db import Database, database_url_from_env, is_postgres_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -14,9 +14,9 @@ def create_app(test_config=None):
     app = Flask(__name__)
     env = os.environ.get
     app.config.update(
-        # DATABASE_URL (postgresql://...) shares one database between people and machines;
-        # without it, data lives in a SQLite file on this computer.
-        DATABASE_URL=env("DATABASE_URL", "").strip(),
+        # A shared PostgreSQL database (DATABASE_URL, or AWS-style DB_*/RDS_*/DB_SECRET
+        # settings); without one, data lives in a SQLite file on this computer.
+        DATABASE_URL=database_url_from_env(os.environ),
         DATABASE_PATH=env("DATABASE_PATH", os.path.join(BASE_DIR, "unleashedaccess.db")),
         ALLOW_DATABASE_RESET=env("ALLOW_DATABASE_RESET", "") == "1",
         # live: sync from Unleashed; mock: simulated data; viewer: read a shared database
@@ -37,6 +37,8 @@ def create_app(test_config=None):
         DASHBOARD_PASSWORD=env("DASHBOARD_PASSWORD", ""),
         SECRET_KEY=env("SECRET_KEY", ""),
         SESSION_COOKIE_SAMESITE="Lax",  # sign-in cookie isn't sent on other sites' form posts
+        # Set SECURE_COOKIES=1 when the dashboard is served over HTTPS.
+        SESSION_COOKIE_SECURE=env("SECURE_COOKIES", "") == "1",
     )
     if test_config:
         app.config.update(test_config)

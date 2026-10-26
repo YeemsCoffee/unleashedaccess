@@ -490,6 +490,62 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(res.headers["Location"], "/")
 
 
+class AwsSettingsTests(unittest.TestCase):
+    def test_database_url_from_aws_style_settings(self):
+        from urllib.parse import unquote, urlsplit
+
+        from unleashed.db import database_url_from_env
+        self.assertEqual(database_url_from_env({}), "")
+        self.assertEqual(database_url_from_env({"DATABASE_URL": " postgresql://u:p@h/d "}),
+                         "postgresql://u:p@h/d")
+        generated = "a#b?c@d/e:f%g h"  # RDS-generated passwords contain symbols like these
+        url = database_url_from_env({"DB_HOST": "mydb.abc.us-west-2.rds.amazonaws.com",
+                                     "DB_USER": "dash", "DB_PASSWORD": generated,
+                                     "DB_NAME": "unleashedaccess"})
+        parts = urlsplit(url)
+        self.assertEqual(unquote(parts.password), generated)
+        self.assertEqual((parts.hostname, parts.port, parts.path, parts.query),
+                         ("mydb.abc.us-west-2.rds.amazonaws.com", 5432, "/unleashedaccess",
+                          "sslmode=require"))
+        eb = database_url_from_env({"RDS_HOSTNAME": "eb-db", "RDS_PORT": "5433",
+                                    "RDS_DB_NAME": "ebdb", "RDS_USERNAME": "ebuser",
+                                    "RDS_PASSWORD": "pw"})
+        self.assertEqual(eb, "postgresql://ebuser:pw@eb-db:5433/ebdb?sslmode=require")
+        secret = ('{"username": "admin", "password": "s3cr#t", "host": "sm-host", '
+                  '"port": 5432, "dbname": "dash"}')
+        self.assertEqual(database_url_from_env({"DB_SECRET": secret}),
+                         "postgresql://admin:s3cr%23t@sm-host:5432/dash?sslmode=require")
+        # RDS-managed master secrets hold only the login; the host comes from DB_HOST.
+        self.assertEqual(
+            database_url_from_env({"DB_SECRET": '{"username": "admin", "password": "x"}',
+                                   "DB_HOST": "h", "DB_NAME": "dash"}),
+            "postgresql://admin:x@h:5432/dash?sslmode=require")
+
+    def test_health_check_needs_no_sign_in_or_data(self):
+        app = make_app(self, UNLEASHED_MODE="mock", SYNC_ON_STARTUP="off",
+                       DASHBOARD_PASSWORD="secret")
+        res = app.test_client().get("/healthz")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), {"status": "ok"})
+
+    def test_sync_once_command(self):
+        import subprocess
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db = sqlite_database(self)["DATABASE_PATH"]
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("UNLEASHED_", "DATABASE_URL", "DB_", "RDS_"))}
+        # No .env and blank database settings: never touch a real (shared) database.
+        env.update(DATABASE_PATH=db, UNLEASHED_MODE="mock", DATABASE_URL="", DB_HOST="",
+                   RDS_HOSTNAME="", DB_SECRET="", ENV_FILE=os.path.join(root, "no-such.env"))
+        run = subprocess.run([sys.executable, "sync_once.py"], cwd=root, env=env,
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("Sync ok (full)", run.stdout)
+        again = subprocess.run([sys.executable, "sync_once.py"], cwd=root, env=env,
+                               capture_output=True, text=True, timeout=120)
+        self.assertIn("Sync ok (incremental)", again.stdout)
+
+
 class TimezoneTests(unittest.TestCase):
     def test_today_follows_the_business_time_zone(self):
         def today_in(zone):

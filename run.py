@@ -19,7 +19,8 @@ if _ext["mode"] == "live":
 elif _ext["mode"] == "viewer":
     print(" * Unleashed Access: VIEW-ONLY, reading the shared database (another instance syncs it)")
 else:
-    print(" * Unleashed Access: MOCK data (simulated). Set UNLEASHED_MODE=live in .env for real data.")
+    print(" * Unleashed Access: MOCK data (simulated). For real data, set UNLEASHED_MODE=live and the"
+          " API ID/key (in .env, or the server's environment settings).")
 print(f" * Database: {_ext['db'].label}")
 if _ext["source_error"]:
     print(f" ! {_ext['source_error']}")
