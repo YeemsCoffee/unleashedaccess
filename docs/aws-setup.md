@@ -106,7 +106,10 @@ rule allowing PostgreSQL from `unleashedaccess-app`.
      and reopen the dropdown (reload the page if it still doesn't appear).
    - **Database port** (under *Additional configuration*): **5432**.
 10. **Database authentication:** **Password authentication**.
-11. **Monitoring:** leave the defaults.
+11. **Monitoring:** keep it to the free basics. **Database Insights: Standard**;
+    **Performance Insights** on with **7 days** retention if it's already on (free);
+    **Enhanced Monitoring: off**; no **log exports**; **DevOps Guru: off**. The app
+    reports its own sync health, and Elastic Beanstalk shows the app's health.
 12. Open **Additional configuration** (near the bottom):
     - **Initial database name:** `unleashedaccess` ← easy to miss, and needed.
     - **Backup retention:** 7 days (default) is plenty. The database only holds a
