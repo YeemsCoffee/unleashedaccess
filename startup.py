@@ -19,6 +19,13 @@ def explain(exc):
     """(headline, what to do) for a startup error, in plain language."""
     text = f"{exc.__class__.__name__}: {exc}"
     lower = text.lower()
+    if "no password supplied" in lower:
+        return ("The app didn't send a database password.",
+                "Add the environment property DB_PASSWORD (exactly that name) with the RDS master "
+                "password. If it's there, check the name for typos or spaces.")
+    if "role" in lower and "does not exist" in lower:
+        return ("The database has no user with that name.",
+                "Set DB_USER to the RDS master username (shown on the database's Configuration tab).")
     if "password authentication failed" in lower:
         return ("The database rejected the username or password.",
                 "Check DB_USER and DB_PASSWORD against the RDS master username and password.")

@@ -691,6 +691,10 @@ class StartupProblemTests(unittest.TestCase):
             'connection failed: connection to server at "10.0.1.5", port 5432 failed: timeout expired':
                 "can't reach the database",
             "couldn't get a connection after 30.00 sec": "can't reach the database",
+            'connection failed: connection to server at "172.31.30.106", port 5432 failed: '
+            'fe_sendauth: no password supplied': "DB_PASSWORD",
+            'connection failed: connection to server at "172.31.30.106", port 5432 failed: FATAL:  '
+            'role "unleashed_admn" does not exist': "DB_USER",
             'connection failed: could not translate host name "https://x" to address': "DB_HOST",
             "ADMIN_EMAIL / ADMIN_PASSWORD settings: Passwords need at least 10 characters.":
                 "first admin account",
