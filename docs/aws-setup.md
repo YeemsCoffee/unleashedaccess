@@ -86,7 +86,10 @@ rule allowing PostgreSQL from `unleashedaccess-app`.
    the newest (e.g. **18.3**) is a good choice. The app is tested on 16 and 18.3.
 4. **Templates:** **Free tier** if offered, otherwise **Dev/Test**.
    (Don't pick *Production*: it defaults to two servers and costs several times more.)
-5. **Availability and durability** (if shown): **Single-AZ DB instance deployment**.
+5. **Availability and durability** (if shown): **Single-AZ DB instance deployment**,
+   which some forms call **Do not create a standby instance**. A standby roughly
+   doubles the cost and isn't needed: the database is a copy of Unleashed data, RDS
+   still takes daily backups, and a full sync can rebuild it.
 6. **Settings:**
    - **DB instance identifier:** `unleashedaccess-db`
    - **Master username:** `unleashed_admin`
