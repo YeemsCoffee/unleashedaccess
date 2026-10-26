@@ -7,6 +7,7 @@ every RETRY_SECONDS, so a database that was still being created comes online
 by itself.
 """
 import html
+import re
 import sys
 import threading
 import time
@@ -27,8 +28,12 @@ def explain(exc):
         return ("The database has no user with that name.",
                 "Set DB_USER to the RDS master username (shown on the database's Configuration tab).")
     if "password authentication failed" in lower:
-        return ("The database rejected the username or password.",
-                "Check DB_USER and DB_PASSWORD against the RDS master username and password.")
+        user = re.search(r'for user "([^"]+)"', text)
+        tried = f' for the user "{user.group(1)}"' if user else ""
+        return (f"The database rejected the password{tried}.",
+                "Set DB_USER to the RDS master username (RDS → your database → Configuration → "
+                "Master username; without DB_USER the app uses postgres) and DB_PASSWORD to its "
+                "password.")
     if "does not exist" in lower and "database" in lower:
         return ("The database server has no database with that name.",
                 "Set DB_NAME to the RDS \"Initial database name\" (unleashedaccess). If it was left "

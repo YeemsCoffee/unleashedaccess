@@ -686,7 +686,9 @@ class StartupProblemTests(unittest.TestCase):
         from startup import explain
         cases = {
             'connection failed: connection to server at "10.0.1.5", port 5432 failed: FATAL:  '
-            'password authentication failed for user "unleashed_admin"': "username or password",
+            'password authentication failed for user "unleashed_admin"': 'user "unleashed_admin"',
+            'connection failed: FATAL:  password authentication failed for user "postgres"':
+                "without DB_USER the app uses postgres",
             'connection failed: FATAL:  database "unleashedaccess" does not exist': "no database with that name",
             'connection failed: connection to server at "10.0.1.5", port 5432 failed: timeout expired':
                 "can't reach the database",
