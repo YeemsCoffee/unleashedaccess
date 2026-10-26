@@ -191,6 +191,9 @@ tables exist.
 
 ## Deploying on AWS
 
+**Click-by-click walkthrough: [docs/aws-setup.md](docs/aws-setup.md).** The
+summary below covers the same ground.
+
 The recommended setup keeps everything in your AWS account:
 
 ```
