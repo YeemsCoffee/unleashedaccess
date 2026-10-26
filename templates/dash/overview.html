@@ -1,4 +1,5 @@
 {% extends "dash/base.html" %}
+{% from "dash/_macros.html" import doc_link %}
 {% block title %}Overview{% endblock %}
 {% block content %}
 <section class="hero card">
@@ -63,7 +64,7 @@
     {% for t in recent %}
     <tr>
       <td>{{ t.date|d }}</td><td>{{ t.type }}</td>
-      <td>{% if t.type == 'Purchase' %}<a href="{{ url_for('dash.purchase_detail', number=t.number) }}">{{ t.number }}</a>{% elif t.type == 'Sale' %}<a href="{{ url_for('dash.sales_detail', number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif %}</td>
+      <td>{{ doc_link(t) }}</td>
       <td>{{ t.description or t.product_code }}</td>
       <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td>
     </tr>

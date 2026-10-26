@@ -151,6 +151,36 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  and _match(s["OrderNumber"], "orderNumber")]
         return _paged([_sales_order(ds, s) for s in items], int(page_or_guid))
 
+    # ------------------------------------------------------------ production
+
+    @app.get("/BillOfMaterials")
+    @app.get("/BillOfMaterials/<page_or_guid>")
+    def bills_of_materials(page_or_guid="1"):
+        if not page_or_guid.isdigit():
+            bom = next((b for b in ds.boms if b["Guid"] == page_or_guid), None)
+            return (jsonify(_bom(ds, bom)) if bom
+                    else (jsonify({"description": "Bill of materials not found"}), 404))
+        items = [b for b in ds.boms if _match(b["BillNumber"], "billNumber")
+                 and _match(b["ProductCode"], "productCode")]
+        return _paged([_bom(ds, b) for b in items], int(page_or_guid))
+
+    @app.get("/Assemblies")
+    @app.get("/Assemblies/<page_or_guid>")
+    def assemblies(page_or_guid="1"):
+        if not page_or_guid.isdigit():
+            a = next((a for a in ds.assemblies if a["Guid"] == page_or_guid), None)
+            return (jsonify(_assembly(ds, a)) if a
+                    else (jsonify({"description": "Assembly not found"}), 404))
+        start, end = _date_arg("startDate"), _date_arg("endDate")
+        statuses = _statuses("assemblyStatus")
+        items = [a for a in ds.assemblies
+                 if _in_range(a["AssemblyDate"], start, end)
+                 and _modified_since(_modified(a, "AssemblyDate"))
+                 and (not statuses or a["Status"].lower() in statuses)
+                 and _match(a["AssemblyNumber"], "assemblyNumber")
+                 and _match(a["ProductCode"], "productCode", exact=True)]
+        return _paged([_assembly(ds, a) for a in items], int(page_or_guid))
+
     return app
 
 
@@ -192,8 +222,8 @@ def _in_range(d, start, end):
     return (start is None or d >= start) and (end is None or d <= end)
 
 
-def _statuses():
-    v = request.args.get("orderStatus")
+def _statuses(arg="orderStatus"):
+    v = request.args.get(arg)
     return {s.strip().lower() for s in v.split(",")} if v else set()
 
 
@@ -221,8 +251,9 @@ def _product(ds, p):
         "ProductGroup": {"GroupName": p["ProductGroup"]},
         "UnitOfMeasure": {"Name": p["UnitOfMeasure"]},
         "DefaultPurchasePrice": p["BaseCost"], "DefaultSellPrice": p["SellPrice"],
-        "Supplier": _supplier_ref(ds, p["SupplierCode"]),
-        "IsSellable": True, "Obsolete": False,
+        "Supplier": _supplier_ref(ds, p["SupplierCode"]) if p["SupplierCode"] else None,
+        "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None,
+        "Obsolete": False,
     }
 
 
@@ -287,6 +318,47 @@ def _sales_order(ds, so):
         "BCSubTotal": so["SubTotal"], "BCTaxTotal": 0.0, "BCTotal": so["SubTotal"],
         "SalesOrderLines": lines,
         "LastModifiedOn": _ms(_modified(so, "CompletedDate", "OrderDate")),
+    }
+
+
+def _avg_cost(ds, code):
+    qty, value = ds.stock_as_at(code)
+    return value / qty if qty else ds.products[code]["BaseCost"]
+
+
+def _bom(ds, b):
+    lines = []
+    for i, l in enumerate(b["Lines"], 1):
+        lines.append({
+            "Guid": f"{b['Guid'][:-4]}{i:04d}", "LineNumber": i,
+            "Product": _product_ref(ds, l["ProductCode"]),
+            "Quantity": l["Quantity"], "WastageQuantity": l["WastageQuantity"],
+            "TotalLineCost": round(l["Quantity"] * _avg_cost(ds, l["ProductCode"]), 4),
+        })
+    return {
+        "Guid": b["Guid"], "BillNumber": b["BillNumber"],
+        "Product": _product_ref(ds, b["ProductCode"]),
+        "CanAutoAssemble": False, "CanAutoDisassemble": False, "Obsolete": b["Obsolete"],
+        "BillOfMaterialsLines": lines, "LastModifiedOn": _ms(ds.start),
+    }
+
+
+def _assembly(ds, a):
+    lines = []
+    for i, l in enumerate(a["Lines"], 1):
+        lines.append({
+            "Guid": f"{a['Guid'][:-4]}{i:04d}", "LineNumber": i,
+            "Product": _product_ref(ds, l["ProductCode"]),
+            "Quantity": l["Quantity"], "WastageQuantity": l["WastageQuantity"],
+            **({"UnitCost": l["UnitCost"]} if "UnitCost" in l else {}),
+        })
+    return {
+        "Guid": a["Guid"], "AssemblyNumber": a["AssemblyNumber"],
+        "Product": _product_ref(ds, a["ProductCode"]), "Quantity": a["Quantity"],
+        "AssemblyDate": _ms(a["AssemblyDate"]), "AssembleBy": _ms(a["AssembleBy"]),
+        "AssemblyStatus": a["Status"], "SourceWarehouse": WAREHOUSE_REF,
+        "DestinationWarehouse": WAREHOUSE_REF, "Comments": None,
+        "AssemblyLines": lines, "LastModifiedOn": _ms(_modified(a, "AssemblyDate")),
     }
 
 

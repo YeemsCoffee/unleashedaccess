@@ -1,0 +1,55 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import range_filters, status_pill, production_notice, vs_standard %}
+{% block title %}Production orders{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Production orders</h1>
+  {% call range_filters(start, end, csv_url=csv_url) %}
+    <label>Status <select name="status"><option value="">Open and completed</option>
+      {% for s in ('Open', 'Parked', 'Completed', 'Deleted') %}<option {{ 'selected' if s == status }}>{{ s }}</option>{% endfor %}</select></label>
+    <label>Product <select name="product"><option value="">All</option>
+      {% for code, desc in made %}<option value="{{ code }}" {{ 'selected' if code == product }}>{{ desc or code }}</option>{% endfor %}</select></label>
+  {% endcall %}
+</div>
+{{ production_notice(problem) }}
+<p class="muted">Unleashed assemblies, filtered by assembly date. Component cost is what the components used were
+  worth{{ ", partly estimated at today's average costs where Unleashed gives no cost" if po.estimated }}.</p>
+
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Completed</div><div class="tile-value">{{ po.completed }}</div></div>
+  <div class="tile card"><div class="tile-label">Units made</div><div class="tile-value">{{ po.qty_made|qty }}</div></div>
+  <div class="tile card"><div class="tile-label">Component cost</div><div class="tile-value">{{ po.cost|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Open</div><div class="tile-value">{{ po.open }}</div>
+    <div class="tile-sub"><a href="{{ url_for('dash.production_requirements') }}">Material requirements →</a></div></div>
+</section>
+
+{% if po.by_product %}
+<section class="card">
+  <h2>Made, by product</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
+    <tbody>{% for p in po.by_product %}
+    <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
+      <td class="num">{{ p.cost|money }}</td><td class="num">{{ p.unit_cost|money }}</td>
+      <td class="num">{{ p.standard_unit_cost|money }}</td><td class="num">{{ vs_standard(p.variance_pct) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Orders</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th>Product</th><th class="num">Qty</th><th>Status</th><th class="num">Component cost</th><th class="num">Unit cost</th></tr></thead>
+    <tbody>
+    {% for o in po.orders %}
+    <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.date|d }}</td><td>{{ o.due|d }}</td><td>{{ o.description or o.product_code }}</td>
+      <td class="num">{{ o.qty|qty }}</td><td>{{ status_pill(o.status) }}</td>
+      <td class="num">{{ o.cost|money }}{{ '*' if o.estimated }}</td><td class="num">{{ o.unit_cost|money }}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">No production orders match.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% if po.orders|selectattr('estimated')|list %}<p class="muted">* Estimated at today's average costs: Unleashed gave no cost for these components. Open orders are always estimated.</p>{% endif %}
+</section>
+{% endblock %}

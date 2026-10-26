@@ -1,5 +1,5 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import range_filters %}
+{% from "dash/_macros.html" import range_filters, doc_link %}
 {% block title %}Stock movement{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -20,7 +20,7 @@
     <tr class="row-sub"><td>{{ (start)|d }}</td><td colspan="5">Opening balance</td><td class="num">{{ mv.opening_qty|qty }}</td><td class="num">{{ mv.opening_value|money }}</td></tr>
     {% for t in mv.rows %}
     <tr><td>{{ t.date|d }}</td><td>{{ t.type }}</td>
-      <td>{% if t.type == 'Purchase' %}<a href="{{ url_for('dash.purchase_detail', number=t.number) }}">{{ t.number }}</a>{% elif t.type == 'Sale' %}<a href="{{ url_for('dash.sales_detail', number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif %}</td>
+      <td>{{ doc_link(t) }}</td>
       <td>{{ t.party }}</td><td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td>
       <td class="num">{{ t.balance_qty|qty }}</td><td class="num">{{ t.balance_value|money }}</td></tr>
     {% endfor %}

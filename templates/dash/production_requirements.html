@@ -1,0 +1,59 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import production_notice, materials_pill %}
+{% block title %}Material requirements{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Material requirements</h1>
+  <form method="get" class="filters">
+    <label>Orders due by <input type="date" name="through" value="{{ through.isoformat() if through }}"></label>
+    <button class="btn btn-primary">Run</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+</div>
+{{ production_notice(problem) }}
+<p class="muted">What open production orders need, against available stock (on hand minus what sales orders have
+  allocated). Orders take stock in due-date order, so an order is Ready only if what's left after earlier orders
+  covers it. "After purchases" counts stock on open purchase orders.</p>
+
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Open orders{{ ' due by ' ~ (through|d) if through }}</div><div class="tile-value">{{ req.orders|length }}</div>
+    <div class="tile-sub">{{ req.overdue }} overdue</div></div>
+  <div class="tile card"><div class="tile-label">Short of materials</div><div class="tile-value">{{ req.short_orders }}</div>
+    <div class="tile-sub">orders that can't be made from stock</div></div>
+  <div class="tile card"><div class="tile-label">Planned component cost</div><div class="tile-value">{{ req.planned_cost|money(false) }}</div></div>
+  <div class="tile card"><div class="tile-label">Still short after purchases</div><div class="tile-value">{{ req.shortage_value|money(false) }}</div>
+    <div class="tile-sub">at today's average costs</div></div>
+</section>
+
+<section class="card">
+  <h2>Components</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Description</th><th>Source</th><th class="num">Orders</th><th class="num">Required</th><th class="num">On hand</th><th class="num">Available</th><th class="num">On purchase</th><th class="num">Short now</th><th class="num">Short after purchases</th></tr></thead>
+    <tbody>
+    {% for c in req.components %}
+    <tr class="{{ 'row-warn' if c.shortage_after_po }}">
+      <td><a href="{{ url_for('dash.production_boms', component=c.product_code) }}" title="Bills of materials that use it">{{ c.product_code }}</a></td>
+      <td>{{ c.description }}</td><td>{{ 'Make' if c.made_here else 'Buy' }}</td>
+      <td class="num">{{ c.orders }}</td><td class="num">{{ c.required|qty }}</td><td class="num">{{ c.on_hand|qty }}</td>
+      <td class="num">{{ c.available|qty }}</td><td class="num">{{ c.on_purchase|qty }}</td>
+      <td class="num">{{ c.shortage|qty if c.shortage else '' }}</td><td class="num">{{ c.shortage_after_po|qty if c.shortage_after_po else '' }}</td></tr>
+    {% else %}<tr><td colspan="10" class="muted">No open production orders need components.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>Open orders, in the order they get stock</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Product</th><th class="num">Qty</th><th>Assemble by</th><th class="num">Planned cost</th><th>Materials</th><th>Short</th></tr></thead>
+    <tbody>
+    {% for o in req.orders %}
+    <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.description or o.product_code }}</td><td class="num">{{ o.qty|qty }}</td><td>{{ o.due|d }}</td>
+      <td class="num">{{ o.planned_cost|money }}</td><td>{{ materials_pill(o) }}</td>
+      <td>{% for s in o.shortages %}{{ s.product_code }} {{ s.missing|qty }}{{ ', ' if not loop.last }}{% endfor %}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No open production orders.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

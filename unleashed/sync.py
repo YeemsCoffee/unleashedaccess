@@ -15,13 +15,15 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+from .client import UnleashedError
 from .reports import add_months, cost_line_keys, month_start
-from .store import CURRENT, DOCUMENT_ENDPOINTS, REFERENCE_ENDPOINTS, utc_now
+from .store import (ALL_DATES, CURRENT, DOCUMENT_ENDPOINTS, OPTIONAL_ENDPOINTS,
+                    REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns, utc_now)
 
 LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it lapse
 
 LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
-          "StockAdjustments": "stock adjustments"}
+          "StockAdjustments": "stock adjustments", "Assemblies": "assemblies"}
 
 
 class Syncer:
@@ -94,33 +96,47 @@ class Syncer:
         self.client.clear_cache()
         counts = {}
         try:
-            self._step(run, "Products, suppliers and customers")
+            self._step(run, "Products, suppliers, customers and bills of materials")
             for endpoint, key in REFERENCE_ENDPOINTS.items():
-                items = self.client.get_all(endpoint)
-                store.replace_records(endpoint, items, key)
-                counts[endpoint] = len(items)
+                fetched = self._fetch(endpoint, {}, counts)
+                if fetched is not None:
+                    store.replace_records(endpoint, fetched[0], key)
+                    counts[endpoint] = len(fetched[0])
 
             history_start = add_months(month_start(today), -self.history_months)
             changed_dates = []
             for endpoint in DOCUMENT_ENDPOINTS:
                 self._step(run, f"Downloading {LABELS[endpoint]}")
-                if full or not last_success:
+                # Everything on a full sync, or the first time an endpoint is copied.
+                fresh = full or not last_success or not store.get_state(f"window:{endpoint}")
+                window = None
+                if not fresh:
+                    since = dt.date.fromisoformat(last_success[:10]) - dt.timedelta(days=1)
+                    params = {"modifiedSince": since.isoformat()}
+                elif endpoint in UNWINDOWED_ENDPOINTS:
+                    params = {}
+                else:
                     window = history_start
                     if endpoint == "PurchaseOrders":
                         window -= dt.timedelta(days=self.po_lookback_days)
                     params = {"startDate": window.isoformat()}
-                else:
-                    since = dt.date.fromisoformat(last_success[:10]) - dt.timedelta(days=1)
-                    params = {"modifiedSince": since.isoformat()}
-                items = self.client.get_all(endpoint, params)
+                fetched = self._fetch(endpoint, params, counts)
+                if fetched is None:
+                    continue
+                items, filtered = fetched
                 if endpoint == "PurchaseOrders":
-                    items = self._with_cost_lines(items, run)
+                    items = self._with_detail(endpoint, items, run, cost_line_keys, "cost lines",
+                                              "po_detail_has_cost_lines")
+                elif endpoint == "Assemblies":
+                    items = self._with_detail(endpoint, items, run,
+                                              lambda a: a.get("AssemblyLines") is not None,
+                                              "components", "assembly_detail_has_lines")
                 changed, dates = store.upsert_documents(endpoint, items)
                 changed_dates += dates
                 pruned = 0
-                if full:
+                if fresh or not filtered:  # the complete set: drop what Unleashed no longer has
                     pruned = store.prune_documents(endpoint, {i.get("Guid") for i in items})
-                    store.set_state(f"window:{endpoint}", window.isoformat())
+                    store.set_state(f"window:{endpoint}", window.isoformat() if window else ALL_DATES)
                 counts[endpoint] = f"{len(items)} fetched, {changed} changed" + \
                     (f", {pruned} removed" if pruned else "")
 
@@ -161,26 +177,43 @@ class Syncer:
         self.store.update_run(run, text)
         self.store.renew_lock(self.owner, LOCK_SECONDS)
 
-    def _with_cost_lines(self, items, run):
-        """Fetch PO detail when the list leaves cost lines out (shipping lives there)."""
-        if not items or any(cost_line_keys(i) for i in items) \
-                or self.store.get_state("po_detail_has_cost_lines") == "no":
+    def _fetch(self, endpoint, params, counts):
+        """(items, whether `params` filtered them), or None for a production endpoint
+        this account can't use (recorded, so the Production pages can say why)."""
+        try:
+            items = self.client.get_all(endpoint, params)
+        except UnleashedError as e:
+            if endpoint not in OPTIONAL_ENDPOINTS:
+                raise
+            if params and e.status_code == 400:  # a filter this endpoint doesn't take
+                return self._fetch(endpoint, {}, counts)
+            self.store.set_state(f"unavailable:{endpoint}", str(e))
+            counts[endpoint] = "not available"
+            return None
+        if endpoint in OPTIONAL_ENDPOINTS and self.store.get_state(f"unavailable:{endpoint}"):
+            self.store.set_state(f"unavailable:{endpoint}", "")
+        return items, bool(params)
+
+    def _with_detail(self, endpoint, items, run, has, what, state_key):
+        """Fetch each document's detail when the list leaves `what` out (e.g. PO cost
+        lines, where shipping lives). `state_key` remembers when detail doesn't help."""
+        if not items or any(has(i) for i in items) or self.store.get_state(state_key) == "no":
             return items
-        self._step(run, f"Downloading cost lines for {len(items)} purchase orders")
+        label = LABELS[endpoint]
+        self._step(run, f"Downloading {what} for {len(items)} {label}")
         done = [0]
 
         def detail(i):
             if not i.get("Guid"):
                 return i
-            d = self.client.get(f"PurchaseOrders/{i['Guid']}")
+            d = self.client.get(f"{endpoint}/{i['Guid']}")
             done[0] += 1
             if done[0] % 25 == 0:
-                self._step(run, f"Downloading cost lines ({done[0]} of {len(items)} purchase orders)")
-            return d if isinstance(d, dict) and d.get("OrderNumber") else i
+                self._step(run, f"Downloading {what} ({done[0]} of {len(items)} {label})")
+            return d if isinstance(d, dict) and document_columns(endpoint, d)[0] else i
 
         details = self._map(detail, items)
-        self.store.set_state("po_detail_has_cost_lines",
-                             "yes" if any(cost_line_keys(d) for d in details) else "no")
+        self.store.set_state(state_key, "yes" if any(has(d) for d in details) else "no")
         return details
 
     def _fetch_snapshots(self, dates, run):

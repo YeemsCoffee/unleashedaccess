@@ -6,7 +6,8 @@ listings show keys only, never values, so they are safe to share.
 import datetime as dt
 
 from .client import UnleashedError
-from .reports import (INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys,
+from .reports import (ASSEMBLY_LINE_TOTAL_FIELDS, ASSEMBLY_LINE_UNIT_COST_FIELDS,
+                      INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys,
                       month_start)
 
 
@@ -187,6 +188,52 @@ def run_checks(reports):
         return "ok", summary
 
     check("Stock adjustments", adjustments)
+
+    def bills_of_materials():
+        try:
+            boms = client.get("BillOfMaterials", {"pageSize": 200}, page=1).get("Items") or []
+        except UnleashedError as e:
+            return "warn", f"Unleashed refused bills of materials ({e}); the Production pages need them."
+        if not boms:
+            return "ok", "No bills of materials in this account"
+        fields["Bill of materials"] = sorted(boms[0].keys())
+        lines = [l for b in boms for l in b.get("BillOfMaterialsLines") or []]
+        if lines:
+            fields["Bill of materials line"] = sorted(lines[0].keys())
+        wastage = sum(1 for l in lines if l.get("WastageQuantity"))
+        return "ok", (f"{len(boms)} bill(s) of materials, {len(lines)} component lines, "
+                      f"{wastage} with wastage")
+
+    check("Production: bills of materials", bills_of_materials)
+
+    def assemblies():
+        try:
+            items = client.get("Assemblies", {"pageSize": 200}, page=1).get("Items") or []
+        except UnleashedError as e:
+            return "warn", f"Unleashed refused assemblies ({e}); the Production pages need them."
+        if not items:
+            return "ok", "No assemblies in this account"
+        fields["Assembly"] = sorted(items[0].keys())
+        source = "the assembly list"
+        if all(a.get("AssemblyLines") is None for a in items):
+            items = [client.get(f"Assemblies/{a['Guid']}") for a in items[:5] if a.get("Guid")]
+            source = "each assembly's detail (the list leaves components out)"
+        lines = [l for a in items for l in a.get("AssemblyLines") or []]
+        if not lines:
+            return "warn", ("No component lines found on assemblies (checked the list and the detail "
+                            "of 5). See the assembly field names below.")
+        fields["Assembly line"] = sorted(lines[0].keys())
+        statuses = sorted({a.get("AssemblyStatus") or a.get("Status") or "(no status)" for a in items})
+        cost_fields = sorted({f for l in lines for f in ASSEMBLY_LINE_UNIT_COST_FIELDS
+                              + ASSEMBLY_LINE_TOTAL_FIELDS if l.get(f) is not None})
+        summary = f"Components read from {source}. Statuses seen: {', '.join(statuses)}."
+        if not cost_fields:
+            return "warn", (summary + " Component lines carry no cost field the dashboard knows, so "
+                            "production costs are estimated at today's average costs. See the "
+                            "assembly line field names below.")
+        return "ok", summary + f" Component cost read from {', '.join(cost_fields)}."
+
+    check("Production: assemblies", assemblies)
 
     def cogs_cross_check():
         c = reports.cogs(month_start(today))

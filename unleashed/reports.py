@@ -19,6 +19,14 @@ INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
 # Where a PO cost line's amount may live, most specific (base currency, ex tax) first.
 COST_LINE_AMOUNT_FIELDS = ("BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
                            "LineTotal", "Amount", "Total", "Cost", "Value")
+COMPLETED_ASSEMBLY_STATUSES = ("completed", "complete")
+# Assemblies in these states never moved stock, so reports leave them out.
+INACTIVE_ASSEMBLY_STATUSES = ("deleted",)
+# Where an assembly line's cost may live. Without one, components are costed at their
+# current average cost and the order is marked as estimated.
+ASSEMBLY_LINE_UNIT_COST_FIELDS = ("AverageLandedPriceAtTimeOfAssembly", "AverageLandedPrice",
+                                  "UnitCost", "AverageCost", "AvgCost", "Cost")
+ASSEMBLY_LINE_TOTAL_FIELDS = ("TotalCost", "LineTotal", "LineCost", "TotalLineCost")
 
 
 def month_start(d):
@@ -325,6 +333,92 @@ class Reports:
                 "value_change": sum(r["value_change"] or 0 for r in rows),
                 "missing_change": sum(1 for r in rows if r["value_change"] is None)}
 
+    # ------------------------------------------------------------ production
+
+    def unit_costs(self):
+        """{product code: current average cost}, or its default purchase price when none is in
+        stock: for costing BOMs, and assembly lines that carry no cost."""
+        costs = {p.get("ProductCode"): p.get("DefaultPurchasePrice") or 0 for p in self.products()}
+        for r in self.stock_on_hand()["rows"]:
+            if r["avg_cost"]:
+                costs[r["product_code"]] = r["avg_cost"]
+        return costs
+
+    def assemblies(self, start=None, end=None, product=None):
+        """Assemblies (production orders) dated start..end, any status."""
+        items = self.client.get_all("Assemblies", {
+            "startDate": start.isoformat() if start else None,
+            "endDate": end.isoformat() if end else None, "productCode": product})
+        costs = self.unit_costs() if items else {}
+        orders = [self._assembly(i, costs) for i in items]
+        # Also filtered here, in case the API ignores a filter.
+        return [o for o in orders
+                if (not start or (o["date"] and o["date"] >= start))
+                and (not end or (o["date"] and o["date"] <= end))
+                and (not product or o["product_code"] == product)]
+
+    def assembly(self, number):
+        items = self.client.get_all("Assemblies", {"assemblyNumber": number})
+        exact = [i for i in items if i.get("AssemblyNumber") == number]
+        return self._assembly(exact[0], self.unit_costs()) if exact else None
+
+    def _assembly(self, i, costs):
+        status = i.get("AssemblyStatus") or i.get("Status") or ""
+        completed = status.lower() in COMPLETED_ASSEMBLY_STATUSES
+        lines = []
+        for l in i.get("AssemblyLines") or []:
+            prod = l.get("Product") or {}
+            code = prod.get("ProductCode")
+            used, wastage = l.get("Quantity") or 0, l.get("WastageQuantity") or 0
+            consumed = used + wastage
+            unit = _field(l, ASSEMBLY_LINE_UNIT_COST_FIELDS)
+            total = _field(l, ASSEMBLY_LINE_TOTAL_FIELDS)
+            estimated = unit is None and total is None
+            if unit is None:
+                unit = total / consumed if total is not None and consumed else costs.get(code, 0)
+            lines.append({"product_code": code, "description": prod.get("ProductDescription"),
+                          "qty": used, "wastage": wastage, "consumed": consumed,
+                          "unit_cost": unit, "cost": consumed * unit, "estimated": estimated})
+        prod = i.get("Product") or {}
+        qty = i.get("Quantity") or 0
+        cost = sum(l["cost"] for l in lines)
+        date = parse_date(i.get("AssemblyDate"))
+        warehouse = i.get("DestinationWarehouse") or i.get("Warehouse") or {}
+        return {
+            "guid": i.get("Guid"), "number": i.get("AssemblyNumber"), "status": status,
+            "completed": completed,
+            "open": not completed and status.lower() not in INACTIVE_ASSEMBLY_STATUSES,
+            "product_code": prod.get("ProductCode"), "description": prod.get("ProductDescription"),
+            "qty": qty, "date": date, "due": parse_date(i.get("AssembleBy")) or date,
+            "completed_date": (parse_date(i.get("CompletedDate")) or date) if completed else None,
+            "warehouse": warehouse.get("WarehouseName") or warehouse.get("WarehouseCode"),
+            "comments": i.get("Comments"), "lines": lines, "cost": cost,
+            "unit_cost": cost / qty if qty else 0, "estimated": any(l["estimated"] for l in lines),
+        }
+
+    def bills_of_materials(self):
+        items = self.client.get_all("BillOfMaterials")
+        costs = self.unit_costs() if items else {}
+        return [self._bom(b, costs) for b in items]
+
+    def _bom(self, b, costs):
+        lines = []
+        for l in b.get("BillOfMaterialsLines") or []:
+            prod = l.get("Product") or {}
+            code = prod.get("ProductCode")
+            qty, wastage = l.get("Quantity") or 0, l.get("WastageQuantity") or 0
+            unit = costs.get(code) or (l["TotalLineCost"] / qty if l.get("TotalLineCost") and qty else 0)
+            lines.append({"product_code": code, "description": prod.get("ProductDescription"),
+                          "qty": qty, "wastage": wastage, "per_unit": qty + wastage,
+                          "unit_cost": unit, "cost": (qty + wastage) * unit})
+        prod = b.get("Product") or {}
+        return {
+            "guid": b.get("Guid"), "number": b.get("BillNumber"),
+            "product_code": prod.get("ProductCode"), "description": prod.get("ProductDescription"),
+            "obsolete": bool(b.get("Obsolete")), "auto_assemble": bool(b.get("CanAutoAssemble")),
+            "lines": lines, "unit_cost": sum(l["cost"] for l in lines),
+        }
+
     # ------------------------------------------------------------ transactions
 
     def transactions(self, start, end, product=None, doc_type=None):
@@ -338,6 +432,15 @@ class Reports:
                     value = l["line_total"] + o["shipping"] * l["line_total"] / goods
                     rows.append(_txn(o["received_date"], "Purchase", o["number"],
                                      o["supplier_name"], l, qty, value))
+        if doc_type in (None, "Production"):
+            for a in self.assemblies(start, end):
+                if not a["completed"] or not start <= a["completed_date"] <= end:
+                    continue
+                for l in a["lines"]:  # components used, then the product made
+                    rows.append(_txn(a["completed_date"], "Production", a["number"],
+                                     f"Used for {a['product_code']}", l, -l["consumed"], -l["cost"]))
+                rows.append(_txn(a["completed_date"], "Production", a["number"], "Made", a,
+                                 a["qty"], a["cost"]))
         if doc_type in (None, "Sale"):
             for o in self.sales_orders(start, end, status="Completed"):
                 for l in o["lines"]:
@@ -349,7 +452,7 @@ class Reports:
                                  a["qty_change"], a["value_change"]))
         if product:
             rows = [r for r in rows if r["product_code"] == product]
-        order = {"Purchase": 0, "Sale": 1, "Adjustment": 2}
+        order = {"Purchase": 0, "Production": 1, "Sale": 2, "Adjustment": 3}
         rows.sort(key=lambda r: (r["date"], order[r["type"]], r["number"]))
         return rows
 
@@ -468,6 +571,11 @@ def cost_line_amount(line):
 def _first(*values):
     """First value that isn't None (a null BC field falls back to the plain one)."""
     return next((v for v in values if v is not None), 0)
+
+
+def _field(record, names):
+    """The first of `names` that `record` has a value for, or None."""
+    return next((record[n] for n in names if record.get(n) is not None), None)
 
 
 def _txn(date, kind, number, party, line, qty, value):

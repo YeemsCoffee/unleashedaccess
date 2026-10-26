@@ -38,9 +38,12 @@ def money(v, cents=True):
 
 @bp.app_template_filter("qty")
 def qty(v):
+    """Whole numbers as is; fractions to 3 places without trailing zeros (0.126 kg, 2.75)."""
     if v is None:
         return "—"
-    return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.2f}"
+    if abs(v) < 0.0005:
+        return "0"
+    return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.3f}".rstrip("0").rstrip(".")
 
 
 @bp.app_template_filter("pct")
@@ -124,6 +127,10 @@ _TABS = [
     ("Valuation", [("dash.stock_valuation", "Valuation")]),
     ("Purchases", [("dash.purchases", "Purchases")]),
     ("Sales", [("dash.sales", "Sales")]),
+    ("Production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
+                    ("dash.production_requirements", "Material requirements"),
+                    ("dash.production_boms", "Bills of materials"),
+                    ("dash.production_usage", "Component usage")]),
     ("Transactions", [("dash.transactions", "All transactions"),
                       ("dash.stock_movement", "Stock movement"), ("dash.adjustments", "Adjustments")]),
 ]
@@ -131,6 +138,8 @@ _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "
                               ("dash.api_log", "API log")])
 # Pages shown under another page's tab.
 _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
+            "dash.production_order": "dash.production_orders",
+            "dash.production_bom": "dash.production_boms",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
 
 
@@ -613,6 +622,134 @@ def transactions():
                            csv_url=_csv_url())
 
 
+# ---------------------------------------------------------------- production
+
+def _production():
+    return _ext()["production"]
+
+
+def _production_problem():
+    """Why Unleashed returned no production data, when it refused the request."""
+    store = _ext()["store"]
+    return store.get_state("unavailable:Assemblies") or store.get_state("unavailable:BillOfMaterials")
+
+
+def _render_production(template, **context):
+    return render_template(f"dash/{template}.html", problem=_production_problem(), **context)
+
+
+@bp.get("/production")
+def production():
+    p = _production()
+    month = _month_arg(month_start(p.today))
+    if month > p.today:
+        month = month_start(p.today)
+    ov = p.overview(month)
+    u = ov["usage"]
+    days = [month + dt.timedelta(days=i) for i in range((ov["through"] - month).days + 1)]
+    bars = [(str(d.day), u["by_day"].get(d, 0),
+             f'{d:%a %b} {d.day} · {money(u["by_day"].get(d, 0))} made') for d in days]
+    chart = charts.bar_chart(bars, f"Production value by day, {month_name(month)}",
+                             highlight_last=False)
+    return _render_production("production", ov=ov, u=u, req=ov["requirements"], month=month,
+                              chart=chart)
+
+
+@bp.get("/production/orders")
+def production_orders():
+    p = _production()
+    start, end = _range_args()
+    status = request.args.get("status") or None
+    product = request.args.get("product") or None
+    po = p.orders(start, end, status, product)
+    if _wants_csv():
+        return _csv("production-orders", [
+            ("Order", "number"), ("Assembly date", lambda x: _iso(x["date"])),
+            ("Assemble by", lambda x: _iso(x["due"])), ("Status", "status"),
+            ("Product Code", "product_code"), ("Description", "description"), ("Qty", "qty"),
+            ("Component cost", lambda x: round(x["cost"], 2)),
+            ("Unit cost", lambda x: round(x["unit_cost"], 4)),
+            ("Cost estimated", lambda x: "yes" if x["estimated"] else ""),
+        ], po["orders"])
+    return _render_production("production_orders", po=po, start=start, end=end, status=status,
+                              product=product, made=_made_products(), csv_url=_csv_url())
+
+
+@bp.get("/production/orders/<number>")
+def production_order(number):
+    order = _production().order(number)
+    if order is None:
+        abort(404)
+    return _render_production("production_order", o=order)
+
+
+@bp.get("/production/requirements")
+def production_requirements():
+    through = _date_arg("through", None)
+    req = _production().requirements(through)
+    if _wants_csv():
+        return _csv("material-requirements", [
+            ("Component", "product_code"), ("Description", "description"),
+            ("Open orders", "orders"), ("Required", lambda x: round(x["required"], 4)),
+            ("On hand", "on_hand"), ("Available", "available"), ("On purchase", "on_purchase"),
+            ("Short now", lambda x: round(x["shortage"], 4)),
+            ("Short after purchases", lambda x: round(x["shortage_after_po"], 4)),
+            ("Source", lambda x: "Make" if x["made_here"] else "Buy"),
+        ], req["components"])
+    return _render_production("production_requirements", req=req, through=through, csv_url=_csv_url())
+
+
+@bp.get("/production/boms")
+def production_boms():
+    component = request.args.get("component") or None
+    boms = _production().boms(component=component)
+    if _wants_csv():
+        return _csv("bills-of-materials", [
+            ("Bill", lambda x: x[0]["number"]), ("Product Code", lambda x: x[0]["product_code"]),
+            ("Obsolete", lambda x: "yes" if x[0]["obsolete"] else ""),
+            ("Component", lambda x: x[1]["product_code"]), ("Description", lambda x: x[1]["description"]),
+            ("Qty per unit", lambda x: x[1]["qty"]), ("Wastage per unit", lambda x: x[1]["wastage"]),
+            ("Unit cost", lambda x: round(x[1]["unit_cost"], 4)),
+            ("Cost per unit made", lambda x: round(x[1]["cost"], 4)),
+        ], [(b, l) for b in boms for l in b["lines"]])
+    components = sorted({(l["product_code"], l["description"]) for b in _production().reports.bills_of_materials()
+                         for l in b["lines"]}, key=lambda c: c[0] or "")
+    return _render_production("production_boms", boms=boms, component=component,
+                              components=components, csv_url=_csv_url())
+
+
+@bp.get("/production/boms/<number>")
+def production_bom(number):
+    bom = _production().bom(number)
+    if bom is None:
+        abort(404)
+    return _render_production("production_bom", b=bom)
+
+
+@bp.get("/production/usage")
+def production_usage():
+    start, end = _range_args()
+    u = _production().usage(start, end)
+    if _wants_csv():
+        return _csv("component-usage", [
+            ("Component", "product_code"), ("Description", "description"), ("Orders", "orders"),
+            ("Used", lambda x: round(x["qty"], 4)), ("Wastage", lambda x: round(x["wastage"], 4)),
+            ("Total", lambda x: round(x["consumed"], 4)), ("Cost", lambda x: round(x["cost"], 2)),
+            ("Wastage cost", lambda x: round(x["wastage_cost"], 2)),
+        ], u["components"])
+    return _render_production("production_usage", u=u, start=start, end=end, csv_url=_csv_url())
+
+
+def _made_products():
+    """(code, description) of every product with a bill of materials, for filters."""
+    return sorted({(b["product_code"], b["description"])
+                   for b in _production().reports.bills_of_materials()}, key=lambda p: p[0] or "")
+
+
+def _iso(d):
+    return d.isoformat() if d else ""
+
+
 @bp.get("/api-log")
 @admin_only
 def api_log():
@@ -642,14 +779,17 @@ def connection():
             except UnleashedError as e:
                 result = {"ok": False, "message": str(e)}
     store = ext["store"]
-    windows = {LABEL: store.get_state(f"window:{ep}") for ep, LABEL in
-               (("PurchaseOrders", "Purchase orders"), ("SalesOrders", "Sales orders"),
-                ("StockAdjustments", "Stock adjustments"))}
-    counts = {ep: store.document_count(ep) for ep in ("PurchaseOrders", "SalesOrders",
-                                                     "StockAdjustments")}
+    # (label, how many stored, from which date, why Unleashed refused it)
+    stored = [(label, store.document_count(ep), store.get_state(f"window:{ep}"),
+               store.get_state(f"unavailable:{ep}"))
+              for ep, label in (("PurchaseOrders", "Purchase orders"), ("SalesOrders", "Sales orders"),
+                                ("StockAdjustments", "Stock adjustments"),
+                                ("Assemblies", "Assemblies (production)"))]
+    stored.append(("Bills of materials", len(store.records("BillOfMaterials")), None,
+                   store.get_state("unavailable:BillOfMaterials")))
     return render_template("dash/connection.html", result=result, checks=checks,
-                           fields=fields, ext=ext, runs=store.runs(10), windows=windows,
-                           counts=counts, running=_sync_running())
+                           fields=fields, ext=ext, runs=store.runs(10), stored=stored,
+                           running=_sync_running())
 
 
 @bp.post("/sync")
@@ -673,6 +813,7 @@ def init_app(app):
 
     from unleashed.client import WsgiTransport
     from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app
+    from unleashed.production import Production
     from unleashed.reports import Reports
     from unleashed.store import LocalStore, LocalStoreClient, SourceMismatch, utc_now
     from unleashed.sync import Syncer, SyncScheduler
@@ -740,10 +881,11 @@ def init_app(app):
     if syncer is not None:
         syncer.on_complete.append(store_client.clear_cache)
 
+    reports = Reports(store_client, today_fn=today_fn)
     app.extensions["unleashed"] = {
         "mode": mode, "client": client, "live_client": live_client, "db": db,
         "store": store, "syncer": syncer, "scheduler": scheduler,
-        "reports": Reports(store_client, today_fn=today_fn),
+        "reports": reports, "production": Production(reports),
         "base_url": cfg["UNLEASHED_BASE_URL"], "display_tz": display_tz,
         "has_credentials": bool(cfg["UNLEASHED_API_ID"] and cfg["UNLEASHED_API_KEY"]),
         "source_error": source_error,

@@ -1,0 +1,31 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import production_notice %}
+{% block title %}Bills of materials{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Bills of materials</h1>
+  <form method="get" class="filters">
+    <label>Uses component <select name="component"><option value="">Any</option>
+      {% for code, desc in components %}<option value="{{ code }}" {{ 'selected' if code == component }}>{{ code }} — {{ desc }}</option>{% endfor %}</select></label>
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+</div>
+{{ production_notice(problem) }}
+<p class="muted">Recipe cost is one unit's components, wastage included, at today's average costs. "Could make now"
+  is how many units available stock covers, ignoring other open orders.</p>
+<section class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Bill</th><th>Product</th><th class="num">Components</th><th class="num">Recipe cost per unit</th><th class="num">Could make now</th><th>Last made</th><th></th></tr></thead>
+    <tbody>
+    {% for b in boms %}
+    <tr><td><a href="{{ url_for('dash.production_bom', number=b.number) }}">{{ b.number }}</a></td>
+      <td>{{ b.description or b.product_code }}</td><td class="num">{{ b.lines|length }}</td>
+      <td class="num">{{ b.unit_cost|money }}</td><td class="num">{{ b.buildable if b.buildable is not none else '—' }}</td>
+      <td>{{ b.last_made|d }}</td>
+      <td>{% if b.obsolete %}<span class="pill pill-obsolete">Obsolete</span>{% endif %}{% if b.auto_assemble %}<span class="pill">Auto-assemble</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No bills of materials{{ ' use ' ~ component if component }}.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

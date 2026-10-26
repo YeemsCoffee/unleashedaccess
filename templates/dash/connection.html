@@ -33,8 +33,9 @@
     in the background every {{ config.SYNC_INTERVAL_MINUTES }} minutes with whatever changed in Unleashed, and
     re-copies everything once a week. Older date ranges than the copy covers are fetched live from Unleashed.</p>
   <dl class="facts">
-    {% for label, start in windows.items() %}
-    <div><dt>{{ label }}</dt><dd>{{ counts[['PurchaseOrders', 'SalesOrders', 'StockAdjustments'][loop.index0]] }} stored{{ ', from ' ~ start if start }}</dd></div>
+    {% for label, n, start, problem in stored %}
+    <div><dt>{{ label }}</dt><dd>{{ n }} stored{{ ', from ' ~ start if start and start != 'all' }}
+      {% if problem %}<span class="pill pill-short" title="{{ problem }}">Not available</span>{% endif %}</dd></div>
     {% endfor %}
   </dl>
   <form method="post" action="{{ url_for('dash.sync_now') }}" class="filters">

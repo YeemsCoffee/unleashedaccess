@@ -7,6 +7,10 @@ all reconcile the way a real Unleashed account does:
 
     opening value + received purchases (incl. freight) - closing value
         == cost of sales + net adjustment write-offs
+
+House-made products are assembled from bills of materials: an assembly uses
+its components (quantity plus wastage) at their average cost and adds the same
+value to the made product, so assemblies move value without changing the total.
 """
 import bisect
 import datetime as dt
@@ -18,7 +22,8 @@ WAREHOUSES = [
     {"WarehouseCode": "GDN", "WarehouseName": "Gardena Store", "IsDefault": True},
 ]
 
-# code, description, group, unit, supplier, base cost, sell price, avg daily use
+# code, description, group, unit, supplier, base cost, sell price, avg daily use.
+# Products without a supplier are made in-house (see BILLS_OF_MATERIALS).
 PRODUCTS = [
     ("MILK-WHL-GAL", "Whole Milk 1 gal", "Dairy", "Each", "SUP-DAIRY", 4.20, 13.50, 9.0),
     ("CRM-HVY-HG", "Heavy Cream 1/2 gal", "Dairy", "Each", "SUP-DAIRY", 9.50, 28.00, 2.5),
@@ -33,7 +38,21 @@ PRODUCTS = [
     ("CUP-12-HOT", "Hot Cup 12 oz (case 1000)", "Packaging", "Case", "SUP-PACK", 78.00, 190.00, 0.12),
     ("CUP-16-COLD", "Cold Cup 16 oz (case 1000)", "Packaging", "Case", "SUP-PACK", 92.00, 220.00, 0.15),
     ("LID-HOT", "Hot Lid (case 1000)", "Packaging", "Case", "SUP-PACK", 41.00, 100.00, 0.12),
+    ("JUG-GAL", "Gallon Jug", "Packaging", "Each", "SUP-PACK", 0.85, 0.00, 0.0),
+    ("CB-CONC-GAL", "Cold Brew Concentrate 1 gal", "House-made", "Each", None, None, 38.00, 1.6),
+    ("VSC-HG", "Vanilla Sweet Cream 1/2 gal", "House-made", "Each", None, None, 30.00, 1.2),
+    ("MATCHA-QT", "Matcha Concentrate 32 oz", "House-made", "Each", None, None, 32.00, 0.5),
 ]
+
+# bill number, made product, [(component, qty per unit, wastage per unit)], batch days
+BILLS_OF_MATERIALS = [
+    ("BOM-CB", "CB-CONC-GAL", [("COF-ESP-5LB", 0.35, 0.01), ("JUG-GAL", 1, 0)], 4),
+    ("BOM-VSC", "VSC-HG", [("CRM-HVY-HG", 0.5, 0.02), ("MILK-WHL-GAL", 0.25, 0),
+                           ("SYR-VAN-750", 0.2, 0)], 3),
+    ("BOM-MATCHA", "MATCHA-QT", [("TEA-MATCHA-1KG", 0.04, 0.002), ("SYR-VAN-750", 0.1, 0)], 6),
+]
+# An old recipe kept in Unleashed but no longer made.
+OBSOLETE_BOMS = [("BOM-CB-OLD", "CB-CONC-GAL", [("COF-ESP-5LB", 0.4, 0.02), ("JUG-GAL", 1, 0)])]
 
 # code, name, order weekdays (Mon=0), lead days, freight per PO, days of cover
 SUPPLIERS = [
@@ -75,10 +94,23 @@ class MockDataset:
         }
         self.customers = {code: {"CustomerCode": code, "CustomerName": name, "Guid": self._guid()}
                           for code, name in CUSTOMERS}
+        self.boms = [self._bom(number, code, lines, batch_days)
+                     for number, code, lines, batch_days in BILLS_OF_MATERIALS]
+        self.boms += [self._bom(number, code, lines, None, obsolete=True)
+                      for number, code, lines in OBSOLETE_BOMS]
+        for p in self.products.values():
+            p["PlanUse"] = p["DailyUse"]  # sales plus what production uses
+        for bom in self.active_boms():
+            made = self.products[bom["ProductCode"]]
+            made["BaseCost"] = round(sum(self.products[l["ProductCode"]]["BaseCost"] * _per_unit(l)
+                                         for l in bom["Lines"]), 4)
+            for l in bom["Lines"]:
+                self.products[l["ProductCode"]]["PlanUse"] += _per_unit(l) * made["DailyUse"]
 
         self.purchase_orders = []
         self.sales_orders = []
         self.stock_adjustments = []
+        self.assemblies = []
         self.ledger = []  # every stock movement, chronological
 
         # engine state
@@ -86,7 +118,7 @@ class MockDataset:
         self._value = {c: 0.0 for c in self.products}
         self._on_order = {c: 0.0 for c in self.products}
         self._snap = {c: ([], [], []) for c in self.products}  # ordinals, qty, value
-        self._seq = {"PO": 0, "SO": 0, "SA": 0}
+        self._seq = {"PO": 0, "SO": 0, "SA": 0, "ASM": 0}
 
         self._simulate()
 
@@ -105,6 +137,9 @@ class MockDataset:
 
     def on_order(self, product_code):
         return self._on_order[product_code]
+
+    def active_boms(self):
+        return [b for b in self.boms if not b["Obsolete"]]
 
     def allocated(self, product_code):
         return sum(line["OrderQuantity"] for so in self.sales_orders
@@ -133,6 +168,7 @@ class MockDataset:
                 self._receive(po)
                 pending_receipts.remove(po)
 
+            self._produce(day)
             self._pos_sales(day, month_factor)
             if day.weekday() == 4:
                 self._wholesale_order(day)
@@ -160,7 +196,8 @@ class MockDataset:
     def _opening_balance(self, day):
         lines = []
         for p in self.products.values():
-            qty = math.ceil(p["DailyUse"] * self.suppliers[p["SupplierCode"]]["CoverDays"] * 0.8) or 1
+            cover = self.suppliers[p["SupplierCode"]]["CoverDays"] if p["SupplierCode"] else 3
+            qty = math.ceil(p["PlanUse"] * cover * 0.8) or 1
             lines.append((p["ProductCode"], qty, p["BaseCost"]))
         self._adjustment(day, "Opening Balance", [
             {"ProductCode": c, "Qty": q, "Value": round(q * cost, 2), "Comments": "Opening stock"}
@@ -172,7 +209,7 @@ class MockDataset:
         for p in self.products.values():
             if p["SupplierCode"] != sup["SupplierCode"]:
                 continue
-            target = p["DailyUse"] * sup["CoverDays"]
+            target = p["PlanUse"] * sup["CoverDays"]
             position = self._qty[p["ProductCode"]] + self._on_order[p["ProductCode"]]
             if position >= target * 0.6:
                 continue
@@ -208,6 +245,45 @@ class MockDataset:
             self._on_order[code] -= line["OrderQuantity"]
             self._move(po["ReceivedDate"], "Purchase", po["OrderNumber"], po["SupplierCode"],
                        code, line["OrderQuantity"], value)
+
+    def _produce(self, day):
+        """Make a batch of each house-made product that's running low, before the day's sales."""
+        for bom in self.active_boms():
+            made = self.products[bom["ProductCode"]]
+            if self._qty[made["ProductCode"]] >= made["DailyUse"] * 1.5:
+                continue
+            qty = min(math.ceil(made["DailyUse"] * bom["BatchDays"]), self._buildable(bom))
+            if qty >= 1:
+                self._assemble(day, bom, qty)
+
+    def _buildable(self, bom):
+        return min(int(self._qty[l["ProductCode"]] / _per_unit(l)) for l in bom["Lines"])
+
+    def _assemble(self, day, bom, qty, status="Completed", due=None):
+        made = bom["ProductCode"]
+        asm = {"Guid": self._guid(), "AssemblyNumber": self._next("ASM"), "ProductCode": made,
+               "Quantity": qty, "AssemblyDate": day, "AssembleBy": due or day, "Status": status,
+               "Lines": []}
+        total = 0.0
+        for l in bom["Lines"]:
+            code = l["ProductCode"]
+            line = {"ProductCode": code, "Quantity": round(l["Quantity"] * qty, 4),
+                    "WastageQuantity": round(l["WastageQuantity"] * qty, 4)}
+            if status == "Completed":
+                if l["WastageQuantity"] and self.rng.random() < 0.3:  # a messier batch than planned
+                    extra = round(l["Quantity"] * qty * self.rng.uniform(0.01, 0.06), 4)
+                    line["WastageQuantity"] = round(min(line["WastageQuantity"] + extra,
+                                                        self._qty[code] - line["Quantity"]), 4)
+                used = line["Quantity"] + line["WastageQuantity"]
+                avg = self._value[code] / self._qty[code]
+                self._move(day, "Assembly", asm["AssemblyNumber"], made, code, -used, -used * avg)
+                line["UnitCost"] = round(avg, 4)
+                total += used * avg
+            asm["Lines"].append(line)
+        if status == "Completed":
+            self._move(day, "Assembly", asm["AssemblyNumber"], made, made, qty, total)
+        self.assemblies.append(asm)
+        return asm
 
     def _pos_sales(self, day, month_factor):
         lines = []
@@ -307,6 +383,16 @@ class MockDataset:
             "Lines": [{"ProductCode": "MILK-WHL-GAL", "NewQuantity": 0, "NewActualValue": 0.0,
                        "Comments": "Wrong product"}],
         })
+        # Planned production: the next batch of each product, an overdue catering batch
+        # that needs more matcha than is in stock, and a cancelled one.
+        boms = {b["ProductCode"]: b for b in self.active_boms()}
+        for i, bom in enumerate(boms.values(), 1):
+            made = self.products[bom["ProductCode"]]
+            self._assemble(self.today, bom, math.ceil(made["DailyUse"] * bom["BatchDays"]),
+                           status="Parked", due=self.today + dt.timedelta(days=i))
+        self._assemble(self.today - dt.timedelta(days=4), boms["MATCHA-QT"], 60, status="Parked",
+                       due=self.today - dt.timedelta(days=1))
+        self._assemble(self.today - dt.timedelta(days=6), boms["CB-CONC-GAL"], 5, status="Deleted")
 
     # ------------------------------------------------------------ primitives
 
@@ -323,12 +409,22 @@ class MockDataset:
                             "ProductCode": code, "Quantity": qty, "Value": value,
                             "QtyAfter": self._qty[code], "ValueAfter": self._value[code]})
 
+    def _bom(self, number, code, lines, batch_days, obsolete=False):
+        return {"Guid": self._guid(), "BillNumber": number, "ProductCode": code,
+                "BatchDays": batch_days, "Obsolete": obsolete,
+                "Lines": [{"ProductCode": c, "Quantity": q, "WastageQuantity": w} for c, q, w in lines]}
+
     def _next(self, prefix):
         self._seq[prefix] += 1
         return f"{prefix}-{self._seq[prefix]:08d}"
 
     def _guid(self):
         return str(uuid.UUID(int=self.rng.getrandbits(128), version=4))
+
+
+def _per_unit(bom_line):
+    """Component used per unit made, wastage included."""
+    return bom_line["Quantity"] + bom_line["WastageQuantity"]
 
 
 def _random_round(rng, x):

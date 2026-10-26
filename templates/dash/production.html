@@ -1,0 +1,77 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import production_notice, materials_pill, vs_standard %}
+{% block title %}Production{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Production, {{ month|month_name }}</h1>
+  <form method="get" class="filters">
+    <label>Month <input type="month" name="month" value="{{ month.strftime('%Y-%m') }}"></label>
+    <button class="btn btn-primary">Show</button>
+  </form>
+</div>
+{{ production_notice(problem) }}
+
+<section class="tiles">
+  <div class="tile card">
+    <div class="tile-label">Orders completed</div>
+    <div class="tile-value">{{ u.orders|length }}</div>
+    <div class="tile-sub">{{ u.qty_made|qty }} units made through {{ ov.through|d }}</div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Production value</div>
+    <div class="tile-value">{{ u.cost|money(false) }}</div>
+    <div class="tile-sub">components used, at cost{{ ' (partly estimated)' if u.estimated }}</div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Wastage</div>
+    <div class="tile-value">{{ u.wastage_cost|money(false) }}</div>
+    <div class="tile-sub">{{ u.wastage_pct|pct }} of components used</div>
+  </div>
+  <div class="tile card">
+    <div class="tile-label">Open production orders</div>
+    <div class="tile-value">{{ req.orders|length }}</div>
+    <div class="tile-sub">{{ req.short_orders }} short of materials · {{ req.overdue }} overdue ·
+      <a href="{{ url_for('dash.production_requirements') }}">requirements</a></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Production value by day</h2>
+    <a href="{{ url_for('dash.production_usage', start=month.isoformat(), end=ov.through.isoformat()) }}">Component usage →</a>
+  </div>
+  {{ chart }}
+</section>
+
+<div class="two-col">
+<section class="card">
+  <div class="card-head">
+    <h2>Open orders by due date</h2>
+    <a href="{{ url_for('dash.production_requirements') }}">Material requirements →</a>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Product</th><th class="num">Qty</th><th>Assemble by</th><th>Materials</th></tr></thead>
+    <tbody>
+    {% for o in req.orders[:12] %}
+    <tr><td class="nowrap"><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.description or o.product_code }}</td><td class="num">{{ o.qty|qty }}</td>
+      <td class="nowrap">{{ o.due|d }}</td><td>{{ materials_pill(o) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No open production orders.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<section class="card">
+  <h2>Made in {{ month|month_name }}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Unit cost</th><th class="num">vs recipe</th></tr></thead>
+    <tbody>
+    {% for p in u.products %}
+    <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
+      <td class="num">{{ p.unit_cost|money }}</td><td class="num">{{ vs_standard(p.variance_pct) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">Nothing completed this month yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted">"vs recipe" compares the unit cost with the bill of materials at today's average costs.</p>
+</section>
+</div>
+{% endblock %}

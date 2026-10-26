@@ -11,3 +11,24 @@
 {% macro status_pill(status) %}
 <span class="pill pill-{{ (status or '')|lower }}">{{ status }}</span>
 {% endmacro %}
+
+{% macro doc_link(t) %}
+{%- set endpoint = {'Purchase': 'dash.purchase_detail', 'Sale': 'dash.sales_detail', 'Production': 'dash.production_order'}.get(t.type) -%}
+{%- if endpoint %}<a href="{{ url_for(endpoint, number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif -%}
+{% endmacro %}
+
+{% macro production_notice(problem) %}
+{% if problem %}
+<p class="recon recon-warn">! Unleashed didn't return production data: {{ problem }}. The Production pages read
+  assemblies and bills of materials, so the Unleashed API user needs access to them.</p>
+{% endif %}
+{% endmacro %}
+
+{% macro materials_pill(order) %}
+{% if order.ready %}<span class="pill pill-ready">Ready</span>{% else %}<span class="pill pill-short">Short</span>{% endif %}
+{% if order.overdue %}<span class="pill pill-overdue">Overdue</span>{% endif %}
+{% endmacro %}
+
+{% macro vs_standard(pct) %}
+{% if pct is none %}—{% else %}<span class="{{ 'over' if pct > 0.005 else 'under' if pct < -0.005 }}">{{ '+' if pct > 0 }}{{ pct|pct }}</span>{% endif %}
+{% endmacro %}

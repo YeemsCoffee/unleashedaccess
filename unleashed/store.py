@@ -19,9 +19,15 @@ from .client import UnleashedError, parse_date
 # Reference lists, replaced wholesale on every sync: endpoint -> key field.
 REFERENCE_ENDPOINTS = {
     "Products": "Guid", "ProductGroups": "GroupName", "Warehouses": "WarehouseCode",
-    "Suppliers": "Guid", "Customers": "Guid",
+    "Suppliers": "Guid", "Customers": "Guid", "BillOfMaterials": "Guid",
 }
-DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments")
+DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments", "Assemblies")
+# Production endpoints: an account (or API user) without access to them still syncs
+# everything else, and the Production pages say why they're empty.
+OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies"}
+# Copied whole rather than from a date window: parked assemblies can be older than any window.
+UNWINDOWED_ENDPOINTS = {"Assemblies"}
+ALL_DATES = "all"  # the stored window of an unwindowed endpoint
 CURRENT = "current"
 
 
@@ -49,6 +55,10 @@ def document_columns(endpoint, d):
         return (d.get("OrderNumber"), d.get("OrderStatus"), _iso(d.get("OrderDate")),
                 (d.get("Customer") or {}).get("CustomerCode"),
                 _iso(d.get("CompletedDate") or d.get("OrderDate")))
+    if endpoint == "Assemblies":
+        return (d.get("AssemblyNumber"), d.get("AssemblyStatus") or d.get("Status"),
+                _iso(d.get("AssemblyDate")), (d.get("Product") or {}).get("ProductCode"),
+                _iso(d.get("CompletedDate") or d.get("AssemblyDate")))
     return (d.get("AdjustmentNumber"), d.get("Status"), _iso(d.get("AdjustmentDate")), None,
             _iso(d.get("AdjustmentDate")))
 
@@ -371,17 +381,20 @@ class LocalStoreClient:
         start = params.get("startDate")
         window = self._memo(("window", endpoint),
                             lambda: self.store.get_state(f"window:{endpoint}"))
-        if start and window and start[:10] < window:
+        if start and window and window != ALL_DATES and start[:10] < window:
             return self._live(endpoint, params,
                               f"Dates before {window} aren't in the shared copy of Unleashed data")
-        statuses = [s.strip() for s in params["orderStatus"].split(",")] \
-            if params.get("orderStatus") else None
-        number = params.get("orderNumber") or params.get("adjustmentNumber")
+        status = params.get("orderStatus") or params.get("assemblyStatus")
+        statuses = [s.strip() for s in status.split(",")] if status else None
+        number = params.get("orderNumber") or params.get("adjustmentNumber") \
+            or params.get("assemblyNumber")
+        party = params.get("supplierCode") or params.get("customerCode")
+        if endpoint == "Assemblies":
+            party = params.get("productCode")
         items = self.store.query_documents(
             endpoint, start=start[:10] if start else None,
             end=params["endDate"][:10] if params.get("endDate") else None,
-            statuses=statuses, party=params.get("supplierCode") or params.get("customerCode"),
-            number=number)
+            statuses=statuses, party=party, number=number)
         if number and not items and self.live:
             return self.live.get_all(endpoint, params)
         return items

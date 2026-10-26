@@ -16,8 +16,8 @@ Unleashed API ──────────────────────
 ```
 
 - **First start:** the app copies 13 months of purchase orders, sales
-  orders, stock adjustments, products, suppliers and customers, plus the stock
-  snapshots the COGS reports need. This takes a minute or two; the dashboard
+  orders, stock adjustments, products, suppliers and customers, every assembly
+  and bill of materials, plus the stock snapshots the COGS reports need. This takes a minute or two; the dashboard
   shows progress meanwhile.
 - **Every 15 minutes:** it fetches documents modified since the last sync
   (Unleashed `modifiedSince`) and current stock, and re-checks the last 7
@@ -52,7 +52,12 @@ app's tables in it.
 | Valuation | Stock valuation by product group |
 | Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
 | Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
-| Transactions | Full history of purchase receipts, completed sales and stock adjustments |
+| Production | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
+| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance |
+| Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
+| Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
+| Production → Component usage | Components used and wasted, and products made, over any period |
+| Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |
 | Transactions → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
 | Transactions → Adjustments | Stock adjustment enquiry |
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
@@ -74,18 +79,45 @@ The COGS page also cross-checks the result against cost of sales (average
 landed cost × quantity on completed sales orders) plus stock write-offs, and
 flags any gap.
 
+## Production
+
+Production reads Unleashed **assemblies** (production orders) and **bills of
+materials** (recipes), organised like an ERP's production module:
+
+| ERP idea | Here | From Unleashed |
+|----------|------|----------------|
+| Production order | Production orders | Assemblies: Parked = open, Completed = made |
+| Recipe / bill of materials | Bills of materials | Bills of materials, costed at today's average costs |
+| Material availability check (MRP) | Material requirements | Open assemblies' components against stock on hand, sales allocations and open purchase orders |
+| Goods issue / goods receipt | Transactions (type Production) | Completed assemblies: components out, product in |
+| Order costing and variances | Production order detail, Component usage | Components used against the recipe × the order quantity |
+
+- **Components used** = each assembly line's quantity plus its wastage.
+- **Cost**: from the assembly line's cost when Unleashed gives one; otherwise
+  estimated at today's average cost and marked with *. **Check live data**
+  reports which cost field your account returns.
+- **Material requirements** gives stock to open orders in due-date (Assemble
+  by) order, so an order is Ready only if what's left after earlier orders
+  covers it.
+- Assemblies only move value between products, so COGS is unchanged by them.
+- If the API user can't read assemblies or bills of materials, everything else
+  still syncs, and the Production pages say why they're empty.
+
 ## The mock Unleashed server
 
 `unleashed/mock_server.py` implements the endpoints the dashboard uses, with
 the same request signing (`api-auth-id` / `api-auth-signature`), paging and
 JSON shapes as the real API: `/Products`, `/ProductGroups`, `/Warehouses`,
 `/Suppliers`, `/Customers`, `/StockOnHand` (including `asAtDate`),
-`/PurchaseOrders`, `/SalesOrders`, `/StockAdjustments`.
+`/PurchaseOrders`, `/SalesOrders`, `/StockAdjustments`, `/Assemblies`,
+`/BillOfMaterials`.
 
 Its data (`unleashed/mock_data.py`) is about 13 months of simulated café
 history: dairy, coffee, syrup and packaging purchase orders with freight,
-daily point-of-sale sales orders, wholesale and catering orders, and month-end
-spoilage write-offs. A small weighted-average-cost inventory engine drives it,
+daily point-of-sale sales orders, wholesale and catering orders, month-end
+spoilage write-offs, and house-made cold brew, sweet cream and matcha
+assembled from bills of materials (with some batches wasting more than the
+recipe, and open orders that are short of matcha). A small weighted-average-cost inventory engine drives it,
 so the books reconcile exactly.
 
 In mock mode the server is also reachable at `/mock-unleashed/...`, or run it
@@ -109,7 +141,9 @@ on its own with `python mock_unleashed.py` (port 8100).
    - stock adjustment lines carry quantity and value changes, broken down by
      adjustment status. Deleted and parked adjustments never moved stock and
      are left out of every report;
-   - this month's COGS formula agrees with cost of sales plus write-offs.
+   - this month's COGS formula agrees with cost of sales plus write-offs;
+   - bills of materials and assemblies can be read, assembly lines list their
+     components, and which cost field they carry.
 
    It also lists the field names your account returns (names only, no
    values) so a mismatch can be fixed quickly.
@@ -327,6 +361,7 @@ unleashedaccess/
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
+│   ├── production.py   # production orders, BOM costing, material requirements, usage
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)
 │   ├── store.py        # the data copy + a client that answers queries from it
 │   ├── sync.py         # full/incremental sync from the API + background scheduler

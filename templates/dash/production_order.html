@@ -1,0 +1,62 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill, production_notice %}
+{% block title %}{{ o.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Production order {{ o.number }} {{ status_pill(o.status) }}</h1>
+  <a href="{{ url_for('dash.production_orders') }}">← Production orders</a>
+</div>
+{{ production_notice(problem) }}
+<section class="card">
+  <dl class="facts">
+    <div><dt>Product</dt><dd>{{ o.description }} ({{ o.product_code }})</dd></div>
+    <div><dt>Quantity</dt><dd>{{ o.qty|qty }}</dd></div>
+    <div><dt>Assembly date</dt><dd>{{ o.date|d }}</dd></div>
+    <div><dt>Assemble by</dt><dd>{{ o.due|d }}</dd></div>
+    {% if o.completed %}<div><dt>Completed</dt><dd>{{ o.completed_date|d }}</dd></div>{% endif %}
+    {% if o.warehouse %}<div><dt>Warehouse</dt><dd>{{ o.warehouse }}</dd></div>{% endif %}
+    <div><dt>Bill of materials</dt><dd>{% if o.bom %}<a href="{{ url_for('dash.production_bom', number=o.bom.number) }}">{{ o.bom.number }}</a>{% else %}None found{% endif %}</dd></div>
+  </dl>
+  {% if o.comments %}<p>{{ o.comments }}</p>{% endif %}
+  {% if o.open %}
+  <p class="recon {{ 'recon-warn' if o.short else 'recon-ok' }}">
+    {% if o.short %}! Not enough stock available for every component (see Short below). Material requirements
+      shows which orders get stock first.{% else %}✓ Available stock covers every component.{% endif %}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Components</h2>
+  <div class="table-wrap"><table>
+    {% if o.completed %}
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe</th><th class="num">Used</th><th class="num">Wastage</th><th class="num">Total used</th><th class="num">Variance</th><th class="num">Unit cost</th><th class="num">Cost</th><th class="num">Variance cost</th></tr></thead>
+    <tbody>{% for c in o.components %}
+    <tr class="{{ 'row-warn' if c.variance and c.variance > 0.0001 }}"><td>{{ c.product_code }}</td><td>{{ c.description }}</td>
+      <td class="num">{{ c.planned|qty if c.planned is not none else '—' }}</td><td class="num">{{ c.qty|qty }}</td>
+      <td class="num">{{ c.wastage|qty }}</td><td class="num">{{ c.consumed|qty }}</td>
+      <td class="num">{{ c.variance|qty if c.variance is not none else '—' }}</td>
+      <td class="num">{{ c.unit_cost|money }}{{ '*' if c.estimated }}</td><td class="num">{{ c.cost|money }}</td>
+      <td class="num">{{ c.variance_cost|money if c.variance_cost is not none else '—' }}</td></tr>
+    {% endfor %}</tbody>
+    <tfoot>
+      <tr><td colspan="8">Component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td><td></td></tr>
+      {% if o.standard_cost is not none %}
+      <tr><td colspan="8">Recipe cost at today's average costs</td><td class="num">{{ o.standard_cost|money }}</td><td></td></tr>
+      <tr><td colspan="9">Material variance (used beyond the recipe, at cost)</td><td class="num">{{ o.material_variance|money }}</td></tr>
+      {% endif %}
+    </tfoot>
+    {% else %}
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th>{% if o.open %}<th class="num">Available now</th><th class="num">Short</th>{% endif %}<th class="num">Unit cost</th><th class="num">Planned cost</th></tr></thead>
+    <tbody>{% for c in o.components %}
+    <tr class="{{ 'row-warn' if c.short }}"><td>{{ c.product_code }}</td><td>{{ c.description }}</td>
+      <td class="num">{{ c.consumed|qty }}</td><td class="num">{{ c.wastage|qty }}</td>
+      {% if o.open %}<td class="num">{{ c.available|qty }}</td><td class="num">{{ c.short|qty if c.short else '' }}</td>{% endif %}
+      <td class="num">{{ c.unit_cost|money }}</td><td class="num">{{ c.cost|money }}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">No components on this order, and no bill of materials for the product.</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="{{ 7 if o.open else 5 }}">Planned component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td></tr></tfoot>
+    {% endif %}
+  </table></div>
+  {% if not o.completed %}<p class="muted">Planned cost is at today's average costs.</p>
+  {% elif o.estimated %}<p class="muted">* Estimated at today's average cost: Unleashed gave no cost for this component.</p>{% endif %}
+</section>
+{% endblock %}

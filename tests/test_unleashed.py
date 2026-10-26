@@ -121,6 +121,9 @@ class DashboardPageTests(unittest.TestCase):
                      "/purchases", "/purchases/PO-00000001",
                      "/sales", "/sales/SO-00000001",
                      "/adjustments", "/transactions",
+                     "/production", "/production/orders", "/production/orders/ASM-00000001",
+                     "/production/requirements", "/production/boms", "/production/boms/BOM-VSC",
+                     "/production/usage", "/production?month=2026-01",
                      "/api-log", "/connection"):
             res = self.client.get(path)
             self.assertEqual(res.status_code, 200, path)
@@ -151,6 +154,16 @@ class DashboardPageTests(unittest.TestCase):
         res = self.client.get("/stock-on-hand?format=csv")
         self.assertEqual(res.mimetype, "text/csv")
         self.assertTrue(res.get_data(as_text=True).startswith("Product Code,"))
+        for path, header in (("/production/orders", "Order,"), ("/production/requirements", "Component,"),
+                             ("/production/boms", "Bill,"), ("/production/usage", "Component,")):
+            res = self.client.get(path + "?format=csv")
+            self.assertEqual(res.mimetype, "text/csv", path)
+            self.assertTrue(res.get_data(as_text=True).startswith(header), path)
+            self.assertGreater(len(res.get_data(as_text=True).splitlines()), 2, path)
+
+    def test_missing_production_documents_are_404(self):
+        self.assertEqual(self.client.get("/production/orders/ASM-NOPE").status_code, 404)
+        self.assertEqual(self.client.get("/production/boms/BOM-NOPE").status_code, 404)
 
     def test_api_calls_are_logged(self):
         self.client.get("/stock-on-hand")
@@ -264,6 +277,94 @@ class AccountQuirkTests(unittest.TestCase):
         self.assertIn("on active adjustments have no change fields", check)
 
 
+class ProductionTests(unittest.TestCase):
+    """Assemblies and bills of materials, read the way the Production pages read them."""
+
+    @classmethod
+    def setUpClass(cls):
+        from unleashed.production import Production
+        cls.mock = create_mock_app(today=TODAY)
+        cls.ds = cls.mock.config["DATASET"]
+        cls.reports = Reports(UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(cls.mock)),
+                              today_fn=lambda: TODAY)
+        cls.production = Production(cls.reports)
+
+    def test_assemblies_move_value_between_products_without_changing_the_total(self):
+        net = {}
+        for m in self.ds.ledger:
+            if m["Type"] == "Assembly":
+                net[m["Number"]] = net.get(m["Number"], 0) + m["Value"]
+        self.assertGreater(len(net), 100)
+        self.assertLess(max(abs(v) for v in net.values()), 1e-6)
+
+    def test_stock_movement_reconciles_for_made_products_and_their_components(self):
+        for code in ("CB-CONC-GAL", "VSC-HG", "MATCHA-QT", "COF-ESP-5LB", "TEA-MATCHA-1KG", "JUG-GAL"):
+            mv = self.reports.stock_movement(code, dt.date(2026, 4, 1), TODAY)
+            self.assertAlmostEqual(mv["closing_qty"], mv["reported_qty"], places=6, msg=code)
+            self.assertAlmostEqual(mv["closing_value"], mv["reported_value"], delta=0.05, msg=code)
+            self.assertIn("Production", {r["type"] for r in mv["rows"]}, code)
+
+    def test_order_variance_against_the_recipe(self):
+        orders = [o for o in self.reports.assemblies(dt.date(2026, 5, 1), TODAY) if o["completed"]]
+        details = [self.production.order(o["number"]) for o in orders[-40:]]
+        exact = next(d for d in details if abs(d["material_variance"]) < 1e-6)  # made to the recipe
+        self.assertTrue(all(abs(c["variance"]) < 1e-6 for c in exact["components"]))
+        messy = next(d for d in details if d["material_variance"] > 0.001)  # extra wastage
+        self.assertAlmostEqual(messy["material_variance"],
+                               sum(c["variance"] * c["unit_cost"] for c in messy["components"]), places=6)
+        self.assertAlmostEqual(messy["cost"], sum(c["cost"] for c in messy["components"]), places=6)
+        self.assertIsNone(self.production.order("ASM-NOPE"))
+
+    def test_requirements_take_stock_in_due_date_order(self):
+        req = self.production.requirements()
+        self.assertEqual([o["status"] for o in req["orders"]], ["Parked"] * 4)  # the deleted one stays out
+        self.assertEqual(req["orders"][0]["qty"], 60)  # overdue, so first in line
+        self.assertTrue(req["orders"][0]["overdue"])
+        self.assertFalse(req["orders"][0]["ready"])
+        matcha = next(c for c in req["components"] if c["product_code"] == "TEA-MATCHA-1KG")
+        self.assertAlmostEqual(matcha["required"], 0.042 * (60 + 3), places=6)
+        self.assertAlmostEqual(matcha["shortage"], max(matcha["required"] - matcha["available"], 0))
+        self.assertEqual(req["components"][0]["product_code"], "TEA-MATCHA-1KG")  # short even after POs
+        due_by = self.production.requirements(through=TODAY)
+        self.assertEqual(len(due_by["orders"]), 1)
+
+    def test_bill_of_materials_cost_and_what_stock_can_make(self):
+        bom = self.production.bom("BOM-CB")
+        stock = {r["product_code"]: r for r in self.reports.stock_on_hand()["rows"]}
+        self.assertAlmostEqual(bom["unit_cost"], sum(l["per_unit"] * stock[l["product_code"]]["avg_cost"]
+                                                     for l in bom["lines"]), places=6)
+        # Available can be negative (sales orders allocate more than is on hand): makes nothing.
+        self.assertEqual(bom["buildable"], int(min(max(stock[l["product_code"]]["available"], 0) / l["per_unit"]
+                                                   for l in bom["lines"]) + 1e-9))
+        used_by = [b["number"] for b in self.production.boms(component="SYR-VAN-750")]
+        self.assertEqual(sorted(used_by), ["BOM-MATCHA", "BOM-VSC"])
+        self.assertTrue(next(b for b in self.production.boms() if b["number"] == "BOM-CB-OLD")["obsolete"])
+
+    def test_components_without_cost_are_estimated_at_average_cost(self):
+        raw = next(a for a in self.reports.client.get_all("Assemblies")
+                   if a["AssemblyStatus"] == "Completed")
+        for line in raw["AssemblyLines"]:
+            line.pop("UnitCost")
+        costs = self.reports.unit_costs()
+        order = self.reports._assembly(raw, costs)
+        self.assertTrue(order["estimated"])
+        line = order["lines"][0]
+        self.assertAlmostEqual(line["cost"], line["consumed"] * costs[line["product_code"]], places=6)
+
+
+class RefusingTransport(WsgiTransport):
+    """Mock transport that answers 403 for some endpoints, like an API user without access."""
+
+    def __init__(self, app, refused):
+        super().__init__(app)
+        self.refused = refused
+
+    def get(self, path, query_string, headers):
+        if path.split("/")[1] in self.refused:
+            return 403, '{"description": "Forbidden"}'
+        return super().get(path, query_string, headers)
+
+
 class StoreSyncTests(unittest.TestCase):
     """The local copy: equivalence with the API, incremental updates, failure handling."""
 
@@ -311,12 +412,50 @@ class StoreSyncTests(unittest.TestCase):
         self.assertEqual((mv_a["closing_qty"], mv_a["reported_qty"]),
                          (mv_b["closing_qty"], mv_b["reported_qty"]))
 
+    def test_production_from_store_matches_production_from_api(self):
+        from unleashed.production import Production
+        stored = Production(self._app().extensions["unleashed"]["reports"])
+        direct = Production(Reports(UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(self.mock)),
+                                    today_fn=lambda: TODAY))
+        a, b = stored.requirements(), direct.requirements()
+        self.assertEqual([o["number"] for o in a["orders"]], [o["number"] for o in b["orders"]])
+        self.assertAlmostEqual(a["planned_cost"], b["planned_cost"], places=6)
+        start = add_months(TODAY.replace(day=1), -2)
+        self.assertAlmostEqual(stored.usage(start, TODAY)["cost"], direct.usage(start, TODAY)["cost"], places=6)
+        self.assertEqual([x["unit_cost"] for x in stored.boms()], [x["unit_cost"] for x in direct.boms()])
+
+    def test_existing_copy_gets_every_assembly_on_its_next_sync(self):
+        """A database copied before production was added gets all assemblies, not just recent edits."""
+        app = self._app()
+        store, syncer = app.extensions["unleashed"]["store"], app.extensions["unleashed"]["syncer"]
+        stored = store.document_count("Assemblies")
+        self.assertEqual(stored, len(self.ds.assemblies))
+        self.app_db.execute("DELETE FROM ul_documents WHERE kind = 'Assemblies'")
+        self.app_db.execute("DELETE FROM ul_sync_state WHERE key = 'window:Assemblies'")
+        self.assertFalse(syncer.sync()["full"])
+        self.assertEqual(store.document_count("Assemblies"), stored)
+        self.assertNotIn("modifiedSince", self._api_log("/Assemblies/%")[-1][1])
+        syncer.sync()
+        self.assertIn("modifiedSince=", self._api_log("/Assemblies/%")[-1][1])
+
+    def test_sync_carries_on_without_production_access(self):
+        app = self._app(UNLEASHED_TRANSPORT=RefusingTransport(self.mock, {"Assemblies", "BillOfMaterials"}))
+        store = app.extensions["unleashed"]["store"]
+        self.assertEqual(store.last_run()["status"], "ok")
+        self.assertIn("Forbidden", store.get_state("unavailable:Assemblies"))
+        c = app.test_client()
+        self.assertIn("COGS spend", c.get("/").get_data(as_text=True))
+        self.assertIn("return production data", c.get("/production").get_data(as_text=True))
+        self.assertIn("Not available", c.get("/connection").get_data(as_text=True))
+
     def test_pages_make_no_api_calls_once_synced(self):
         app = self._app()
         before = len(self._api_log())
         c = app.test_client()
         for path in ("/", "/cogs", "/stock-on-hand", "/stock-valuation", "/stock-movement",
-                     "/purchases", "/sales", "/adjustments", "/transactions"):
+                     "/purchases", "/sales", "/adjustments", "/transactions", "/production",
+                     "/production/orders", "/production/requirements", "/production/boms",
+                     "/production/boms/BOM-CB", "/production/usage", "/production/orders/ASM-00000001"):
             self.assertEqual(c.get(path).status_code, 200, path)
         self.assertEqual(len(self._api_log()), before)
 

@@ -1,0 +1,45 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill, production_notice %}
+{% block title %}{{ b.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Bill of materials {{ b.number }}{% if b.obsolete %} <span class="pill pill-obsolete">Obsolete</span>{% endif %}</h1>
+  <a href="{{ url_for('dash.production_boms') }}">← Bills of materials</a>
+</div>
+{{ production_notice(problem) }}
+<section class="card">
+  <dl class="facts">
+    <div><dt>Makes</dt><dd>{{ b.description }} ({{ b.product_code }})</dd></div>
+    <div><dt>Recipe cost per unit</dt><dd>{{ b.unit_cost|money }}</dd></div>
+    <div><dt>Could make now</dt><dd>{{ b.buildable if b.buildable is not none else '—' }}</dd></div>
+    <div><dt>Auto-assemble</dt><dd>{{ 'Yes' if b.auto_assemble else 'No' }}</dd></div>
+  </dl>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Qty per unit</th><th class="num">Wastage</th><th class="num">Unit cost</th><th class="num">Cost per unit made</th><th class="num">Share</th><th class="num">Available</th><th class="num">Enough for</th></tr></thead>
+    <tbody>{% for l in b.lines %}
+    <tr class="{{ 'row-warn' if l.supports is not none and l.supports < 1 }}">
+      <td><a href="{{ url_for('dash.production_boms', component=l.product_code) }}" title="Other bills of materials that use it">{{ l.product_code }}</a></td>
+      <td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.wastage|qty }}</td>
+      <td class="num">{{ l.unit_cost|money }}</td><td class="num">{{ l.cost|money }}</td>
+      <td class="num">{{ (l.cost / b.unit_cost)|pct if b.unit_cost else '—' }}</td>
+      <td class="num">{{ l.available|qty }}</td><td class="num">{{ (l.supports|round(0, 'floor')|int) if l.supports is not none else '—' }}</td></tr>
+    {% endfor %}</tbody>
+    <tfoot><tr><td colspan="5">Recipe cost per unit, at today's average costs</td><td class="num">{{ b.unit_cost|money }}</td><td colspan="3"></td></tr></tfoot>
+  </table></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Recent production orders</h2>
+    <a href="{{ url_for('dash.production_orders', product=b.product_code) }}">All for this product →</a>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th class="num">Qty</th><th>Status</th><th class="num">Unit cost</th></tr></thead>
+    <tbody>{% for o in b.orders %}
+    <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
+      <td>{{ o.date|d }}</td><td>{{ o.due|d }}</td><td class="num">{{ o.qty|qty }}</td>
+      <td>{{ status_pill(o.status) }}</td><td class="num">{{ o.unit_cost|money }}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">Not made yet.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}
