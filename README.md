@@ -208,7 +208,7 @@ full sync rebuilds it, so RDS defaults (automated backups) are plenty.
 
 ### 1. Create the database (Amazon RDS for PostgreSQL)
 
-1. RDS console → **Create database** → **PostgreSQL** (16 or newer).
+1. RDS console → **Create database** → **PostgreSQL** (16, 17 or 18; tested on 16 and 18.3).
 2. A small instance is plenty: `db.t4g.micro`, 20 GB storage.
 3. Set a master username and password. Letting RDS manage it in Secrets
    Manager also works; see `DB_SECRET` below.

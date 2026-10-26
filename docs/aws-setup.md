@@ -74,7 +74,8 @@ rule allowing PostgreSQL from `unleashedaccess-app`.
 
 1. Open the **RDS** console → **Databases** → **Create database**.
 2. **Choose a database creation method:** **Standard create**.
-3. **Engine options:** **PostgreSQL**. Engine version: the newest **16.x** or **17.x**.
+3. **Engine options:** **PostgreSQL**. Engine version: any of **16**, **17** or **18**;
+   the newest (e.g. **18.3**) is a good choice. The app is tested on 16 and 18.3.
 4. **Templates:** **Free tier** if offered, otherwise **Dev/Test**.
    (Don't pick *Production*: it defaults to two servers and costs several times more.)
 5. **Availability and durability** (if shown): **Single-AZ DB instance deployment**.
@@ -92,7 +93,9 @@ rule allowing PostgreSQL from `unleashedaccess-app`.
    - **VPC:** your VPC. **DB subnet group:** the default is fine.
    - **Public access:** **No**.
    - **VPC security group:** **Choose existing** → select **`unleashedaccess-db`**,
-     and remove **default** from the list.
+     and remove **default** from the list. If it isn't in the list, you haven't done
+     Part 1 yet: leave this form open, do Part 1 in a new browser tab, then come back
+     and reopen the dropdown (reload the page if it still doesn't appear).
    - **Database port** (under *Additional configuration*): **5432**.
 10. **Database authentication:** **Password authentication**.
 11. **Monitoring:** leave the defaults.
