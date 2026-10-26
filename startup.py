@@ -35,9 +35,10 @@ def explain(exc):
                 "Master username; without DB_USER the app uses postgres) and DB_PASSWORD to its "
                 "password.")
     if "does not exist" in lower and "database" in lower:
-        return ("The database server has no database with that name.",
-                "Set DB_NAME to the RDS \"Initial database name\" (unleashedaccess). If it was left "
-                "empty when the database was created, set DB_NAME to postgres instead.")
+        return ("The database server has no database with that name, and DB_USER isn't "
+                "allowed to create it.",
+                "Use the RDS master username for DB_USER (it can create the database), or set "
+                "DB_NAME to postgres, the database every server has.")
     if "no pg_hba.conf entry" in lower or "ssl" in lower and "required" in lower:
         return ("The database refused the connection's security settings.",
                 "Leave DB_SSLMODE unset (the default, require, is what RDS expects).")

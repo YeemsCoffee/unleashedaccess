@@ -708,6 +708,27 @@ class StartupProblemTests(unittest.TestCase):
         self.assertIn("valid email", explain(RuntimeError(
             "ADMIN_EMAIL / ADMIN_PASSWORD settings: Enter a valid email address."))[1])
 
+    @unittest.skipUnless(TEST_DATABASE_URL, "needs TEST_DATABASE_URL (PostgreSQL)")
+    def test_missing_database_is_created(self):
+        import psycopg
+        from urllib.parse import urlsplit, urlunsplit
+
+        from unleashed.db import Database
+        name = "ua_autocreate_test"
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            conn.execute(f"DROP DATABASE IF EXISTS {name}")
+        url = urlunsplit(urlsplit(TEST_DATABASE_URL)._replace(path=f"/{name}"))
+        try:
+            first = Database(url)
+            self.assertEqual(first.created_database, name)
+            first.close()
+            second = Database(url)
+            self.assertIsNone(second.created_database)
+            second.close()
+        finally:
+            with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+                conn.execute(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+
     def test_guard_explains_then_recovers(self):
         from werkzeug.test import Client
 

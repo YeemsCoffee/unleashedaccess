@@ -24,6 +24,8 @@ def report(app):
         print(" * Unleashed Access: MOCK data (simulated). For real data, set UNLEASHED_MODE=live and the"
               " API ID/key (in .env, or the server's environment settings).")
     print(f" * Database: {ext['db'].label}")
+    if ext["db"].created_database:
+        print(f" * Created the database \"{ext['db'].created_database}\" (it didn't exist yet)")
     if ext["source_error"]:
         print(f" ! {ext['source_error']}")
     if app.config["ADMIN_SETUP_NOTE"]:

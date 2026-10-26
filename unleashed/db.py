@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 from contextlib import contextmanager
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 def is_postgres_url(url):
@@ -58,6 +58,7 @@ class Database:
         self.url = url
         self.dialect = "postgres" if is_postgres_url(url) else "sqlite"
         self._pool = None
+        self.created_database = None
         if self.dialect == "postgres":
             import psycopg
             from psycopg.rows import dict_row
@@ -65,8 +66,7 @@ class Database:
 
             # One direct attempt first: the pool retries quietly and would only report
             # "couldn't get a connection", hiding a wrong password, database name or host.
-            with psycopg.connect(_postgres_url(url), connect_timeout=15):
-                pass
+            self.created_database = _connect_or_create(_postgres_url(url))
             pool_args = {}
             if hasattr(ConnectionPool, "check_connection"):
                 pool_args["check"] = ConnectionPool.check_connection  # drop dead idle connections
@@ -170,6 +170,32 @@ class _Connection:
     def query_one(self, sql, args=()):
         rows = self.query(sql, args)
         return rows[0] if rows else None
+
+
+def _connect_or_create(url):
+    """Check the database is reachable; create it if only the database itself is missing
+    (e.g. RDS created without an "Initial database name"). Returns the name if created."""
+    import psycopg
+    from psycopg import sql
+
+    try:
+        with psycopg.connect(url, connect_timeout=15):
+            return None
+    except psycopg.OperationalError as e:
+        missing = re.search(r'database "([^"]+)" does not exist', str(e))
+        if not missing:
+            raise
+        error = e
+    # Every PostgreSQL server has a "postgres" database to connect to for this.
+    parts = urlsplit(url)
+    maintenance = urlunsplit(parts._replace(path="/postgres"))
+    try:
+        with psycopg.connect(maintenance, connect_timeout=15, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(missing.group(1))))
+    except psycopg.Error:
+        raise error from None  # can't create it: report the original problem
+    with psycopg.connect(url, connect_timeout=15):
+        return missing.group(1)
 
 
 def _postgres_url(url):
