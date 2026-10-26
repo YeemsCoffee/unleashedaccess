@@ -299,6 +299,7 @@ Calculator for your region.
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | — | Creates the first admin account (it must choose a new password at first sign-in); turns on team accounts |
 | `ADMIN_RESET` | — | `1` restores admin access for `ADMIN_EMAIL` with `ADMIN_PASSWORD` (for when you're locked out) |
 | `DASHBOARD_PASSWORD` | — | Simpler alternative to accounts: one shared password (ignored once accounts exist) |
+| `ALLOW_NO_SIGN_IN` | — | Real Unleashed data is only shown after sign-in; `1` lifts that on a private computer |
 | `SECRET_KEY` | generated and stored in the database | Signs the sign-in cookie |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
 | `SECURE_COOKIES` | — | `1` when served over HTTPS (sign-in cookie only sent over HTTPS) |

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign-in needed · Unleashed Access</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
+</head>
+<body class="dash">
+  <main class="dash-main">
+    <section class="card login">
+      <h1>Sign-in isn't set up yet</h1>
+      <p>This dashboard shows your real Unleashed data, so it only opens for people who sign in.</p>
+      <p>To turn on sign-in, add these settings and restart the app (on Elastic Beanstalk:
+        Configuration → Updates, monitoring, and logging → Environment properties → Apply):</p>
+      <ul>
+        <li><code>ADMIN_EMAIL</code>: your email</li>
+        <li><code>ADMIN_PASSWORD</code>: a temporary password, at least 10 characters</li>
+      </ul>
+      <p class="muted">Running it on a private computer nobody else can reach? <code>ALLOW_NO_SIGN_IN=1</code>
+        in <code>.env</code> skips sign-in.</p>
+    </section>
+  </main>
+</body>
+</html>

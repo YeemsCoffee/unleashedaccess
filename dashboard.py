@@ -166,6 +166,15 @@ def _safe_next(target):
 
 
 @bp.before_request
+def _require_sign_in_for_real_data():
+    cfg = current_app.config
+    if cfg["AUTH_MODE"] == "open" and _ext()["mode"] in ("live", "viewer") \
+            and not cfg["ALLOW_NO_SIGN_IN"] and request.endpoint != "dash.healthz":
+        return render_template("dash/sign_in_required.html"), 403
+    return None
+
+
+@bp.before_request
 def _require_login():
     mode = current_app.config["AUTH_MODE"]
     if mode == "open" or request.endpoint in _PUBLIC_ENDPOINTS:

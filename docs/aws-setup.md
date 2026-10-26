@@ -219,12 +219,14 @@ Don't sign in yet: until Part 5 the site is plain HTTP, so the password would
 travel unencrypted. (The first copy of your Unleashed data is already running in
 the background.)
 
-**If health turns Red or Degraded:** **Logs** → **Request logs** → **Last 100 lines**,
-and look for:
+**If you get a 502 or health turns Red:** open the environment's address. If the
+app can't start, it shows a page saying why (and retries every 30 seconds). The
+same reason is in **Logs** → **Request logs** → **Last 100 lines**. Common ones:
 
 | You see | Meaning and fix |
 |---------|-----------------|
-| `couldn't get a connection after 30.00 sec` / `timeout` | The app can't reach the database. Check Part 1 (the inbound rule's source is `unleashedaccess-app`), Part 2 (database uses `unleashedaccess-db`), and step 15 (instances use `unleashedaccess-app`). |
+| `can't reach the database` / `timeout expired` / `couldn't get a connection` | The network path is blocked. Check: the instance has the `unleashedaccess-app` security group (EC2 → Instances → the instance → **Security** tab; if missing, step 15); the `unleashedaccess-db` inbound rule's source is `unleashedaccess-app`; the database uses `unleashedaccess-db`; and the database and app are in the same VPC and region. |
+| `DB_HOST isn't an address the app can find` | `DB_HOST` must be the RDS endpoint exactly, without `https://` or `:5432`. |
 | `password authentication failed` | `DB_USER` or `DB_PASSWORD` doesn't match the database. |
 | `database "…" does not exist` | `DB_NAME` doesn't match the **Initial database name**. |
 | `Unleashed … Forbidden` (on the Connection page later) | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` is wrong. |

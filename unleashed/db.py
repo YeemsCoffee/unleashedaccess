@@ -59,9 +59,14 @@ class Database:
         self.dialect = "postgres" if is_postgres_url(url) else "sqlite"
         self._pool = None
         if self.dialect == "postgres":
+            import psycopg
             from psycopg.rows import dict_row
             from psycopg_pool import ConnectionPool
 
+            # One direct attempt first: the pool retries quietly and would only report
+            # "couldn't get a connection", hiding a wrong password, database name or host.
+            with psycopg.connect(_postgres_url(url), connect_timeout=15):
+                pass
             pool_args = {}
             if hasattr(ConnectionPool, "check_connection"):
                 pool_args["check"] = ConnectionPool.check_connection  # drop dead idle connections

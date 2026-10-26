@@ -44,8 +44,8 @@ def fresh_database(testcase):
 def make_app(testcase, database=None, **config):
     """create_app on `database` (default: a fresh one); its connection pool closes after the test."""
     from app import create_app
-    app = create_app({"TESTING": True, **SYNC_NOW, **(database or fresh_database(testcase)),
-                      **config})
+    app = create_app({"TESTING": True, **SYNC_NOW, "ALLOW_NO_SIGN_IN": True,
+                      **(database or fresh_database(testcase)), **config})
     testcase.addCleanup(app.extensions["db"].close)
     return app
 
@@ -677,6 +677,79 @@ class TeamAccountTests(unittest.TestCase):
         c2 = other.test_client()
         c2.set_cookie("session", cookie.value)
         self.assertEqual(c2.get("/").status_code, 200)
+
+
+class StartupProblemTests(unittest.TestCase):
+    """A broken setting shows an explanation page instead of a bare 502."""
+
+    def test_real_database_errors_are_explained(self):
+        from startup import explain
+        cases = {
+            'connection failed: connection to server at "10.0.1.5", port 5432 failed: FATAL:  '
+            'password authentication failed for user "unleashed_admin"': "username or password",
+            'connection failed: FATAL:  database "unleashedaccess" does not exist': "no database with that name",
+            'connection failed: connection to server at "10.0.1.5", port 5432 failed: timeout expired':
+                "can't reach the database",
+            "couldn't get a connection after 30.00 sec": "can't reach the database",
+            'connection failed: could not translate host name "https://x" to address': "DB_HOST",
+            "ADMIN_EMAIL / ADMIN_PASSWORD settings: Passwords need at least 10 characters.":
+                "first admin account",
+            "ADMIN_EMAIL / ADMIN_PASSWORD settings: Enter a valid email address.": "first admin account",
+        }
+        for message, expected in cases.items():
+            headline, todo = explain(RuntimeError(message))
+            self.assertIn(expected, headline + todo, message)
+        self.assertIn("valid email", explain(RuntimeError(
+            "ADMIN_EMAIL / ADMIN_PASSWORD settings: Enter a valid email address."))[1])
+
+    def test_guard_explains_then_recovers(self):
+        from werkzeug.test import Client
+
+        from startup import StartupGuard
+        attempts = {"n": 0}
+        good = make_app(self, UNLEASHED_MODE="mock")
+
+        def factory():
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("couldn't get a connection after 30.00 sec")
+            return good
+
+        guard = StartupGuard(factory, retry_seconds=0)
+        guard._last_try = float("inf")  # hold the failure for the first two requests
+        c = Client(guard)
+        page = c.get("/")
+        self.assertEqual(page.status_code, 503)
+        self.assertIn("can&#x27;t reach the database", page.get_data(as_text=True))
+        self.assertEqual(c.get("/healthz").status_code, 503)
+        guard._last_try = 0  # the retry interval has passed
+        self.assertEqual(c.get("/healthz").status_code, 200)
+        self.assertEqual(attempts["n"], 2)
+
+    def test_too_short_admin_password_is_explained(self):
+        from werkzeug.test import Client
+
+        from startup import StartupGuard
+        db = fresh_database(self)
+        guard = StartupGuard(lambda: make_app(self, database=db, UNLEASHED_MODE="mock",
+                                              ADMIN_EMAIL="a@b.test", ADMIN_PASSWORD="short"),
+                             retry_seconds=999)
+        body = Client(guard).get("/").get_data(as_text=True)
+        self.assertIn("ADMIN_PASSWORD needs at least 10 characters", body)
+
+    def test_real_data_needs_sign_in(self):
+        mock = create_mock_app(today=TODAY)
+        live = dict(UNLEASHED_MODE="live", UNLEASHED_API_ID=MOCK_API_ID,
+                    UNLEASHED_API_KEY=MOCK_API_KEY, UNLEASHED_TRANSPORT=WsgiTransport(mock))
+        app = make_app(self, ALLOW_NO_SIGN_IN=False, **live)
+        c = app.test_client()
+        for path in ("/", "/sales", "/purchases/PO-00000001", "/connection", "/api-log"):
+            res = c.get(path)
+            self.assertEqual(res.status_code, 403, path)
+            self.assertIn("Sign-in isn't set up", res.get_data(as_text=True), path)
+        self.assertEqual(c.get("/healthz").status_code, 200)
+        mocked = make_app(self, ALLOW_NO_SIGN_IN=False, UNLEASHED_MODE="mock")
+        self.assertEqual(mocked.test_client().get("/").status_code, 200)  # simulated data is fine
 
 
 class TimezoneTests(unittest.TestCase):

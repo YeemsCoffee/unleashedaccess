@@ -5,7 +5,7 @@ import os
 from flask import Flask
 
 import dashboard
-from accounts import UserStore, app_secret
+from accounts import AccountError, UserStore, app_secret
 from unleashed.db import Database, database_url_from_env, is_postgres_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +41,9 @@ def create_app(test_config=None):
         ADMIN_RESET=env("ADMIN_RESET", "") == "1",
         # Simpler alternative to accounts: one shared password (ignored once accounts exist).
         DASHBOARD_PASSWORD=env("DASHBOARD_PASSWORD", ""),
+        # Real Unleashed data is only shown to signed-in people. ALLOW_NO_SIGN_IN=1 lifts
+        # that for a private computer nobody else can reach.
+        ALLOW_NO_SIGN_IN=env("ALLOW_NO_SIGN_IN", "") == "1",
         SECRET_KEY=env("SECRET_KEY", ""),
         SESSION_COOKIE_SAMESITE="Lax",  # sign-in cookie isn't sent on other sites' form posts
         # Set SECURE_COOKIES=1 when the dashboard is served over HTTPS.
@@ -78,9 +81,12 @@ def create_app(test_config=None):
     app.extensions["users"] = users
     cfg["ADMIN_SETUP_NOTE"] = None
     if cfg["ADMIN_EMAIL"] and cfg["ADMIN_PASSWORD"] and not viewer:
-        cfg["ADMIN_SETUP_NOTE"] = users.ensure_admin(
-            cfg["ADMIN_EMAIL"], cfg["ADMIN_PASSWORD"], name=cfg["ADMIN_NAME"],
-            reset=cfg["ADMIN_RESET"])
+        try:
+            cfg["ADMIN_SETUP_NOTE"] = users.ensure_admin(
+                cfg["ADMIN_EMAIL"], cfg["ADMIN_PASSWORD"], name=cfg["ADMIN_NAME"],
+                reset=cfg["ADMIN_RESET"])
+        except AccountError as e:
+            raise AccountError(f"ADMIN_EMAIL / ADMIN_PASSWORD settings: {e}") from e
     try:
         has_accounts = users.count() > 0
     except Exception:  # a viewer on a database without the accounts table yet
