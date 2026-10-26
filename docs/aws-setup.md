@@ -56,13 +56,18 @@ database that lets **only the app** connect to it.
    - **Name:** `unleashedaccess-app`
    - **Description:** `Unleashed Access app servers`
    - **VPC:** your VPC
-   - Leave inbound rules empty and outbound rules as they are → **Create security group**.
+   - **Inbound rules:** none.
+   - **Outbound rules:** keep the default **All traffic → 0.0.0.0/0** rule. The app
+     needs it to reach Unleashed, the database, and Python packages while installing.
+   - **Create security group**.
 3. Back to **Security groups** → **Create security group** again, for the database:
    - **Name:** `unleashedaccess-db`
    - **Description:** `Unleashed Access database`
    - **VPC:** the same VPC
    - **Inbound rules → Add rule:** Type **PostgreSQL** (port 5432 fills in),
      Source **Custom**, then pick **`unleashedaccess-app`** from the list.
+   - **Outbound rules:** keep the default. (Security groups always let a database
+     answer connections it accepted, so this rule doesn't matter either way.)
    - **Create security group**.
 
 ✅ Checkpoint: two security groups exist, and `unleashedaccess-db` has one inbound
