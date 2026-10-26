@@ -8,7 +8,7 @@
   {% block head %}{% endblock %}
 </head>
 <body class="dash">
-  {% set signed_out = login_enabled and not session.get('signed_in') %}
+  {% set signed_out = login_enabled and not signed_in %}
   <header class="dash-header">
     <div class="brand">
       <strong>Unleashed Access</strong>
@@ -32,7 +32,10 @@
         <button class="btn btn-quiet" title="Fetch the latest changes from Unleashed">Sync now</button>
       </form>
       {% endif %}
-      {% if login_enabled and session.get('signed_in') %}
+      {% if current_user %}
+      <a class="btn btn-quiet" href="{{ url_for('dash.account') }}" title="Your account">{{ current_user.name }}</a>
+      {% endif %}
+      {% if login_enabled and signed_in %}
       <form method="post" action="{{ url_for('dash.logout') }}">
         <button class="btn btn-quiet">Sign out</button>
       </form>
@@ -49,7 +52,7 @@
     ('dash.stock_movement', 'Stock movement'), ('dash.purchases', 'Purchases'),
     ('dash.sales', 'Sales'), ('dash.adjustments', 'Adjustments'),
     ('dash.transactions', 'Transactions'), ('dash.api_log', 'API log'),
-    ('dash.connection', 'Connection')] %}
+    ('dash.connection', 'Connection')] + ([('dash.team', 'Team')] if is_admin and auth_mode == 'accounts' else []) %}
   {% if not signed_out %}
   <nav class="dash-nav">
     {% for ep, label in nav %}

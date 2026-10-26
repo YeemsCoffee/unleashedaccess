@@ -4,11 +4,23 @@
 <section class="card login">
   <h1>Sign in</h1>
   <form method="post">
+    {% if auth_mode == 'accounts' %}
+    <label class="stack-label">Email
+      <input type="email" name="email" value="{{ email }}" autofocus autocomplete="username" required>
+    </label>
+    <label class="stack-label">Password
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    {% else %}
     <label class="stack-label">Dashboard password
       <input type="password" name="password" autofocus autocomplete="current-password" required>
     </label>
+    {% endif %}
     {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
     <button class="btn btn-primary">Sign in</button>
   </form>
+  {% if auth_mode == 'accounts' %}
+  <p class="muted">Forgot your password? Ask an admin on your team to reset it.</p>
+  {% endif %}
 </section>
 {% endblock %}

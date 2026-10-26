@@ -134,7 +134,7 @@ key and syncs**; everyone else just reads.
 ### Option A (recommended): host the dashboard, share a link
 
 Run one copy of the app on a hosting service next to the database. People
-open a web address and sign in with a password. Nobody else installs anything,
+open a web address and sign in with their own account. Nobody else installs anything,
 and the API key and database password stay on the server.
 
 1. Create the PostgreSQL database and copy its connection string.
@@ -147,10 +147,12 @@ and the API key and database password stay on the server.
    |----------|-------|
    | `DATABASE_URL` | the PostgreSQL connection string |
    | `UNLEASHED_API_ID`, `UNLEASHED_API_KEY` | your Unleashed API credentials |
-   | `DASHBOARD_PASSWORD` | a strong password to share with your team |
+   | `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` | your email, name and a temporary password: you sign in as the first admin, choose your own password, then add your team on the **Team** page |
    | `TIMEZONE` | `America/Los_Angeles` (servers run on UTC; this sets "today" and month boundaries) |
 
-4. Open the service's address, sign in, and wait for the first copy to finish.
+4. Open the service's address, sign in, choose your password, and wait for the
+   first copy to finish. Then add your team under **Team**: each person gets their
+   own sign-in.
 
 Run one worker (the default in `gunicorn.conf.py`): the background sync runs
 inside the web process. Several workers or servers are still safe, because a
@@ -239,7 +241,7 @@ still reads that option's `RDS_*` settings if you use it.)
    | `DB_NAME` | `unleashedaccess` |
    | `DB_USER`, `DB_PASSWORD` | the RDS master username and password (no URL-encoding needed) |
    | `UNLEASHED_API_ID`, `UNLEASHED_API_KEY` | your Unleashed API credentials |
-   | `DASHBOARD_PASSWORD` | the password your team signs in with |
+   | `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` | your email, name and a temporary password for the first admin account |
    | `SECURE_COOKIES` | `1` once HTTPS is set up (step 3) |
 
 5. Let the app reach the database: in the RDS instance's **security group**,
@@ -254,7 +256,7 @@ Request a certificate in **AWS Certificate Manager** for a name like
 `dashboard.yourdomain.com`, add an **HTTPS (443) listener** with it to the
 environment's load balancer (Configuration → Load balancer), and point that name
 at the environment (Route 53 alias or CNAME). Then set `SECURE_COOKIES=1`.
-Don't share the dashboard over plain HTTP: the sign-in password would travel unencrypted.
+Don't share the dashboard over plain HTTP: passwords would travel unencrypted.
 
 ### 4. Open it
 
@@ -294,8 +296,10 @@ Calculator for your region.
 | `DB_SSLMODE` | `require` | SSL mode when the URL is built from the settings above |
 | `DATABASE_PATH` | `unleashedaccess.db` | SQLite file used when `DATABASE_URL` isn't set |
 | `ALLOW_DATABASE_RESET` | — | `1` lets this instance replace a shared database holding another account's data |
-| `DASHBOARD_PASSWORD` | — | When set, everyone signs in with this password |
-| `SECRET_KEY` | derived from the password | Signs the sign-in cookie; set your own when hosting |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | — | Creates the first admin account (it must choose a new password at first sign-in); turns on team accounts |
+| `ADMIN_RESET` | — | `1` restores admin access for `ADMIN_EMAIL` with `ADMIN_PASSWORD` (for when you're locked out) |
+| `DASHBOARD_PASSWORD` | — | Simpler alternative to accounts: one shared password (ignored once accounts exist) |
+| `SECRET_KEY` | generated and stored in the database | Signs the sign-in cookie |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
 | `SECURE_COOKIES` | — | `1` when served over HTTPS (sign-in cookie only sent over HTTPS) |
 | `WEB_CONCURRENCY`, `GUNICORN_THREADS` | `1`, `8` | gunicorn workers and threads (`gunicorn.conf.py`) |

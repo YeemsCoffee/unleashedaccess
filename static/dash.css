@@ -209,3 +209,9 @@ td.wrap { white-space: normal; min-width: 280px; }
 .login form { display: grid; gap: 12px; margin-top: 12px; }
 .stack-label { display: grid; gap: 4px; font-size: 13px; color: var(--text-secondary); }
 .stack-label input { font: inherit; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-1); color: var(--text-primary); }
+.notice-ok { border-color: var(--good-ink); }
+.notice-warn { border-color: var(--warn-ink); }
+.notice p { margin: 4px 0; }
+.temp-password { font-size: 20px; padding: 10px 14px; background: var(--surface-0); border-radius: 8px; display: inline-block; user-select: all; }
+.row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.row-actions form { margin: 0; }

@@ -4,10 +4,12 @@ import csv
 import datetime as dt
 import hmac
 import io
+from functools import wraps
 
 from flask import (Blueprint, Response, abort, current_app, g, redirect, render_template,
                    request, session, url_for)
 
+from accounts import ROLES, AccountError, check_new_password, temporary_password
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
@@ -103,24 +105,81 @@ def _sync_running():
 def _ctx():
     ext = _ext()
     last, ok = _sync_status()
+    mode = current_app.config["AUTH_MODE"]
+    user = current_user()
     return {"unleashed_mode": ext["mode"], "money_short": charts.money_short,
             "sync_last": last, "sync_ok": ok, "ago": ago,
             "can_sync": ext["syncer"] is not None, "source_error": ext["source_error"],
-            "login_enabled": bool(current_app.config["DASHBOARD_PASSWORD"])}
+            "login_enabled": mode != "open", "auth_mode": mode,
+            "signed_in": user is not None if mode == "accounts" else bool(session.get("signed_in")),
+            "current_user": user, "is_admin": is_admin()}
 
 
 # Pages that work before the first sync has finished.
 _OPEN_ENDPOINTS = {"dash.connection", "dash.api_log", "dash.sync_now", "dash.login",
-                   "dash.logout", "dash.healthz"}
+                   "dash.logout", "dash.healthz", "dash.account", "dash.team",
+                   "dash.team_add", "dash.team_update"}
 # Pages that work without signing in.
 _PUBLIC_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz"}
 
 
+def current_user():
+    """The signed-in team member (accounts mode), checked against the database once per request.
+
+    A deactivated account, or a password changed or reset since this sign-in,
+    ends the session.
+    """
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return None
+    if "current_user" not in g:
+        user = None
+        user_id = session.get("user_id")
+        if user_id is not None:
+            user = current_app.extensions["users"].get(user_id)
+            if not user or not user["active"] or user["session_version"] != session.get("v"):
+                user = None
+        g.current_user = user
+    return g.current_user
+
+
+def is_admin():
+    """Admins manage the team and the Unleashed connection. Without accounts, everyone can."""
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return True
+    user = current_user()
+    return bool(user and user["role"] == "admin")
+
+
+def admin_only(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not is_admin():
+            return render_template("dash/error.html", error="Only admins can do that. Ask an "
+                                   "admin on your team if you need it.", status=403), 403
+        return view(*args, **kwargs)
+    return wrapper
+
+
+def _safe_next(target):
+    return target if target and target.startswith("/") and not target.startswith("//") \
+        else url_for("dash.overview")
+
+
 @bp.before_request
 def _require_login():
-    password = current_app.config["DASHBOARD_PASSWORD"]
-    if password and not session.get("signed_in") and request.endpoint not in _PUBLIC_ENDPOINTS:
+    mode = current_app.config["AUTH_MODE"]
+    if mode == "open" or request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if mode == "password":
+        if not session.get("signed_in"):
+            return redirect(url_for("dash.login", next=request.full_path))
+        return None
+    user = current_user()
+    if user is None:
+        session.clear()
         return redirect(url_for("dash.login", next=request.full_path))
+    if user["must_change_password"] and request.endpoint != "dash.account":
+        return redirect(url_for("dash.account"))
     return None
 
 
@@ -146,23 +205,121 @@ def healthz():
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
-    error = None
+    mode = current_app.config["AUTH_MODE"]
+    if mode == "open":
+        return redirect(url_for("dash.overview"))
+    error, email = None, ""
     if request.method == "POST":
-        given = request.form.get("password", "").encode()
-        if hmac.compare_digest(given, current_app.config["DASHBOARD_PASSWORD"].encode()):
-            session.permanent = True
-            session["signed_in"] = True
-            target = request.args.get("next") or ""
-            return redirect(target if target.startswith("/") and not target.startswith("//")
-                            else url_for("dash.overview"))
-        error = "That password isn't right."
-    return render_template("dash/login.html", error=error)
+        if mode == "accounts":
+            email = request.form.get("email", "")
+            user, error = current_app.extensions["users"].authenticate(
+                email, request.form.get("password", ""))
+            if user:
+                session.clear()
+                session.permanent = True
+                session["user_id"], session["v"] = user["id"], user["session_version"]
+                if user["must_change_password"]:
+                    return redirect(url_for("dash.account"))
+                return redirect(_safe_next(request.args.get("next")))
+        else:
+            given = request.form.get("password", "").encode()
+            if hmac.compare_digest(given, current_app.config["DASHBOARD_PASSWORD"].encode()):
+                session.clear()
+                session.permanent = True
+                session["signed_in"] = True
+                return redirect(_safe_next(request.args.get("next")))
+            error = "That password isn't right."
+    return render_template("dash/login.html", error=error, email=email)
 
 
 @bp.post("/logout")
 def logout():
     session.clear()
     return redirect(url_for("dash.login"))
+
+
+@bp.route("/account", methods=["GET", "POST"])
+def account():
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return redirect(url_for("dash.overview"))
+    users = current_app.extensions["users"]
+    user = current_user()
+    error = None
+    if request.method == "POST":
+        from werkzeug.security import check_password_hash
+        new, confirm = request.form.get("new_password", ""), request.form.get("confirm_password", "")
+        try:
+            if not check_password_hash(user["password_hash"], request.form.get("current_password", "")):
+                raise AccountError("Your current password isn't right.")
+            if new == request.form.get("current_password", ""):
+                raise AccountError("Choose a password different from the current one.")
+            check_new_password(new, confirm)
+            updated = users.set_password(user["id"], new)
+            session["v"] = updated["session_version"]  # stay signed in here, out everywhere else
+            g.pop("current_user", None)
+            return redirect(url_for("dash.overview"))
+        except AccountError as e:
+            error = str(e)
+    return render_template("dash/account.html", user=user, error=error)
+
+
+@bp.get("/team")
+@admin_only
+def team():
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return render_template("dash/team.html", accounts=False)
+    return render_template("dash/team.html", accounts=True,
+                           members=current_app.extensions["users"].all(), roles=ROLES)
+
+
+@bp.post("/team/add")
+@admin_only
+def team_add():
+    users = current_app.extensions["users"]
+    form = request.form
+    password = temporary_password()
+    try:
+        added = users.create(form.get("email"), form.get("name"), password,
+                             role=form.get("role", "member"), must_change=True)
+        notice = {"ok": True, "person": added, "password": password,
+                  "message": f"Added {added['name']}."}
+    except AccountError as e:
+        notice = {"ok": False, "message": str(e)}
+    return render_template("dash/team.html", accounts=True, members=users.all(), roles=ROLES,
+                           notice=notice, form=form if not notice["ok"] else None)
+
+
+@bp.post("/team/<int:user_id>")
+@admin_only
+def team_update(user_id):
+    users = current_app.extensions["users"]
+    person = users.get(user_id)
+    if person is None:
+        abort(404)
+    action, me = request.form.get("action"), current_user()
+    notice = {"ok": True}
+    try:
+        if action == "reset":
+            notice.update(person=person, password=users.reset_password(user_id),
+                          message=f"New temporary password for {person['name']}. Their other "
+                                  "sessions are signed out.")
+        elif action in ("deactivate", "activate"):
+            if action == "deactivate" and me and me["id"] == user_id:
+                raise AccountError("You can't deactivate your own account.")
+            users.set_active(user_id, action == "activate")
+            notice["message"] = f"{person['name']} is now {'active' if action == 'activate' else 'deactivated and signed out'}."
+        elif action == "role":
+            role = request.form.get("role")
+            if me and me["id"] == user_id and role != "admin":
+                raise AccountError("Ask another admin to change your own role.")
+            users.set_role(user_id, role)
+            notice["message"] = f"{person['name']} is now {'an admin' if role == 'admin' else 'a member'}."
+        else:
+            abort(400)
+    except AccountError as e:
+        notice = {"ok": False, "message": str(e)}
+    return render_template("dash/team.html", accounts=True, members=users.all(), roles=ROLES,
+                           notice=notice)
 
 
 @bp.errorhandler(UnleashedError)
@@ -416,6 +573,8 @@ def api_log():
 
 @bp.route("/connection", methods=["GET", "POST"])
 def connection():
+    if request.method == "POST" and not is_admin():
+        return admin_only(lambda: None)()
     from unleashed.diagnostics import run_checks
     from unleashed.reports import Reports
 
@@ -448,7 +607,7 @@ def connection():
 @bp.post("/sync")
 def sync_now():
     ext = _ext()
-    full = request.form.get("full") == "1"
+    full = request.form.get("full") == "1" and is_admin()
     if ext["scheduler"] and ext["scheduler"].started:
         ext["scheduler"].trigger(full=full)
     elif ext["syncer"]:

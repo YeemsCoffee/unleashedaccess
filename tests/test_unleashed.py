@@ -18,7 +18,7 @@ SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
 # Every table the app owns in that database is dropped before each test.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snapshots",
-              "ul_sync_runs", "ul_sync_state", "ul_sync_lock")
+              "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings")
 
 
 def sqlite_database(testcase):
@@ -546,6 +546,139 @@ class AwsSettingsTests(unittest.TestCase):
         self.assertIn("Sync ok (incremental)", again.stdout)
 
 
+class TeamAccountTests(unittest.TestCase):
+    ADMIN = {"ADMIN_EMAIL": "Owner@Yeems.test", "ADMIN_PASSWORD": "first-temp-pass",
+             "ADMIN_NAME": "Owner"}
+
+    def setUp(self):
+        self.database = fresh_database(self)
+        self.app = self._app()
+
+    def _app(self, **config):
+        return make_app(self, database=self.database, UNLEASHED_MODE="mock",
+                        **{**self.ADMIN, **config})
+
+    def _sign_in(self, client, email, password):
+        return client.post("/login", data={"email": email, "password": password})
+
+    def _choose_password(self, client, current, new):
+        return client.post("/account", data={"current_password": current, "new_password": new,
+                                             "confirm_password": new})
+
+    def _admin_client(self):
+        c = self.app.test_client()
+        self._sign_in(c, "owner@yeems.test", "first-temp-pass")
+        self._choose_password(c, "first-temp-pass", "owner-own-password")
+        return c
+
+    def _add(self, admin, name, email, role="member"):
+        import re
+        html = admin.post("/team/add", data={"name": name, "email": email, "role": role}
+                          ).get_data(as_text=True)
+        match = re.search(r'class="temp-password mono">([^<]+)<', html)
+        self.assertIsNotNone(match, html)
+        return match.group(1)
+
+    def test_first_admin_must_choose_a_password(self):
+        c = self.app.test_client()
+        self.assertIn("/login", c.get("/").headers["Location"])
+        res = self._sign_in(c, "OWNER@yeems.test", "first-temp-pass")
+        self.assertEqual(res.headers["Location"], "/account")
+        self.assertIn("/account", c.get("/cogs").headers["Location"])
+        bad = self._choose_password(c, "wrong", "owner-own-password").get_data(as_text=True)
+        self.assertIn("current password isn", bad)
+        short = self._choose_password(c, "first-temp-pass", "short").get_data(as_text=True)
+        self.assertIn("at least 10 characters", short)
+        self.assertEqual(self._choose_password(c, "first-temp-pass", "owner-own-password").status_code, 302)
+        page = c.get("/").get_data(as_text=True)
+        self.assertIn("COGS spend", page)
+        self.assertIn(">Owner<", page)
+        self.assertIn(">Team<", page)
+        # Restarting with the same settings doesn't reset the admin's password.
+        restarted = self._app()
+        c2 = restarted.test_client()
+        self.assertIn("don&#39;t match", self._sign_in(c2, "owner@yeems.test", "first-temp-pass").get_data(as_text=True))
+        self.assertEqual(self._sign_in(c2, "owner@yeems.test", "owner-own-password").headers["Location"], "/")
+
+    def test_member_sets_own_password_and_has_no_admin_pages(self):
+        admin = self._admin_client()
+        temp = self._add(admin, "Barista Bea", "bea@yeems.test")
+        bea = self.app.test_client()
+        self.assertEqual(self._sign_in(bea, "bea@yeems.test", temp).headers["Location"], "/account")
+        self._choose_password(bea, temp, "bea-own-password")
+        page = bea.get("/").get_data(as_text=True)
+        self.assertIn("COGS spend", page)
+        self.assertNotIn(">Team<", page)
+        self.assertEqual(bea.get("/team").status_code, 403)
+        self.assertEqual(bea.post("/connection", data={"action": "check"}).status_code, 403)
+        self.assertEqual(bea.post("/team/add", data={"name": "x", "email": "x@y.z"}).status_code, 403)
+        self.assertIn("already an account", admin.post(
+            "/team/add", data={"name": "Again", "email": "BEA@yeems.test"}).get_data(as_text=True))
+
+    def test_wrong_passwords_lock_the_account(self):
+        c = self.app.test_client()
+        unknown = self._sign_in(c, "nobody@yeems.test", "whatever-pass").get_data(as_text=True)
+        self.assertIn("don&#39;t match", unknown)
+        for _ in range(4):
+            self.assertIn("don&#39;t match",
+                          self._sign_in(c, "owner@yeems.test", "wrong-pass").get_data(as_text=True))
+        self.assertIn("Too many wrong passwords",
+                      self._sign_in(c, "owner@yeems.test", "wrong-pass").get_data(as_text=True))
+        locked = self._sign_in(c, "owner@yeems.test", "first-temp-pass")
+        self.assertIn("Too many wrong passwords", locked.get_data(as_text=True))
+
+    def test_deactivating_or_resetting_signs_the_person_out(self):
+        admin = self._admin_client()
+        temp = self._add(admin, "Barista Bea", "bea@yeems.test")
+        bea_id = self.app.extensions["users"].by_email("bea@yeems.test")["id"]
+        bea = self.app.test_client()
+        self._sign_in(bea, "bea@yeems.test", temp)
+        self._choose_password(bea, temp, "bea-own-password")
+        self.assertEqual(bea.get("/").status_code, 200)
+
+        admin.post(f"/team/{bea_id}", data={"action": "deactivate"})
+        self.assertIn("/login", bea.get("/").headers["Location"])
+        self.assertIn("don&#39;t match", self._sign_in(bea, "bea@yeems.test", "bea-own-password").get_data(as_text=True))
+        admin.post(f"/team/{bea_id}", data={"action": "activate"})
+        self._sign_in(bea, "bea@yeems.test", "bea-own-password")
+        self.assertEqual(bea.get("/").status_code, 200)
+
+        import re
+        html = admin.post(f"/team/{bea_id}", data={"action": "reset"}).get_data(as_text=True)
+        new_temp = re.search(r'class="temp-password mono">([^<]+)<', html).group(1)
+        self.assertIn("/login", bea.get("/").headers["Location"])
+        self.assertEqual(self._sign_in(bea, "bea@yeems.test", new_temp).headers["Location"], "/account")
+
+    def test_the_last_admin_stays_an_admin(self):
+        admin = self._admin_client()
+        me = self.app.extensions["users"].by_email("owner@yeems.test")["id"]
+        self.assertIn("can&#39;t deactivate your own account",
+                      admin.post(f"/team/{me}", data={"action": "deactivate"}).get_data(as_text=True))
+        self.assertIn("Ask another admin",
+                      admin.post(f"/team/{me}", data={"action": "role", "role": "member"}).get_data(as_text=True))
+        from accounts import AccountError
+        with self.assertRaises(AccountError):
+            self.app.extensions["users"].set_role(me, "member")
+        self.assertEqual(admin.get("/").status_code, 200)
+
+    def test_admin_reset_restores_access(self):
+        self._admin_client()
+        recovered = self._app(ADMIN_PASSWORD="recovery-pass-1", ADMIN_RESET=True)
+        c = recovered.test_client()
+        self.assertEqual(self._sign_in(c, "owner@yeems.test", "recovery-pass-1").headers["Location"], "/account")
+
+    def test_sign_in_key_is_generated_once_and_shared(self):
+        other = self._app()
+        self.assertEqual(self.app.config["SECRET_KEY"], other.config["SECRET_KEY"])
+        self.assertEqual(len(self.app.config["SECRET_KEY"]), 64)
+        admin = self._admin_client()
+        # A cookie signed by one server works on the other (several servers, one database).
+        cookie = admin.get_cookie("session")
+        c2 = other.test_client()
+        c2.set_cookie("session", cookie.value)
+        self.assertEqual(c2.get("/").status_code, 200)
+
+
 class TimezoneTests(unittest.TestCase):
     def test_today_follows_the_business_time_zone(self):
         def today_in(zone):
@@ -650,6 +783,15 @@ class StartupConfigTests(unittest.TestCase):
             self.assertEqual(os.environ.get("UNLEASHED_MODE"), "live")
         finally:
             os.unlink(path)
+
+
+class SchemaTests(unittest.TestCase):
+    def test_test_cleanup_covers_every_table(self):
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "schema.sql"), encoding="utf-8") as f:
+            tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", f.read()))
+        self.assertEqual(tables, set(APP_TABLES))
 
 
 class PortabilityTests(unittest.TestCase):

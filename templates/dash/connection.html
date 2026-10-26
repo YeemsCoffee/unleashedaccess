@@ -9,11 +9,13 @@
     <div><dt>Live API URL</dt><dd class="mono">{{ ext.base_url }}</dd></div>
     <div><dt>Live credentials</dt><dd>{{ 'Configured' if ext.has_credentials else 'Not set' }}</dd></div>
   </dl>
-  {% if ext.has_credentials %}
+  {% if ext.has_credentials and is_admin %}
   <form method="post" class="filters">
     <button class="btn" name="action" value="test">Test live connection</button>
     <button class="btn btn-primary" name="action" value="check">Check live data</button>
   </form>
+  {% elif ext.has_credentials %}
+  <p class="muted">Connection tests are for admins.</p>
   {% else %}
   <p class="muted">No Unleashed API key on this instance, so it shows the shared copy that another instance keeps in sync.
     Connection tests run on the instance that has the key.</p>
@@ -40,7 +42,7 @@
   <form method="post" action="{{ url_for('dash.sync_now') }}" class="filters">
     {% if can_sync %}
     <button class="btn" {{ 'disabled' if running }}>Sync now</button>
-    <button class="btn" name="full" value="1" {{ 'disabled' if running }} title="Re-copy everything: catches documents deleted in Unleashed">Full re-copy</button>
+    {% if is_admin %}<button class="btn" name="full" value="1" {{ 'disabled' if running }} title="Re-copy everything: catches documents deleted in Unleashed">Full re-copy</button>{% endif %}
     {% endif %}
     {% if running %}<span class="muted"><span class="dot dot-running"></span> Sync in progress…</span>{% endif %}
   </form>

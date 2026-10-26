@@ -67,3 +67,25 @@ CREATE TABLE IF NOT EXISTS ul_sync_lock (
     expires_at TEXT
 );
 INSERT INTO ul_sync_lock (id, owner, expires_at) VALUES (1, NULL, NULL) ON CONFLICT (id) DO NOTHING;
+
+-- Team accounts (accounts.py). Times are UTC.
+CREATE TABLE IF NOT EXISTS app_users (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    email                TEXT NOT NULL UNIQUE,   -- lowercase
+    name                 TEXT NOT NULL,
+    password_hash        TEXT NOT NULL,
+    role                 TEXT NOT NULL,          -- admin | member
+    active               INTEGER NOT NULL,
+    must_change_password INTEGER NOT NULL,
+    session_version      INTEGER NOT NULL,       -- bumped to sign the person out everywhere
+    failed_sign_ins      INTEGER NOT NULL,
+    locked_until         TEXT,
+    last_sign_in_at      TEXT,
+    created_at           TEXT NOT NULL
+);
+
+-- App-wide settings, e.g. the generated key that signs sign-in cookies.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);

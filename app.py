@@ -5,6 +5,7 @@ import os
 from flask import Flask
 
 import dashboard
+from accounts import UserStore, app_secret
 from unleashed.db import Database, database_url_from_env, is_postgres_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,12 @@ def create_app(test_config=None):
         SYNC_HISTORY_MONTHS=int(env("SYNC_HISTORY_MONTHS", "13")),
         # The business's time zone: decides "today" and month boundaries (e.g. America/Los_Angeles).
         TIMEZONE=env("TIMEZONE", "").strip(),
-        # When set, everyone must enter this password to see the dashboard.
+        # Team accounts: the first admin (or, with ADMIN_RESET=1, restoring admin access).
+        ADMIN_EMAIL=env("ADMIN_EMAIL", "").strip(),
+        ADMIN_PASSWORD=env("ADMIN_PASSWORD", ""),
+        ADMIN_NAME=env("ADMIN_NAME", "").strip(),
+        ADMIN_RESET=env("ADMIN_RESET", "") == "1",
+        # Simpler alternative to accounts: one shared password (ignored once accounts exist).
         DASHBOARD_PASSWORD=env("DASHBOARD_PASSWORD", ""),
         SECRET_KEY=env("SECRET_KEY", ""),
         SESSION_COOKIE_SAMESITE="Lax",  # sign-in cookie isn't sent on other sites' form posts
@@ -52,16 +58,36 @@ def create_app(test_config=None):
             cfg["UNLEASHED_MODE"] = "viewer"
         else:
             cfg["UNLEASHED_MODE"] = "mock"
-    if not cfg["SECRET_KEY"]:
-        # Stable across restarts and workers; only signs the login cookie.
-        seed = "unleashedaccess:" + cfg["DASHBOARD_PASSWORD"] + ":" + cfg["DATABASE"]
-        cfg["SECRET_KEY"] = hashlib.sha256(seed.encode()).hexdigest()
 
     db = Database(cfg["DATABASE"])
-    if cfg["UNLEASHED_MODE"] == "viewer":
+    viewer = cfg["UNLEASHED_MODE"] == "viewer"
+    if viewer:
         db.require_schema()  # created by the syncing instance; viewers may be read-only
     else:
         db.init_schema(os.path.join(BASE_DIR, "schema.sql"))
     app.extensions["db"] = db
+
+    if not cfg["SECRET_KEY"]:
+        try:
+            cfg["SECRET_KEY"] = app_secret(db)  # generated once, shared by every instance
+        except Exception:  # read-only viewer before the key exists
+            seed = "unleashedaccess:" + cfg["DASHBOARD_PASSWORD"] + ":" + cfg["DATABASE"]
+            cfg["SECRET_KEY"] = hashlib.sha256(seed.encode()).hexdigest()
+
+    users = UserStore(db)
+    app.extensions["users"] = users
+    cfg["ADMIN_SETUP_NOTE"] = None
+    if cfg["ADMIN_EMAIL"] and cfg["ADMIN_PASSWORD"] and not viewer:
+        cfg["ADMIN_SETUP_NOTE"] = users.ensure_admin(
+            cfg["ADMIN_EMAIL"], cfg["ADMIN_PASSWORD"], name=cfg["ADMIN_NAME"],
+            reset=cfg["ADMIN_RESET"])
+    try:
+        has_accounts = users.count() > 0
+    except Exception:  # a viewer on a database without the accounts table yet
+        has_accounts = False
+    # accounts: everyone has their own sign-in; password: one shared password; open: no sign-in
+    cfg["AUTH_MODE"] = "accounts" if has_accounts else (
+        "password" if cfg["DASHBOARD_PASSWORD"] else "open")
+
     dashboard.init_app(app)
     return app

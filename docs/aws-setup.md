@@ -35,11 +35,9 @@ look for the same name nearby on that page.
    - Your Unleashed **API ID** and **API key**.
    - A **database password** you make up: 16+ characters. Avoid `/`, `@`, `"`, `'`
      and spaces; RDS rejects those.
-   - A **dashboard password** your team will sign in with.
-   - A **secret key** for the app's sign-in cookies. Generate one on your computer:
-     ```
-     python -c "import secrets; print(secrets.token_hex(32))"
-     ```
+   - A **temporary password for your own account** (10+ characters). You'll replace
+     it with your own the first time you sign in. Everyone on your team gets their own
+     account later, from inside the app; there's no shared dashboard password.
 3. **Know which VPC your apps use.** Most accounts use the *default VPC*. If your
    company has its own VPC, use that, and make sure it has **public subnets** (or a
    NAT gateway), because the app must reach Unleashed on the internet.
@@ -207,8 +205,9 @@ zone. Your `.env` file (with your keys) is **not** included, which is what you w
     | `DB_PASSWORD` | the database password |
     | `UNLEASHED_API_ID` | your Unleashed API ID |
     | `UNLEASHED_API_KEY` | your Unleashed API key |
-    | `DASHBOARD_PASSWORD` | your team's sign-in password |
-    | `SECRET_KEY` | the secret key you generated in Part 0 |
+    | `ADMIN_EMAIL` | your email: you'll sign in with it as the first admin |
+    | `ADMIN_NAME` | your name, as the dashboard shows it |
+    | `ADMIN_PASSWORD` | the temporary password from Part 0 |
     | `TIMEZONE` | `America/Los_Angeles` (may already be filled in) |
 
 25. **Next** → **Review** → **Submit**. Creation takes 5–15 minutes.
@@ -278,12 +277,26 @@ with a padlock in the browser.
 
 ## Part 6: Sign in and check the data
 
-1. Open `https://dashboard.yeemscoffee.com` and sign in with the dashboard password.
-2. If the first copy is still running you'll see its progress. It takes a minute or
+1. Open `https://dashboard.yeemscoffee.com` and sign in with your `ADMIN_EMAIL` and
+   the temporary `ADMIN_PASSWORD`. The app asks you to choose your own password
+   straight away.
+2. Remove `ADMIN_PASSWORD` from the environment properties (**Configuration** →
+   **Updates, monitoring, and logging** → **Edit** → remove it → **Apply**). It no
+   longer works anyway, but there's no reason to keep it there.
+3. If the first copy is still running you'll see its progress. It takes a minute or
    two (longer if Unleashed needs one request per purchase order for cost lines).
-3. Go to **Connection** → **Check live data**. Every row should say **✓ OK**. Compare
+4. Go to **Connection** → **Check live data**. Every row should say **✓ OK**. Compare
    the spot-check purchase order's cost lines with Unleashed.
-4. Share the address and the dashboard password with your team.
+5. Add your team: **Team** → enter each person's name and email → **Add**. Each
+   person gets a **temporary password**, shown once; send it to them along with the
+   address. They choose their own password the first time they sign in.
+   - **Members** see the dashboard. **Admins** can also manage the team and run
+     connection checks.
+   - Someone forgot their password? **Team** → **Reset password** gives them a new
+     temporary one. Someone left? **Deactivate** signs them out immediately.
+   - Locked out of every admin account? Set `ADMIN_EMAIL`, a new temporary
+     `ADMIN_PASSWORD`, and `ADMIN_RESET` = `1` in the environment properties →
+     **Apply** → sign in → then remove `ADMIN_RESET` and `ADMIN_PASSWORD`.
 
 ---
 
