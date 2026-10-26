@@ -79,7 +79,10 @@ rule allowing PostgreSQL from `unleashedaccess-app`.
 
 1. Open the **RDS** console → **Databases** → **Create database**.
 2. **Choose a database creation method:** **Standard create**.
-3. **Engine options:** **PostgreSQL**. Engine version: any of **16**, **17** or **18**;
+3. **Engine options:** the box labeled just **PostgreSQL**, not *Aurora (PostgreSQL
+   Compatible)*. If you see **Cluster scalability type**, Aurora is selected; switch
+   back. Aurora works with the app too, but its smallest setup costs several times
+   more for no benefit at this size. Engine version: any of **16**, **17** or **18**;
    the newest (e.g. **18.3**) is a good choice. The app is tested on 16 and 18.3.
 4. **Templates:** **Free tier** if offered, otherwise **Dev/Test**.
    (Don't pick *Production*: it defaults to two servers and costs several times more.)
