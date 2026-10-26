@@ -11,8 +11,12 @@
       <button class="btn btn-primary">Try again</button>
     </form>
     {% endif %}
-    <p class="muted">The <a href="{{ url_for('dash.connection') }}">Connection page</a> can test your credentials, and the
-      <a href="{{ url_for('dash.api_log') }}">API log</a> shows each request Unleashed answered.</p>
+    {% if is_admin %}
+    <p class="muted">Under Settings, the <a href="{{ url_for('dash.connection') }}">Connection page</a> can test your
+      credentials, and the <a href="{{ url_for('dash.api_log') }}">API log</a> shows each request Unleashed answered.</p>
+    {% else %}
+    <p class="muted">If this keeps happening, ask an admin on your team to check the Unleashed connection.</p>
+    {% endif %}
   {% elif running or (run and run.status == 'running') %}
     <h1>Copying your Unleashed data</h1>
     <p>This first copy takes a minute or two. After that, pages load instantly and the copy

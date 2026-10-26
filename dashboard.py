@@ -112,7 +112,45 @@ def _ctx():
             "can_sync": ext["syncer"] is not None, "source_error": ext["source_error"],
             "login_enabled": mode != "open", "auth_mode": mode,
             "signed_in": user is not None if mode == "accounts" else bool(session.get("signed_in")),
-            "current_user": user, "is_admin": is_admin()}
+            "current_user": user, "is_admin": is_admin(), **_nav()}
+
+
+# The tabs and the pages under each. A tab with several pages opens the first and lists
+# them in a second row while one is open. Settings is only shown to admins.
+_TABS = [
+    ("Overview", [("dash.overview", "Overview")]),
+    ("COGS", [("dash.cogs_page", "COGS")]),
+    ("Stock on hand", [("dash.stock_on_hand", "Stock on hand")]),
+    ("Valuation", [("dash.stock_valuation", "Valuation")]),
+    ("Purchases", [("dash.purchases", "Purchases")]),
+    ("Sales", [("dash.sales", "Sales")]),
+    ("Transactions", [("dash.transactions", "All transactions"),
+                      ("dash.stock_movement", "Stock movement"), ("dash.adjustments", "Adjustments")]),
+]
+_SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "Team"),
+                              ("dash.api_log", "API log")])
+# Pages shown under another page's tab.
+_PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
+            "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
+
+
+def _nav():
+    """The header's tabs, and the open tab's pages when it has several."""
+    page = _PAGE_OF.get(request.endpoint, request.endpoint)
+    tabs = list(_TABS)
+    if is_admin():
+        accounts = current_app.config["AUTH_MODE"] == "accounts"
+        label, pages = _SETTINGS_TAB
+        tabs.append((label, [p for p in pages if accounts or p[0] != "dash.team"]))
+    nav, subnav = [], None
+    for label, pages in tabs:
+        active = any(ep == page for ep, _ in pages)
+        nav.append({"label": label, "url": url_for(pages[0][0]), "active": active,
+                    "settings": label == _SETTINGS_TAB[0]})
+        if active and len(pages) > 1:
+            subnav = {"label": label, "pages": [
+                {"label": name, "url": url_for(ep), "active": ep == page} for ep, name in pages]}
+    return {"nav": nav, "subnav": subnav}
 
 
 # Pages that work before the first sync has finished.
@@ -154,8 +192,9 @@ def admin_only(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
         if not is_admin():
-            return render_template("dash/error.html", error="Only admins can do that. Ask an "
-                                   "admin on your team if you need it.", status=403), 403
+            return render_template("dash/error.html", heading="Admins only",
+                                   error="Only admins can open Settings or make these changes. "
+                                   "Ask an admin on your team if you need something.", status=403), 403
         return view(*args, **kwargs)
     return wrapper
 
@@ -575,15 +614,15 @@ def transactions():
 
 
 @bp.get("/api-log")
+@admin_only
 def api_log():
     rows = _ext()["db"].query("SELECT * FROM unleashed_api_log ORDER BY id DESC LIMIT 300")
     return render_template("dash/api_log.html", rows=rows)
 
 
 @bp.route("/connection", methods=["GET", "POST"])
+@admin_only
 def connection():
-    if request.method == "POST" and not is_admin():
-        return admin_only(lambda: None)()
     from unleashed.diagnostics import run_checks
     from unleashed.reports import Reports
 

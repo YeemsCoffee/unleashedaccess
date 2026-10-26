@@ -1,9 +1,15 @@
 {% extends "dash/base.html" %}
-{% block title %}Unleashed error{% endblock %}
+{% block title %}{{ heading or 'Unleashed error' }}{% endblock %}
 {% block content %}
 <section class="card">
-  <h1>Couldn't load data from Unleashed</h1>
+  <h1>{{ heading or "Couldn't load data from Unleashed" }}</h1>
   <p class="recon recon-warn">! {{ error }}</p>
-  <p class="muted">Check the <a href="{{ url_for('dash.connection') }}">connection page</a> and the <a href="{{ url_for('dash.api_log') }}">API log</a>.</p>
+  {% if not heading %}
+  {% if is_admin %}
+  <p class="muted">Check the <a href="{{ url_for('dash.connection') }}">connection page</a> and the <a href="{{ url_for('dash.api_log') }}">API log</a> under Settings.</p>
+  {% else %}
+  <p class="muted">If this keeps happening, ask an admin on your team to check the Unleashed connection.</p>
+  {% endif %}
+  {% endif %}
 </section>
 {% endblock %}

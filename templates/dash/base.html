@@ -22,7 +22,7 @@
         {% if sync_last and sync_last.status == 'running' %}
           <span class="dot dot-running"></span> Syncing…
         {% elif sync_last and sync_last.status == 'failed' %}
-          <a href="{{ url_for('dash.connection') }}" class="sync-failed" title="{{ sync_last.error }}"><span class="dot dot-failed"></span> Last sync failed</a>{% if sync_ok %} · data from {{ ago(sync_ok.finished_at) }}{% endif %}
+          {% if is_admin %}<a href="{{ url_for('dash.connection') }}" class="sync-failed" title="{{ sync_last.error }}">{% else %}<span class="sync-failed" title="{{ sync_last.error }}">{% endif %}<span class="dot dot-failed"></span> Last sync failed{% if is_admin %}</a>{% else %}</span>{% endif %}{% if sync_ok %} · data from {{ ago(sync_ok.finished_at) }}{% endif %}
         {% elif sync_ok %}
           <span class="dot dot-ok"></span> Synced {{ ago(sync_ok.finished_at) }}
         {% endif %}
@@ -46,19 +46,19 @@
   {% if source_error %}
   <div class="banner banner-warn">! {{ source_error }}</div>
   {% endif %}
-  {% set nav = [
-    ('dash.overview', 'Overview'), ('dash.cogs_page', 'COGS'),
-    ('dash.stock_on_hand', 'Stock on hand'), ('dash.stock_valuation', 'Valuation'),
-    ('dash.stock_movement', 'Stock movement'), ('dash.purchases', 'Purchases'),
-    ('dash.sales', 'Sales'), ('dash.adjustments', 'Adjustments'),
-    ('dash.transactions', 'Transactions'), ('dash.api_log', 'API log'),
-    ('dash.connection', 'Connection')] + ([('dash.team', 'Team')] if is_admin and auth_mode == 'accounts' else []) %}
   {% if not signed_out %}
   <nav class="dash-nav">
-    {% for ep, label in nav %}
-    <a href="{{ url_for(ep) }}" class="{{ 'active' if request.endpoint == ep or (request.endpoint or '').startswith(ep + '_') }}">{{ label }}</a>
+    {% for tab in nav %}
+    <a href="{{ tab.url }}" class="{{ ['nav-settings' if tab.settings, 'active' if tab.active]|select|join(' ') }}">{{ tab.label }}</a>
     {% endfor %}
   </nav>
+  {% if subnav %}
+  <nav class="dash-nav dash-subnav" aria-label="{{ subnav.label }}">
+    {% for p in subnav.pages %}
+    <a href="{{ p.url }}" class="{{ 'active' if p.active }}">{{ p.label }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
   {% endif %}
   <main class="dash-main">
     {% block content %}{% endblock %}

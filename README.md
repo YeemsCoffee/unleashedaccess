@@ -24,7 +24,7 @@ Unleashed API ──────────────────────
   days of stock snapshots, plus any earlier day an edited document touched,
   so backdated changes are caught.
 - **Weekly:** a full re-copy, which also drops documents deleted in Unleashed.
-- **Sync now** (header) and **Full re-copy** (Connection page) run one on demand.
+- **Sync now** (header) and **Full re-copy** (Settings → Connection) run one on demand.
 - Date ranges older than the copy fall back to the live API automatically.
 
 It includes a **mock Unleashed server**, so the whole dashboard works before
@@ -50,15 +50,17 @@ app's tables in it.
 | COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
 | Stock on hand | Stock On Hand enquiry, now or as at any date, filterable by product group |
 | Valuation | Stock valuation by product group |
-| Stock movement | Per-product movements with running balance, reconciled to stock on hand |
 | Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
 | Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
-| Adjustments | Stock adjustment enquiry |
 | Transactions | Full history of purchase receipts, completed sales and stock adjustments |
-| API log | Every API call made: endpoint, query, status, timing, item count |
-| Connection | Data source, credential status, and a "Test live connection" button |
+| Transactions → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
+| Transactions → Adjustments | Stock adjustment enquiry |
+| Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
+| Settings → Team | Team accounts: add people, reset passwords, change roles, deactivate |
+| Settings → API log | Every API call made: endpoint, query, status, timing, item count |
 
-Every report has **Export CSV**.
+**Settings** is only shown to admins (with team accounts on). Every report has
+**Export CSV**.
 
 ## COGS (running, month to date)
 
@@ -94,7 +96,7 @@ on its own with `python mock_unleashed.py` (port 8100).
 1. In `.env`, set `UNLEASHED_API_ID` and `UNLEASHED_API_KEY` (Unleashed →
    Integration → Unleashed API Access). `.env` is gitignored, so keys are
    never committed.
-2. Restart, open **Connection**, and click **Check live data**. This works
+2. Restart, open **Settings** → **Connection**, and click **Check live data**. This works
    even while the dashboard still shows mock data. It confirms against your
    real account that:
    - historical stock (`asAtDate`) works, which opening inventory depends on;
@@ -147,11 +149,11 @@ and the API key and database password stay on the server.
    |----------|-------|
    | `DATABASE_URL` | the PostgreSQL connection string |
    | `UNLEASHED_API_ID`, `UNLEASHED_API_KEY` | your Unleashed API credentials |
-   | `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` | your email, name and a temporary password: you sign in as the first admin, choose your own password, then add your team on the **Team** page |
+   | `ADMIN_EMAIL`, `ADMIN_NAME`, `ADMIN_PASSWORD` | your email, name and a temporary password: you sign in as the first admin, choose your own password, then add your team under **Settings** → **Team** |
    | `TIMEZONE` | `America/Los_Angeles` (servers run on UTC; this sets "today" and month boundaries) |
 
 4. Open the service's address, sign in, choose your password, and wait for the
-   first copy to finish. Then add your team under **Team**: each person gets their
+   first copy to finish. Then add your team under **Settings** → **Team**: each person gets their
    own sign-in.
 
 Run one worker (the default in `gunicorn.conf.py`): the background sync runs

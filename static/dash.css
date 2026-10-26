@@ -77,6 +77,9 @@ code, .mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
   border-bottom: 2px solid transparent; text-decoration: none;
 }
 .dash-nav a.active { color: var(--text-primary); border-bottom-color: var(--accent); font-weight: 600; }
+.dash-nav .nav-settings { margin-left: auto; }
+.dash-subnav { background: var(--surface-0); font-size: 14px; }
+.dash-subnav a { padding: 8px 10px; }
 
 .dash-main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }

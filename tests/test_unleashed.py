@@ -126,6 +126,27 @@ class DashboardPageTests(unittest.TestCase):
             self.assertEqual(res.status_code, 200, path)
             self.assertNotIn("Couldn't load data", res.get_data(as_text=True), path)
 
+    def test_grouped_tabs(self):
+        import re
+
+        def links(path, active=False):
+            html = self.client.get(path).get_data(as_text=True)
+            cls = r'[^"]*\bactive\b[^"]*' if active else r'[^"]*'
+            return re.findall(rf'<a href="[^"]*" class="{cls}">([^<]+)</a>', html)
+
+        overview = links("/")
+        self.assertIn("Transactions", overview)
+        self.assertIn("Settings", overview)  # no accounts here, so everyone manages settings
+        for page in ("Stock movement", "Adjustments", "Connection", "API log"):
+            self.assertNotIn(page, overview)
+        for path in ("/transactions", "/stock-movement", "/adjustments"):
+            self.assertEqual(links(path)[-3:], ["All transactions", "Stock movement", "Adjustments"], path)
+        self.assertEqual(links("/stock-movement", active=True), ["Transactions", "Stock movement"])
+        for path in ("/connection", "/api-log"):
+            self.assertEqual(links(path)[-2:], ["Connection", "API log"], path)  # no Team without accounts
+        self.assertEqual(links("/api-log", active=True), ["Settings", "API log"])
+        self.assertEqual(links("/purchases/PO-00000001", active=True), ["Purchases"])
+
     def test_csv_export(self):
         res = self.client.get("/stock-on-hand?format=csv")
         self.assertEqual(res.mimetype, "text/csv")
@@ -593,7 +614,12 @@ class TeamAccountTests(unittest.TestCase):
         page = c.get("/").get_data(as_text=True)
         self.assertIn("COGS spend", page)
         self.assertIn(">Owner<", page)
-        self.assertIn(">Team<", page)
+        self.assertIn(">Settings<", page)
+        self.assertNotIn(">API log<", page)  # inside Settings, not the main tabs
+        settings = c.get("/connection").get_data(as_text=True)
+        for tab in (">Connection<", ">Team<", ">API log<"):
+            self.assertIn(tab, settings)
+        self.assertIn(">Team<", c.get("/team").get_data(as_text=True))
         # Restarting with the same settings doesn't reset the admin's password.
         restarted = self._app()
         c2 = restarted.test_client()
@@ -608,8 +634,11 @@ class TeamAccountTests(unittest.TestCase):
         self._choose_password(bea, temp, "bea-own-password")
         page = bea.get("/").get_data(as_text=True)
         self.assertIn("COGS spend", page)
-        self.assertNotIn(">Team<", page)
+        for tab in (">Settings<", ">Team<", ">Connection<", ">API log<"):
+            self.assertNotIn(tab, page)
         self.assertEqual(bea.get("/team").status_code, 403)
+        self.assertEqual(bea.get("/connection").status_code, 403)
+        self.assertEqual(bea.get("/api-log").status_code, 403)
         self.assertEqual(bea.post("/connection", data={"action": "check"}).status_code, 403)
         self.assertEqual(bea.post("/team/add", data={"name": "x", "email": "x@y.z"}).status_code, 403)
         self.assertIn("already an account", admin.post(

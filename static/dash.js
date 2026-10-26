@@ -32,3 +32,14 @@
     svg.addEventListener("mouseleave", hide);
   });
 })();
+
+/* On narrow screens the tab rows scroll sideways: bring the open tab into view. */
+(function () {
+  "use strict";
+  document.querySelectorAll(".dash-nav").forEach(function (nav) {
+    var active = nav.querySelector("a.active");
+    if (active && nav.scrollWidth > nav.clientWidth) {
+      nav.scrollLeft = active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2;
+    }
+  });
+})();

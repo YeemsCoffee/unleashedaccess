@@ -229,7 +229,7 @@ same reason is in **Logs** → **Request logs** → **Last 100 lines**. Common o
 | `DB_HOST isn't an address the app can find` | `DB_HOST` must be the RDS endpoint exactly, without `https://` or `:5432`. |
 | `password authentication failed` | `DB_USER` or `DB_PASSWORD` doesn't match the database. |
 | `database "…" does not exist` | The app creates a missing database by itself when `DB_USER` is the RDS master username. If you still see this, set `DB_USER` to the master username (RDS → your database → **Configuration** → **Master username**). |
-| `Unleashed … Forbidden` (on the Connection page later) | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` is wrong. |
+| `Unleashed … Forbidden` (on Settings → Connection later) | `UNLEASHED_API_ID` / `UNLEASHED_API_KEY` is wrong. |
 
 After fixing environment properties, click **Apply**; EB restarts the app by itself.
 
@@ -287,14 +287,14 @@ with a padlock in the browser.
    longer works anyway, but there's no reason to keep it there.
 3. If the first copy is still running you'll see its progress. It takes a minute or
    two (longer if Unleashed needs one request per purchase order for cost lines).
-4. Go to **Connection** → **Check live data**. Every row should say **✓ OK**. Compare
+4. Go to **Settings** → **Connection** → **Check live data**. Every row should say **✓ OK**. Compare
    the spot-check purchase order's cost lines with Unleashed.
-5. Add your team: **Team** → enter each person's name and email → **Add**. Each
-   person gets a **temporary password**, shown once; send it to them along with the
-   address. They choose their own password the first time they sign in.
-   - **Members** see the dashboard. **Admins** can also manage the team and run
-     connection checks.
-   - Someone forgot their password? **Team** → **Reset password** gives them a new
+5. Add your team: **Settings** → **Team** → enter each person's name and email →
+   **Add**. Each person gets a **temporary password**, shown once; send it to them
+   along with the address. They choose their own password the first time they sign in.
+   - **Members** see the reports. **Admins** also see **Settings**: the team, the
+     Unleashed connection and the API log.
+   - Someone forgot their password? **Settings** → **Team** → **Reset password** gives them a new
      temporary one. Someone left? **Deactivate** signs them out immediately.
    - Locked out of every admin account? Set `ADMIN_EMAIL`, a new temporary
      `ADMIN_PASSWORD`, and `ADMIN_RESET` = `1` in the environment properties →
