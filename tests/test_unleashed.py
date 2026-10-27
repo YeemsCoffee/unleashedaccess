@@ -544,26 +544,39 @@ class ProductionRunTests(unittest.TestCase):
             self.assertIn(text, record)
         self.assertNotIn('name="field:', record)
 
-    def test_yield_is_made_over_planned(self):
+    def test_each_material_has_a_yield_and_the_product_its_own(self):
         app = self._app()
         c = app.test_client()
-        self._record(c)
+        self._record(c)  # used 1.2 espresso and 7 jugs; the recipe is 0.36 espresso + 1 jug per gallon
+        confirm = c.get(self.url + "/close").get_data(as_text=True)
+        self.assertIn('data-num="0.36" data-den="1.2"', confirm)  # espresso's yield, as made is typed
         done = self._close(c, made="6.5")  # of 7 planned
-        self.assertIn("made 6.5 of 7 planned, a yield of 92.9%", done)
+        self.assertIn("made 6.5 of 7 planned, a yield of 92.9%", done)  # the finished product's
+        order = app.extensions["unleashed"]["production"].order(
+            self.asm["AssemblyNumber"], planned=app.extensions["production_runs"].planned_quantities())
+        self.assertAlmostEqual(order["yield"], 6.5 / 7)
+        by_code = {x["product_code"]: x for x in order["components"]}
+        self.assertAlmostEqual(by_code["COF-ESP-5LB"]["yield"], 0.36 * 6.5 / 1.2)  # used less than the recipe
+        self.assertAlmostEqual(by_code["JUG-GAL"]["yield"], 6.5 / 7)  # a jug more than 6.5 gallons need
         page = c.get(self.url).get_data(as_text=True)
-        for text in ("<dt>Planned</dt><dd>7</dd>", "<dt>Made</dt><dd>6.5</dd>", "92.9%"):
-            self.assertIn(text, page)
-        start = f"?start={TODAY.replace(day=1).isoformat()}&end={TODAY.isoformat()}"
-        self.assertIn("92.9%", c.get("/production/orders" + start).get_data(as_text=True))
-        csv_text = c.get("/production/orders" + start + "&format=csv").get_data(as_text=True)
-        self.assertIn(f"{self.asm['AssemblyNumber']},", csv_text)
-        self.assertIn(",6.5,7,0.9286,", csv_text)  # made, planned, yield
+        self.assertIn("Product yield", page)
+        self.assertIn("Material yield", page)
+
+        # Over a period: each material's yield across orders; the product's where the plan is known.
+        start, end = TODAY.replace(day=1), TODAY
         usage = app.extensions["unleashed"]["production"].usage(
-            TODAY.replace(day=1), TODAY, planned=app.extensions["production_runs"].planned_quantities())
-        self.assertAlmostEqual(usage["yield"], 6.5 / 7)  # only orders completed here have a plan
-        cold_brew = next(p for p in usage["products"] if p["product_code"] == "CB-CONC-GAL")
-        self.assertAlmostEqual(cold_brew["yield"], 6.5 / 7)
+            start, end, planned=app.extensions["production_runs"].planned_quantities())
+        self.assertAlmostEqual(usage["yield"], 6.5 / 7)  # only this order was completed here
+        cold_brew = [o for o in usage["orders"] if o["product_code"] == "CB-CONC-GAL"]
+        jugs = next(x for x in usage["components"] if x["product_code"] == "JUG-GAL")
+        self.assertAlmostEqual(jugs["yield"], sum(o["qty"] for o in cold_brew) / jugs["consumed"])
         self.assertIsNone(next(p for p in usage["products"] if p["product_code"] == "VSC-HG")["yield"])
+        span = f"?start={start.isoformat()}&end={end.isoformat()}"
+        csv_text = c.get("/production/orders" + span + "&format=csv").get_data(as_text=True)
+        self.assertIn("Planned qty,Yield (made / planned)", csv_text)
+        self.assertIn(",6.5,7,0.9286,", csv_text)
+        usage_csv = c.get("/production/usage" + span + "&format=csv").get_data(as_text=True)
+        self.assertIn("Recipe for what was made,Yield (recipe / used)", usage_csv)
 
     def test_steps_with_nothing_to_record_do_not_hold_up_completing(self):
         c = self._app().test_client()

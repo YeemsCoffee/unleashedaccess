@@ -1,5 +1,5 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import status_pill, production_notice, complete_action %}
+{% from "dash/_macros.html" import status_pill, production_notice, complete_action, yield_pct %}
 {% block title %}{{ o.number }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -10,13 +10,9 @@
 <section class="card">
   <dl class="facts">
     <div><dt>Product</dt><dd>{{ o.description }} ({{ o.product_code }})</dd></div>
-    {% if o.planned_qty %}
-    <div><dt>Planned</dt><dd>{{ o.planned_qty|qty }}</dd></div>
-    <div><dt>Made</dt><dd>{{ o.qty|qty }}</dd></div>
-    <div><dt>Yield</dt><dd><span class="{{ 'over' if o.yield < 0.95 }}">{{ o.yield|pct }}</span></dd></div>
-    {% else %}
+    {% if o.planned_qty %}<div><dt>Planned</dt><dd>{{ o.planned_qty|qty }}</dd></div>{% endif %}
     <div><dt>{{ 'Made' if o.completed else 'Quantity' }}</dt><dd>{{ o.qty|qty }}</dd></div>
-    {% endif %}
+    {% if o.yield is not none %}<div><dt>Product yield</dt><dd title="Made ÷ planned">{{ yield_pct(o.yield) }}</dd></div>{% endif %}
     <div><dt>Assembly date</dt><dd>{{ o.date|d }}</dd></div>
     <div><dt>Assemble by</dt><dd>{{ o.due|d }}</dd></div>
     {% if o.completed %}<div><dt>Completed</dt><dd>{{ o.completed_date|d }}</dd></div>{% endif %}
@@ -115,20 +111,20 @@
   <h2>Components</h2>
   <div class="table-wrap"><table>
     {% if o.completed %}
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe</th><th class="num">Used</th><th class="num">Wastage</th><th class="num">Total used</th><th class="num">Variance</th><th class="num">Unit cost</th><th class="num">Cost</th><th class="num">Variance cost</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe</th><th class="num">Used</th><th class="num">Wastage</th><th class="num">Total used</th><th class="num">Variance</th><th class="num" title="Recipe for what was made ÷ used">Material yield</th><th class="num">Unit cost</th><th class="num">Cost</th><th class="num">Variance cost</th></tr></thead>
     <tbody>{% for c in o.components %}
     <tr class="{{ 'row-warn' if c.variance and c.variance > 0.0001 }}"><td>{{ c.product_code }}</td><td>{{ c.description }}</td>
       <td class="num">{{ c.planned|qty if c.planned is not none else '—' }}</td><td class="num">{{ c.qty|qty }}</td>
       <td class="num">{{ c.wastage|qty }}</td><td class="num">{{ c.consumed|qty }}</td>
-      <td class="num">{{ c.variance|qty if c.variance is not none else '—' }}</td>
+      <td class="num">{{ c.variance|qty if c.variance is not none else '—' }}</td><td class="num">{{ yield_pct(c.yield) }}</td>
       <td class="num">{{ c.unit_cost|money }}{{ '*' if c.estimated }}</td><td class="num">{{ c.cost|money }}</td>
       <td class="num">{{ c.variance_cost|money if c.variance_cost is not none else '—' }}</td></tr>
     {% endfor %}</tbody>
     <tfoot>
-      <tr><td colspan="8">Component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td><td></td></tr>
+      <tr><td colspan="9">Component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td><td></td></tr>
       {% if o.standard_cost is not none %}
-      <tr><td colspan="8">Recipe cost at today's average costs</td><td class="num">{{ o.standard_cost|money }}</td><td></td></tr>
-      <tr><td colspan="9">Material variance (used beyond the recipe, at cost)</td><td class="num">{{ o.material_variance|money }}</td></tr>
+      <tr><td colspan="9">Recipe cost at today's average costs</td><td class="num">{{ o.standard_cost|money }}</td><td></td></tr>
+      <tr><td colspan="10">Material variance (used beyond the recipe, at cost)</td><td class="num">{{ o.material_variance|money }}</td></tr>
       {% endif %}
     </tfoot>
     {% else %}

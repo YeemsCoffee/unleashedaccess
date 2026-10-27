@@ -50,20 +50,24 @@
   });
 })();
 
-/* Yield (made ÷ planned) as it's typed, on the page that completes a production order. */
+/* Yields as the quantity made is typed, on the page that completes a production order:
+   each [data-yield] shows made x data-num / data-den; [data-flag] ones go red under 95%. */
 (function () {
   "use strict";
-  document.querySelectorAll("[data-yield-of]").forEach(function (out) {
-    var input = document.getElementById(out.dataset.yieldOf);
-    var planned = parseFloat(out.dataset.planned);
-    function show() {
-      var made = parseFloat(input.value);
-      out.textContent = made > 0 && planned > 0 ? (made / planned * 100).toFixed(1) + "%" : "—";
-      out.classList.toggle("over", made > 0 && planned > 0 && made / planned < 0.95);
-    }
-    input.addEventListener("input", show);
-    show();
-  });
+  var made = document.getElementById("made");
+  if (!made) return;
+  var outs = document.querySelectorAll("[data-yield]");
+  function show() {
+    var m = parseFloat(made.value);
+    outs.forEach(function (out) {
+      var num = parseFloat(out.dataset.num), den = parseFloat(out.dataset.den);
+      var v = m > 0 && num > 0 && den > 0 ? m * num / den : NaN;
+      out.textContent = isFinite(v) ? (v * 100).toFixed(1) + "%" : "—";
+      if (out.hasAttribute("data-flag")) out.classList.toggle("over", isFinite(v) && v < 0.95);
+    });
+  }
+  made.addEventListener("input", show);
+  show();
 })();
 
 /* On narrow screens the tab rows scroll sideways: bring the open tab into view. */

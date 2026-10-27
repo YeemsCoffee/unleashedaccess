@@ -135,8 +135,9 @@ closing the order out replaces Unleashed's figures with those.
 3. **Complete** (anyone): **Complete order** appears at the top and bottom of
    the procedure once every step that records something is saved (steps with
    nothing to record don't hold it up; until then it lists the steps still to
-   save). Enter how much was made, which shows the **yield** (made ÷ planned),
-   and the date, check the totals against Unleashed's calculation, then
+   save). Enter how much was made, which shows the product yield and each
+   material's yield (below), and the date, check the totals against
+   Unleashed's calculation, then
    **Complete in Unleashed**. Anything recorded outside its range is listed
    there first. For each component, the sum over all steps is
    sent as the quantity used (wastage 0). The quantity made and the assembly
@@ -148,10 +149,22 @@ the quantities back first. If Unleashed didn't keep them, or refuses to complete
 the reason shows on the order, and it can be completed again. A completion cut
 off part-way (the app restarted) can be retried after 10 minutes.
 
-**Yield** is the quantity made ÷ the quantity planned. Unleashed only keeps the
-quantity made, so yield is known for orders completed here: it shows on the
-order, in Production orders (and its CSV), on the Production overview and in
-Component usage, by product and overall. Procedures, step quantities and field entries live in
+**Yield** is two separate measures:
+
+- **Material yield**, for each material: what the bill of materials calls for to
+  make the quantity actually made (its wastage allowance included) ÷ what was
+  used of that material. Under 100% means more was used than the recipe allows.
+  It shows per material on the order and on the completion page (as the quantity
+  made is typed), and per material over any period in Component usage. It works
+  for every completed order with a bill of materials, including ones completed
+  in Unleashed.
+- **Product yield**, for the finished product: quantity made ÷ quantity
+  planned. Unleashed only keeps the quantity made, so the plan is recorded when
+  an order is completed here; product yield shows on the order, in Production
+  orders (and its CSV), on the Production overview and in Component usage, by
+  product and overall.
+
+Both are flagged under 95%. Procedures, step quantities and field entries live in
 this app's database (`prod_steps`, `prod_runs`, `prod_step_records`,
 `prod_step_entries`); Unleashed only receives the totals. A completed order's
 page keeps everything recorded, read-only, as its batch record. Starting and closing out orders needs the instance with the Unleashed API key

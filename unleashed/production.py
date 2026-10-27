@@ -10,9 +10,13 @@ organised like an ERP's production module.
   in due-date order (first come, first served), with shortages before and after
   incoming purchase orders.
 - Usage: components used and wasted, and products made, over a period.
-- Yield: quantity made ÷ quantity planned. Unleashed keeps only the quantity made, so
-  the planned quantities come from the caller (orders completed in this app record
-  them), as `planned`: {assembly guid: quantity planned}.
+- Yield, two separate measures:
+  - each material's yield: what the bill of materials calls for to make the quantity
+    actually made ÷ what was used of that material (per order, and per component over a
+    period);
+  - the finished product's yield: quantity made ÷ quantity planned. Unleashed keeps only
+    the quantity made, so planned quantities come from the caller (orders completed in
+    this app record them), as `planned`: {assembly guid: quantity planned}.
 
 Everything comes from Reports, so it reads the stored copy or the live API alike.
 """
@@ -114,10 +118,11 @@ class Production:
         for n in _needs(order, bom):
             code = n["product_code"]
             plan = planned.get(code, 0) if bom else None
-            row = {**n, "planned": plan, "variance": None, "variance_cost": None}
+            row = {**n, "planned": plan, "variance": None, "variance_cost": None, "yield": None}
             if order["completed"] and plan is not None:
                 row["variance"] = round(n["consumed"] - plan, 6)  # no float dust as "-0.00"
                 row["variance_cost"] = row["variance"] * n["unit_cost"]
+                row["yield"] = plan / n["consumed"] if n["consumed"] else None
             if order["open"]:
                 row["available"] = stock.get(code, {}).get("available", 0)
                 row["short"] = max(n["consumed"] - max(row["available"], 0), 0)
@@ -129,7 +134,7 @@ class Production:
                 components.append({"product_code": l["product_code"], "description": l["description"],
                                    "qty": 0, "wastage": 0, "consumed": 0, "unit_cost": l["unit_cost"],
                                    "cost": 0, "estimated": False, "planned": plan, "variance": -plan,
-                                   "variance_cost": -plan * l["unit_cost"]})
+                                   "variance_cost": -plan * l["unit_cost"], "yield": None})
         order.update(
             components=components, bom=bom,
             standard_cost=bom["unit_cost"] * order["qty"] if bom else None,
@@ -195,11 +200,15 @@ class Production:
         """Components used and wasted, and products made, by completed orders start..end."""
         done = _with_yield([a for a in self.reports.assemblies(start, end)
                             if a["completed"] and start <= a["completed_date"] <= end], planned)
+        boms = self.reports.bills_of_materials()
         components = defaultdict(lambda: {"description": "", "qty": 0, "wastage": 0, "consumed": 0,
-                                          "cost": 0, "wastage_cost": 0, "orders": 0})
+                                          "cost": 0, "wastage_cost": 0, "orders": 0, "recipe": 0,
+                                          "recipe_used": 0})
         by_day = defaultdict(float)
         for a in done:
             by_day[a["completed_date"]] += a["cost"]
+            bom = bom_for(a["product_code"], boms)
+            per_unit = {l["product_code"]: l["per_unit"] for l in bom["lines"]} if bom else {}
             for l in a["lines"]:
                 c = components[l["product_code"]]
                 c["description"] = l["description"]
@@ -207,13 +216,18 @@ class Production:
                 for k in ("qty", "wastage", "consumed", "cost"):
                     c[k] += l[k]
                 c["wastage_cost"] += l["wastage"] * l["unit_cost"]
+                if l["product_code"] in per_unit:  # what the recipe called for, for what was made
+                    c["recipe"] += per_unit[l["product_code"]] * a["qty"]
+                    c["recipe_used"] += l["consumed"]
+        for c in components.values():
+            c["yield"] = c["recipe"] / c["recipe_used"] if c["recipe_used"] else None
         cost = sum(a["cost"] for a in done)
         wastage_cost = sum(c["wastage_cost"] for c in components.values())
         return {
             "start": start, "end": end, "orders": sorted(done, key=_newest_first, reverse=True),
             "components": sorted(({"product_code": k, **v} for k, v in components.items()),
                                  key=lambda c: -c["cost"]),
-            "products": _made_by_product(done, self.reports.bills_of_materials()),
+            "products": _made_by_product(done, boms),
             "qty_made": sum(a["qty"] for a in done), "cost": cost, "wastage_cost": wastage_cost,
             "wastage_pct": wastage_cost / cost if cost else None, "by_day": dict(by_day),
             "estimated": any(a["estimated"] for a in done), "yield": _overall_yield(done),
@@ -256,8 +270,9 @@ def _buildable(bom, stock):
     return int(min(counts) + 1e-9) if counts else None
 
 
-def _with_yield(orders, planned):
-    """Adds "planned_qty" and "yield" (made ÷ planned) to completed orders whose plan is known."""
+def _with_yield(orders, planned=None):
+    """Adds "planned_qty" and the finished product's "yield" (made ÷ planned) to completed
+    orders whose plan is known."""
     for o in orders:
         plan = (planned or {}).get(o["guid"]) if o["completed"] else None
         o["planned_qty"] = plan
@@ -266,7 +281,7 @@ def _with_yield(orders, planned):
 
 
 def _overall_yield(done):
-    """Made ÷ planned over the completed orders whose plan is known."""
+    """The finished product's yield over several orders: made ÷ planned, where planned is known."""
     known = [o for o in done if o.get("planned_qty")]
     planned = sum(o["planned_qty"] for o in known)
     return sum(o["qty"] for o in known) / planned if planned else None

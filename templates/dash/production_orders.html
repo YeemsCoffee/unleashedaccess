@@ -28,7 +28,7 @@
 <section class="card">
   <h2>Made, by product</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Yield</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Product yield</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
     <tbody>{% for p in po.by_product %}
     <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
       <td class="num">{{ yield_pct(p.yield) }}</td><td class="num">{{ p.cost|money }}</td><td class="num">{{ p.unit_cost|money }}</td>
@@ -41,7 +41,7 @@
 <section class="card">
   <h2>Orders</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th>Product</th><th class="num">Qty</th><th class="num">Yield</th><th>Status</th><th class="num">Component cost</th><th class="num">Unit cost</th></tr></thead>
+    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th>Product</th><th class="num">Qty</th><th class="num">Product yield</th><th>Status</th><th class="num">Component cost</th><th class="num">Unit cost</th></tr></thead>
     <tbody>
     {% for o in po.orders %}
     <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>

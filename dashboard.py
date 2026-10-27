@@ -681,7 +681,7 @@ def production_orders():
             ("Assemble by", lambda x: _iso(x["due"])), ("Status", "status"),
             ("Product Code", "product_code"), ("Description", "description"), ("Qty", "qty"),
             ("Planned qty", lambda x: _round(x["planned_qty"], 4)),
-            ("Yield", lambda x: _round(x["yield"], 4)),
+            ("Yield (made / planned)", lambda x: _round(x["yield"], 4)),
             ("Component cost", lambda x: round(x["cost"], 2)),
             ("Unit cost", lambda x: round(x["unit_cost"], 4)),
             ("Cost estimated", lambda x: "yes" if x["estimated"] else ""),
@@ -800,7 +800,9 @@ def production_close(number):
         return back
     today = reports().today
     if request.method == "GET":
-        return _render_production("production_close", o=order, run=run, today=today)
+        # Each material's yield, worked out as the quantity made is typed: recipe per unit x made ÷ used.
+        per_unit = {l["product_code"]: l["per_unit"] for l in order["bom"]["lines"]} if order["bom"] else {}
+        return _render_production("production_close", o=order, run=run, today=today, per_unit=per_unit)
 
     try:
         made = float(request.form.get("made", ""))
@@ -833,7 +835,8 @@ def production_close(number):
     _sync_soon()  # stock on hand
     made_now = done.get("Quantity") or made
     flash(f"{order['number']} is completed in Unleashed: made {qty(made_now)} of {qty(order['qty'])} "
-          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}.", "ok")
+          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}. Each "
+          "material's yield is on the order.", "ok")
     return back
 
 
@@ -952,7 +955,9 @@ def production_usage():
         return _csv("component-usage", [
             ("Component", "product_code"), ("Description", "description"), ("Orders", "orders"),
             ("Used", lambda x: round(x["qty"], 4)), ("Wastage", lambda x: round(x["wastage"], 4)),
-            ("Total", lambda x: round(x["consumed"], 4)), ("Cost", lambda x: round(x["cost"], 2)),
+            ("Total", lambda x: round(x["consumed"], 4)),
+            ("Recipe for what was made", lambda x: round(x["recipe"], 4)),
+            ("Yield (recipe / used)", lambda x: _round(x["yield"], 4)), ("Cost", lambda x: round(x["cost"], 2)),
             ("Wastage cost", lambda x: round(x["wastage_cost"], 2)),
         ], u["components"])
     return _render_production("production_usage", u=u, start=start, end=end, csv_url=_csv_url())

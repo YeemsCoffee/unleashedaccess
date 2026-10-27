@@ -161,6 +161,8 @@ tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--li
 .close-fields { margin: 16px 0 4px; }
 .yield-out { font-size: 20px; font-weight: 600; color: var(--text-primary); padding: 4px 0; min-width: 80px; }
 .yield-out.over { color: var(--bad-ink); }
+.yield-out.quiet { font-weight: 400; color: var(--text-secondary); }
+output.over { color: var(--bad-ink); font-weight: 600; }
 .filters label.grow { flex: 1 1 220px; }
 .new-order { margin-bottom: 20px; }
 .new-order label { flex: 1 1 180px; min-width: 0; }

@@ -8,14 +8,15 @@
 </div>
 {{ production_notice(problem) }}
 <p class="muted">Components used by production orders completed in the period, and what they made.
-  Wastage is the part of each component Unleashed records as wasted.</p>
+  Wastage is the part of each component Unleashed records as wasted. A material's yield is what the recipes called
+  for to make what was made ÷ what was used; a product's yield is made ÷ planned.</p>
 
 <section class="tiles">
   <div class="tile card"><div class="tile-label">Orders completed</div><div class="tile-value">{{ u.orders|length }}</div>
     <div class="tile-sub">{{ u.qty_made|qty }} units made</div></div>
   <div class="tile card"><div class="tile-label">Components used</div><div class="tile-value">{{ u.cost|money(false) }}</div>
     <div class="tile-sub">at cost{{ ', partly estimated' if u.estimated }}</div></div>
-  <div class="tile card"><div class="tile-label">Yield</div><div class="tile-value">{{ yield_pct(u['yield']) }}</div>
+  <div class="tile card"><div class="tile-label">Product yield</div><div class="tile-value">{{ yield_pct(u['yield']) }}</div>
     <div class="tile-sub">made ÷ planned, orders completed here</div></div>
   <div class="tile card"><div class="tile-label">Wastage</div><div class="tile-value">{{ u.wastage_cost|money(false) }}</div>
     <div class="tile-sub">{{ u.wastage_pct|pct }} of components used</div></div>
@@ -24,20 +25,20 @@
 <section class="card">
   <h2>Components</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Orders</th><th class="num">Used</th><th class="num">Wastage</th><th class="num">Total</th><th class="num">Cost</th><th class="num">Wastage cost</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Orders</th><th class="num">Used</th><th class="num">Wastage</th><th class="num">Total</th><th class="num">Recipe for what was made</th><th class="num">Material yield</th><th class="num">Cost</th><th class="num">Wastage cost</th></tr></thead>
     <tbody>{% for c in u.components %}
     <tr><td>{{ c.product_code }}</td><td>{{ c.description }}</td><td class="num">{{ c.orders }}</td>
-      <td class="num">{{ c.qty|qty }}</td><td class="num">{{ c.wastage|qty }}</td><td class="num">{{ c.consumed|qty }}</td>
+      <td class="num">{{ c.qty|qty }}</td><td class="num">{{ c.wastage|qty }}</td><td class="num">{{ c.consumed|qty }}</td><td class="num">{{ c.recipe|qty if c.yield is not none else '—' }}</td><td class="num">{{ yield_pct(c.yield) }}</td>
       <td class="num">{{ c.cost|money }}</td><td class="num">{{ c.wastage_cost|money }}</td></tr>
-    {% else %}<tr><td colspan="8" class="muted">No production orders completed in this period.</td></tr>{% endfor %}</tbody>
-    {% if u.components %}<tfoot><tr><td colspan="6">Total</td><td class="num">{{ u.cost|money }}</td><td class="num">{{ u.wastage_cost|money }}</td></tr></tfoot>{% endif %}
+    {% else %}<tr><td colspan="10" class="muted">No production orders completed in this period.</td></tr>{% endfor %}</tbody>
+    {% if u.components %}<tfoot><tr><td colspan="8">Total</td><td class="num">{{ u.cost|money }}</td><td class="num">{{ u.wastage_cost|money }}</td></tr></tfoot>{% endif %}
   </table></div>
 </section>
 
 <section class="card">
   <h2>Products made</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Yield</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Product yield</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
     <tbody>{% for p in u.products %}
     <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
       <td class="num">{{ yield_pct(p.yield) }}</td><td class="num">{{ p.cost|money }}</td><td class="num">{{ p.unit_cost|money }}</td>

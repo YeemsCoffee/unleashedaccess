@@ -24,7 +24,7 @@
     <div class="tile-sub">components used, at cost{{ ' (partly estimated)' if u.estimated }}</div>
   </div>
   <div class="tile card">
-    <div class="tile-label">Yield</div>
+    <div class="tile-label">Product yield</div>
     <div class="tile-value">{{ yield_pct(u['yield']) }}</div>
     <div class="tile-sub">made ÷ planned, orders completed here</div>
   </div>
@@ -69,7 +69,7 @@
 <section class="card">
   <h2>Made in {{ month|month_name }}</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Yield</th><th class="num">Unit cost</th><th class="num">vs recipe</th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Product yield</th><th class="num">Unit cost</th><th class="num">vs recipe</th></tr></thead>
     <tbody>
     {% for p in u.products %}
     <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
