@@ -90,8 +90,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT
 );
 
--- Production (production_runs.py). Steps are kept here, not in Unleashed, which has none.
--- The process steps for making a product: JSON [{"name": ..., "components": [codes]}].
+-- Production (production_runs.py). Procedures are kept here, not in Unleashed, which has none.
+-- The operating procedure for making a product: JSON {"notes", "steps": [{"name",
+-- "instructions", "components": [codes], "fields": [...]}]} (older rows: just the steps).
 CREATE TABLE IF NOT EXISTS prod_steps (
     product_code TEXT PRIMARY KEY,
     steps        TEXT NOT NULL,
@@ -120,5 +121,13 @@ CREATE TABLE IF NOT EXISTS prod_step_records (
     quantities    TEXT NOT NULL,
     recorded_by   TEXT,
     recorded_at   TEXT NOT NULL,
+    PRIMARY KEY (assembly_guid, step_index)
+);
+
+-- What was entered in the procedure's fields at each step: JSON {field id: value}.
+CREATE TABLE IF NOT EXISTS prod_step_entries (
+    assembly_guid TEXT NOT NULL,
+    step_index    INTEGER NOT NULL,
+    entries       TEXT NOT NULL,
     PRIMARY KEY (assembly_guid, step_index)
 );

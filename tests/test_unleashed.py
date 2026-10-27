@@ -19,7 +19,7 @@ SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snapshots",
               "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings",
-              "prod_steps", "prod_runs", "prod_step_records")
+              "prod_steps", "prod_runs", "prod_step_records", "prod_step_entries")
 
 
 def sqlite_database(testcase):
@@ -371,7 +371,7 @@ class ProductionRunTests(unittest.TestCase):
 
     def _record(self, c, espresso="1.2", jugs="7"):
         """Steps Steep (espresso), Filter (nothing), Bottle (jugs), all saved."""
-        c.post("/production/boms/BOM-CB/steps", data={
+        c.post("/production/boms/BOM-CB/procedure", data={
             "rows": 4, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "name-1": "Filter",
             "name-2": "Bottle", "components-2": ["JUG-GAL"], "name-3": ""})
         c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": espresso})
@@ -479,7 +479,7 @@ class ProductionRunTests(unittest.TestCase):
         number = new["AssemblyNumber"]
         self.assertTrue(res.headers["Location"].endswith(f"/production/orders/{number}"))
         page = c.get(res.headers["Location"]).get_data(as_text=True)
-        for text in (f"Started {number} in Unleashed", "Production run", "Weekend batch"):
+        for text in (f"Started {number} in Unleashed", "Operating procedure", "Weekend batch"):
             self.assertIn(text, page)
         self.assertIn(number, c.get("/production/requirements").get_data(as_text=True))  # no sync needed
 
@@ -489,6 +489,65 @@ class ProductionRunTests(unittest.TestCase):
                       follow_redirects=True).get_data(as_text=True)
         self.assertIn("is completed in Unleashed", done)
         self.assertEqual(new["Status"], "Completed")
+
+    def test_operating_procedure_guides_and_records_each_step(self):
+        app = self._app()
+        c = app.test_client()
+        c.post("/production/boms/BOM-CB/procedure", data={
+            "rows": 3, "notes": "Sanitize the brewer first.\nWear gloves.",
+            "pos-0": "1", "name-0": "Weigh coffee", "instructions-0": "Weigh the espresso into the bag.",
+            "components-0": ["COF-ESP-5LB"], "fields-0": 3,
+            "f-0-0-label": "Coffee weight", "f-0-0-type": "number", "f-0-0-unit": "kg",
+            "f-0-0-min": "0.5", "f-0-0-max": "0.6", "f-0-0-required": "1",
+            "f-0-1-label": "Brewer sanitized", "f-0-1-type": "check", "f-0-1-required": "1",
+            "f-0-2-label": "",  # an empty row: no field
+            "pos-1": "3", "name-1": "Bottle", "components-1": ["JUG-GAL"], "fields-1": 1,
+            "f-1-0-label": "Lot code", "f-1-0-type": "text",
+            "pos-2": "2", "name-2": "Steep", "instructions-2": "18 hours in the fridge.", "fields-2": 1,
+            "f-2-0-label": "Fridge temperature", "f-2-0-type": "number", "f-2-0-unit": "°C",
+            "f-2-0-max": "5"})
+        bom_page = c.get("/production/boms/BOM-CB").get_data(as_text=True)
+        self.assertIn("Sanitize the brewer first.", bom_page)
+        self.assertLess(bom_page.index("Steep"), bom_page.index("Bottle"))  # ordered by step number
+        weigh, steep, bottle = app.extensions["production_runs"].procedure_for("CB-CONC-GAL")["steps"]
+        weight, sanitized = (f["id"] for f in weigh["fields"])
+
+        page = c.get(self.url).get_data(as_text=True)
+        for text in ("Before you start", "Wear gloves.", "1. Weigh coffee", "2. Steep", "3. Bottle",
+                     "Weigh the espresso into the bag.", "Coffee weight (kg) *", "Target: 0.5–0.6 kg",
+                     "Brewer sanitized", "Target: at most 5 °C"):
+            self.assertIn(text, page)
+
+        def step0(**fields):
+            return c.post(self.url + "/steps/0", follow_redirects=True, data={
+                "qty:COF-ESP-5LB": "0.55", **{f"field:{k}": v for k, v in fields.items()}}).get_data(as_text=True)
+
+        self.assertIn("Confirm “Brewer sanitized”", step0(**{weight: "0.55"}))
+        self.assertIn("Enter Coffee weight", step0(**{sanitized: "on"}))
+        self.assertIn("Coffee weight needs a number", step0(**{weight: "lots", sanitized: "on"}))
+        page = step0(**{weight: "0.7", sanitized: "on"})
+        self.assertIn("Saved step 1", page)
+        self.assertIn("Outside target (0.5–0.6 kg)", page)
+        # Editing the procedure now doesn't change an order already being recorded.
+        c.post("/production/boms/BOM-CB/procedure", data={"rows": 1, "name-0": "Weigh beans", "fields-0": 0})
+        self.assertIn("1. Weigh coffee", c.get(self.url).get_data(as_text=True))
+        self.assertIn("Weigh beans", c.get("/production/boms/BOM-CB").get_data(as_text=True))
+
+        c.post(self.url + "/steps/1", data={f"field:{steep['fields'][0]['id']}": "4"})
+        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": "7", f"field:{bottle['fields'][0]['id']}": "CB-1027"})
+        confirm = c.get(self.url + "/close").get_data(as_text=True)
+        self.assertIn("Coffee weight at Weigh coffee was 0.7 kg (target 0.5–0.6 kg)", confirm)
+        self.assertIn("is completed in Unleashed", self._close(c, made="6"))
+        record = c.get(self.url).get_data(as_text=True)  # the batch record, read-only
+        for text in ("Lot code", "CB-1027", "Yes", "outside 0.5–0.6 kg", "4 °C"):
+            self.assertIn(text, record)
+        self.assertNotIn('name="field:', record)
+
+    def test_procedures_saved_as_a_plain_list_of_steps_still_load(self):
+        from production_runs import parse_procedure
+        old = parse_procedure('[{"name": "Mix", "components": ["SYR-VAN-750"]}]')
+        self.assertEqual(old, {"notes": "", "steps": [{"name": "Mix", "instructions": "",
+                                                      "components": ["SYR-VAN-750"], "fields": []}]})
 
     def test_close_out_checks_its_inputs(self):
         c = self._app().test_client()
@@ -940,11 +999,11 @@ class TeamAccountTests(unittest.TestCase):
         bea = self.app.test_client()
         self._sign_in(bea, "bea@yeems.test", temp)
         self._choose_password(bea, temp, "bea-own-password")
-        self.assertIn("Set up steps", admin.get("/production/boms/BOM-VSC").get_data(as_text=True))
-        self.assertNotIn("Set up steps", bea.get("/production/boms/BOM-VSC").get_data(as_text=True))
-        self.assertEqual(bea.get("/production/boms/BOM-VSC/steps").status_code, 403)
-        self.assertEqual(bea.post("/production/boms/BOM-VSC/steps", data={"rows": 1, "name-0": "x"}).status_code, 403)
-        admin.post("/production/boms/BOM-VSC/steps", data={
+        self.assertIn("Write the procedure", admin.get("/production/boms/BOM-VSC").get_data(as_text=True))
+        self.assertNotIn("Write the procedure", bea.get("/production/boms/BOM-VSC").get_data(as_text=True))
+        self.assertEqual(bea.get("/production/boms/BOM-VSC/procedure").status_code, 403)
+        self.assertEqual(bea.post("/production/boms/BOM-VSC/procedure", data={"rows": 1, "name-0": "x"}).status_code, 403)
+        admin.post("/production/boms/BOM-VSC/procedure", data={
             "rows": 2, "name-0": "Mix", "components-0": ["CRM-HVY-HG", "MILK-WHL-GAL", "SYR-VAN-750"]})
         ds = self.app.extensions["unleashed"]["client"].transport.app.config["DATASET"]
         number = next(a["AssemblyNumber"] for a in ds.assemblies

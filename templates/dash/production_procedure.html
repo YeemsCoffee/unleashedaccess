@@ -1,0 +1,60 @@
+{% extends "dash/base.html" %}
+{% block title %}Procedure for {{ b.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Operating procedure: {{ b.description or b.product_code }}</h1>
+  <a href="{{ url_for('dash.production_bom', number=b.number) }}">← {{ b.number }}</a>
+</div>
+<p class="muted">What production techs see when they open a production order for this product: your notes, then each
+  step in order with its instructions, the components it uses, and what to record at it (a weight, a temperature, a
+  check). Clear a step's name to remove the step, or a field's label to remove the field. Orders already being recorded
+  keep the procedure they started with.</p>
+<form method="post" class="proc">
+  <input type="hidden" name="rows" value="{{ steps|length }}">
+  <section class="card">
+    <h2>Before you start</h2>
+    <label class="block">Notes shown at the top of every order (equipment, safety, hygiene…)
+      <textarea name="notes" rows="4">{{ notes }}</textarea></label>
+  </section>
+
+  {% for s in steps %}{% set i = loop.index0 %}
+  <section class="card proc-step">
+    <div class="proc-head">
+      <label class="pos">Step
+        <input type="number" name="pos-{{ i }}" value="{{ i + 1 }}" min="1" step="any" title="Change the number to move the step"></label>
+      <label class="grow">Name
+        <input name="name-{{ i }}" value="{{ s.name }}" placeholder="{{ 'e.g. Weigh the coffee' if not s.name }}"></label>
+    </div>
+    <label class="block">Instructions
+      <textarea name="instructions-{{ i }}" rows="3" placeholder="What the tech does at this step">{{ s.instructions }}</textarea></label>
+    <div class="block"><span>Components used at this step</span>
+      <div class="checks">{% for l in b.lines %}
+        <label><input type="checkbox" name="components-{{ i }}" value="{{ l.product_code }}" {{ 'checked' if l.product_code in s.components }}>
+          {{ l.description or l.product_code }}</label>{% endfor %}</div></div>
+    <input type="hidden" name="fields-{{ i }}" value="{{ s.fields|length }}">
+    <div class="block"><span>To record at this step</span>
+    <div class="table-wrap"><table class="proc-fields">
+      <thead><tr><th>Field</th><th>Type</th><th>Unit</th><th>Min</th><th>Max</th><th>Required</th></tr></thead>
+      <tbody>{% for f in s.fields %}{% set j = loop.index0 %}
+      <tr>
+        <td><input type="hidden" name="f-{{ i }}-{{ j }}-id" value="{{ f.id }}">
+          <input name="f-{{ i }}-{{ j }}-label" value="{{ f.label }}" placeholder="{{ 'e.g. Weight' if j == 0 and not f.label }}" aria-label="Field name"></td>
+        <td><select name="f-{{ i }}-{{ j }}-type" aria-label="Type">{% for k, v in field_types.items() %}<option value="{{ k }}" {{ 'selected' if f.type == k }}>{{ v }}</option>{% endfor %}</select></td>
+        <td><input class="short" name="f-{{ i }}-{{ j }}-unit" value="{{ f.unit }}" placeholder="{{ 'kg' if j == 0 }}" aria-label="Unit"></td>
+        <td><input class="short" type="number" step="any" name="f-{{ i }}-{{ j }}-min" value="{{ f.min|plain }}" aria-label="Lowest acceptable"></td>
+        <td><input class="short" type="number" step="any" name="f-{{ i }}-{{ j }}-max" value="{{ f.max|plain }}" aria-label="Highest acceptable"></td>
+        <td><input type="checkbox" name="f-{{ i }}-{{ j }}-required" value="1" {{ 'checked' if f.required }} aria-label="Required"></td>
+      </tr>{% endfor %}</tbody>
+    </table></div></div>
+  </section>
+  {% endfor %}
+
+  <p class="muted">Min and max are the acceptable range for a number: entries outside it are flagged on the order and at
+    close-out. A required yes/no field must be ticked to save the step. Need more steps or fields? Save, and more empty
+    ones appear.</p>
+  <div class="run-actions">
+    <button class="btn btn-primary">Save procedure</button>
+    <a class="btn" href="{{ url_for('dash.production_bom', number=b.number) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

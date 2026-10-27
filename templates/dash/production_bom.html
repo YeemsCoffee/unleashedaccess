@@ -31,16 +31,20 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>Process steps</h2>
-    {% if is_admin %}<a href="{{ url_for('dash.production_steps', number=b.number) }}">{{ 'Edit steps' if steps else 'Set up steps' }} →</a>{% endif %}
+    <h2>Operating procedure</h2>
+    {% set has_procedure = procedure.steps or procedure.notes %}
+    {% if is_admin %}<a href="{{ url_for('dash.production_procedure', number=b.number) }}">{{ 'Edit procedure' if has_procedure else 'Write the procedure' }} →</a>{% endif %}
   </div>
-  {% if steps %}
+  {% if procedure.notes %}<p class="instructions">{{ procedure.notes }}</p>{% endif %}
+  {% if procedure.steps %}
   {% set names = {} %}{% for l in b.lines %}{% set _ = names.update({l.product_code: l.description or l.product_code}) %}{% endfor %}
-  <ol class="steps-list">{% for s in steps %}
-    <li><strong>{{ s.name }}</strong>{% if s.components %}: {% for c in s.components %}{{ names.get(c, c) }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}</li>
+  <ol class="steps-list">{% for s in procedure.steps %}
+    <li><strong>{{ s.name }}</strong>{% if s.components %} · uses {% for c in s.components %}{{ names.get(c, c) }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
+      {% if s.fields %} · records {% for f in s.fields %}{{ f.label }}{{ ' (' ~ f.unit ~ ')' if f.unit }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
+      {% if s.instructions %}<div class="instructions muted">{{ s.instructions }}</div>{% endif %}</li>
   {% endfor %}</ol>
-  {% else %}
-  <p class="muted">No steps set up, so orders for this product are recorded in one step with every component.{{ ' An admin can set them up.' if not is_admin }}</p>
+  {% elif not procedure.notes %}
+  <p class="muted">No procedure yet, so orders for this product are recorded in one step with every component.{{ ' An admin can write it.' if not is_admin }}</p>
   {% endif %}
 </section>
 

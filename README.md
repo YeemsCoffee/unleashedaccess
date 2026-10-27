@@ -116,27 +116,36 @@ Unleashed fills a parked assembly's component quantities from the bill of
 materials. Here, the team records what they **actually** use, step by step, and
 closing the order out replaces Unleashed's figures with those.
 
-1. **Steps** (admins, once per recipe): Bills of materials → a bill → **Set up
-   steps**. Name the steps in order (e.g. Steep, Filter, Bottle) and tick the
-   components each step uses. A component can be used at several steps; one
-   ticked nowhere is recorded at the last step. Without steps, an order is
-   recorded in a single step with every component.
-2. **Record** (anyone): open a parked order under Production orders. At each
-   step, enter how much of each component was used, wastage included, and
-   **Save step**. A saved step shows who saved it and when, and can be updated
-   until close-out.
+1. **Operating procedure** (admins, once per product): Bills of materials → a
+   bill → **Write the procedure**. Add notes shown at the top of every order
+   (equipment, safety, hygiene), then the steps in order. Each step has
+   instructions, the components it uses (a component can be used at several
+   steps; one ticked nowhere is recorded at the last step), and fields the tech
+   fills in: a **number** with a unit and an acceptable range (a weight, a
+   temperature), **text** (a lot code), or **yes / no** (a check). Fields can
+   be required. A step's number sets its order. Without a procedure, an order
+   is recorded in a single step with every component.
+2. **Record** (anyone, e.g. production techs): open a parked order under
+   Production orders. The procedure is there: notes, then each step's
+   instructions. At each step, enter how much of each component was used,
+   wastage included, fill in the step's fields, and **Save step**. A number
+   outside its range is flagged. A saved step shows who saved it and when, and
+   can be updated until close-out. An order keeps the procedure it started
+   with, so editing the procedure doesn't change orders already underway.
 3. **Close out** (anyone, once every step is saved): enter how much was made
    and the date, check the totals against Unleashed's calculation, then
-   **Complete in Unleashed**. For each component, the sum over all steps is
+   **Complete in Unleashed**. Anything recorded outside its range is listed
+   there first. For each component, the sum over all steps is
    sent as the quantity used (wastage 0). The quantity made and the assembly
    date are set, and the assembly is completed, which moves the stock.
 
 Unleashed doesn't allow a completed assembly to be edited, so close-out reads
 the quantities back first. If Unleashed didn't keep them, or refuses to complete
 (e.g. not enough stock), the order stays parked, the reason shows on the order,
-and it can be closed out again. Steps and step quantities live in this app's
-database (`prod_steps`, `prod_runs`, `prod_step_records`); Unleashed only
-receives the totals. Starting and closing out orders needs the instance with the Unleashed API key
+and it can be closed out again. Procedures, step quantities and field entries live in
+this app's database (`prod_steps`, `prod_runs`, `prod_step_records`,
+`prod_step_entries`); Unleashed only receives the totals. A completed order's
+page keeps everything recorded, read-only, as its batch record. Starting and closing out orders needs the instance with the Unleashed API key
 (a view-only instance can record steps but not start or close out orders), and
 an API key allowed to create and change assemblies.
 
@@ -387,7 +396,7 @@ unleashedaccess/
 ├── app.py              # Flask app factory
 ├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
 ├── accounts.py         # team accounts
-├── production_runs.py  # process steps and what's recorded at each step
+├── production_runs.py  # operating procedures and what's recorded at each step
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── sync_once.py        # run one sync and exit (scheduled jobs)

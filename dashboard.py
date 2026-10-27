@@ -11,7 +11,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
                    request, session, url_for)
 
 from accounts import ROLES, AccountError, check_new_password, temporary_password
-from production_runs import ProductionRuns, RunError
+from production_runs import FIELD_TYPES, ProductionRuns, RunError
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, sent_summary
@@ -151,7 +151,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_close": "dash.production_orders",
             "dash.production_new": "dash.production_orders",
             "dash.production_bom": "dash.production_boms",
-            "dash.production_steps": "dash.production_boms",
+            "dash.production_procedure": "dash.production_boms",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
 
 
@@ -768,8 +768,10 @@ def production_step(number, index):
                 flash(f"\"{value}\" isn't a quantity.", "warn")
                 return back
             quantities[key[4:]] = qty
+    entries = {key[6:]: value for key, value in request.form.items() if key.startswith("field:")}
     try:
-        current_app.extensions["production_runs"].save_step(order, index, quantities, _person())
+        current_app.extensions["production_runs"].save_step(order, index, quantities, entries,
+                                                            _person())
     except RunError as e:
         flash(str(e), "warn")
         return back
@@ -852,24 +854,38 @@ def _person():
     return user["name"] if user else "Team"
 
 
-@bp.route("/production/boms/<number>/steps", methods=["GET", "POST"])
+@bp.route("/production/boms/<number>/procedure", methods=["GET", "POST"])
 @admin_only
-def production_steps(number):
-    """The process steps for making a bill of materials' product, and what each step uses."""
+def production_procedure(number):
+    """The operating procedure for making a bill of materials' product: notes, then steps
+    with instructions, the components each uses, and the fields techs fill in."""
     bom = _production().bom(number)
     if bom is None:
         abort(404)
     runs = current_app.extensions["production_runs"]
     if request.method == "POST":
-        rows = min(request.form.get("rows", 0, type=int), 50)
-        runs.set_steps(bom["product_code"], [
-            {"name": request.form.get(f"name-{i}", ""),
-             "components": request.form.getlist(f"components-{i}")} for i in range(rows)],
-            _person())
-        flash("Saved the steps. Orders already being recorded keep the steps they started with.", "ok")
+        form = request.form
+        steps = []
+        for i in range(min(form.get("rows", 0, type=int), 50)):
+            fields = [{"id": form.get(f"f-{i}-{j}-id"), "label": form.get(f"f-{i}-{j}-label", ""),
+                       "type": form.get(f"f-{i}-{j}-type"), "unit": form.get(f"f-{i}-{j}-unit"),
+                       "min": form.get(f"f-{i}-{j}-min"), "max": form.get(f"f-{i}-{j}-max"),
+                       "required": form.get(f"f-{i}-{j}-required")}
+                      for j in range(min(form.get(f"fields-{i}", 0, type=int), 30))]
+            steps.append((form.get(f"pos-{i}", i + 1, type=float), i, {
+                "name": form.get(f"name-{i}", ""), "instructions": form.get(f"instructions-{i}", ""),
+                "components": form.getlist(f"components-{i}"), "fields": fields}))
+        runs.set_procedure(bom["product_code"], form.get("notes", ""),
+                           [s for _, _, s in sorted(steps, key=lambda x: x[:2])], _person())
+        flash("Saved the procedure. Orders already being recorded keep the one they started with.", "ok")
         return redirect(url_for("dash.production_bom", number=number))
-    steps = runs.steps_for(bom["product_code"])
-    return _render_production("production_steps", b=bom, steps=steps, rows=len(steps) + 3)
+    procedure = runs.procedure_for(bom["product_code"])
+    blank_field = {"id": "", "label": "", "type": "number", "unit": "", "min": None, "max": None,
+                   "required": False}
+    steps = [dict(s, fields=s["fields"] + [blank_field] * 2) for s in procedure["steps"]]
+    steps += [{"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3}] * 2
+    return _render_production("production_procedure", b=bom, notes=procedure["notes"], steps=steps,
+                              field_types=FIELD_TYPES)
 
 
 @bp.get("/production/requirements")
@@ -912,8 +928,8 @@ def production_bom(number):
     bom = _production().bom(number)
     if bom is None:
         abort(404)
-    steps = current_app.extensions["production_runs"].steps_for(bom["product_code"])
-    return _render_production("production_bom", b=bom, steps=steps)
+    procedure = current_app.extensions["production_runs"].procedure_for(bom["product_code"])
+    return _render_production("production_bom", b=bom, procedure=procedure)
 
 
 @bp.get("/production/usage")

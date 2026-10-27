@@ -29,13 +29,15 @@
 {% set editable = o.open and not run.locked %}
 <section class="card" id="run">
   <div class="card-head">
-    <h2>Production run</h2>
+    <h2>Operating procedure</h2>
     {% if editable %}<span class="muted">{{ run.steps|selectattr('done')|list|length }} of {{ run.steps|length }} steps saved</span>{% endif %}
   </div>
   {% if editable %}
-  <p class="muted">Record what was actually used at each step. Closing out the order sends each component's total to
-    Unleashed as the quantity used, in place of what Unleashed calculated from the bill of materials.</p>
+  <p class="muted">Work through each step, record what you used and what the step asks for, then save it. Closing out
+    the order sends each component's total to Unleashed as the quantity used, in place of what Unleashed calculated
+    from the bill of materials.</p>
   {% endif %}
+  {% if run.notes %}<div class="proc-notes"><h3>Before you start</h3><p class="instructions">{{ run.notes }}</p></div>{% endif %}
   {% if run.status == 'failed' and o.open %}<p class="recon recon-warn">! The last close-out didn't finish: {{ run.error }}</p>{% endif %}
   {% if run.status == 'closing' %}<p class="recon recon-warn">! This order is being closed out.</p>{% endif %}
   {% if run.status == 'closed' %}<p class="recon recon-ok">✓ Closed out by {{ run.closed_by }} on {{ run.closed_at|local }}: Unleashed holds the quantities recorded here.</p>
@@ -49,17 +51,41 @@
       {% if s.done %}<span class="pill pill-ready">✓ {{ s.by }} · {{ s.at|local }}</span>
       {% elif s.current and editable %}<span class="pill pill-receipted">Current step</span>{% endif %}
     </div>
+    {% if s.instructions %}<p class="instructions">{{ s.instructions }}</p>{% endif %}
     {% if s.rows %}
     <div class="table-wrap"><table>
-      <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe (whole order)</th><th class="num">Used at this step</th></tr></thead>
+      <thead><tr><th class="wide-only">Component</th><th>Description</th><th class="num">Recipe<span class="wide-only"> (whole order)</span></th><th class="num">Used<span class="wide-only"> at this step</span></th></tr></thead>
       <tbody>{% for r in s.rows %}
-      <tr><td>{{ r.product_code }}</td><td>{{ r.description }}</td><td class="num">{{ r.recipe|qty }}</td>
+      <tr><td class="wide-only">{{ r.product_code }}</td><td>{{ r.description or r.product_code }}</td><td class="num">{{ r.recipe|qty }}</td>
         <td class="num">{% if editable %}<input class="qty-input" type="number" name="qty:{{ r.product_code }}"
           value="{{ r.qty|plain }}" min="0" step="any" inputmode="decimal" required
           aria-label="{{ r.description or r.product_code }} used at {{ s.name }}">{% else %}{{ r.qty|qty }}{% endif %}</td></tr>
       {% endfor %}</tbody>
     </table></div>
-    {% else %}<p class="muted">No components at this step{{ ". Save it when it's done" if editable }}.</p>{% endif %}
+    {% elif not s.fields %}<p class="muted">Nothing to record at this step{{ ". Save it when it's done" if editable }}.</p>{% endif %}
+    {% if s.fields and editable %}
+    <div class="step-fields">{% for f in s.fields %}
+      {% if f.type == 'check' %}
+      <label class="check-field"><input type="checkbox" name="field:{{ f.id }}" {{ 'checked' if f.value }} {{ 'required' if f.required }}>
+        {{ f.label }}{{ ' *' if f.required }}</label>
+      {% else %}
+      <label>{{ f.label }}{{ ' (' ~ f.unit ~ ')' if f.unit }}{{ ' *' if f.required }}
+        {% if f.type == 'number' %}<input class="qty-input" type="number" step="any" inputmode="decimal" name="field:{{ f.id }}" value="{{ f.value|plain }}" {{ 'required' if f.required }}>
+        {% else %}<input class="text-input" name="field:{{ f.id }}" value="{{ f.value or '' }}" maxlength="500" {{ 'required' if f.required }}>{% endif %}
+        {% if f.target %}<span class="field-target{{ ' over' if f.out_of_range }}">{{ ('Outside target (' ~ f.target ~ ')') if f.out_of_range else ('Target: ' ~ f.target) }}</span>{% endif %}
+      </label>
+      {% endif %}
+    {% endfor %}</div>
+    {% elif s.fields %}
+    <dl class="facts step-values">{% for f in s.fields %}
+      <div><dt>{{ f.label }}</dt><dd>
+        {% if f.type == 'check' %}{{ 'Yes' if f.value else 'No' }}
+        {% elif f.value is none %}—
+        {% elif f.type == 'number' %}{{ f.value|qty }}{{ ' ' ~ f.unit if f.unit }}
+        {% else %}{{ f.value }}{% endif %}
+        {% if f.out_of_range %}<span class="pill pill-short">outside {{ f.target }}</span>{% endif %}</dd></div>
+    {% endfor %}</dl>
+    {% endif %}
     {% if editable %}<button class="btn{{ ' btn-primary' if s.current }}">{{ 'Update step' if s.done else 'Save step' }}</button>{% endif %}
   </form>
   {% endfor %}

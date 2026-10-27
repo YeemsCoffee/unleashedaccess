@@ -168,7 +168,36 @@ tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--li
 .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .checks label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
 .steps-list { margin: 0; padding-left: 20px; }
-.steps-list li { margin: 4px 0; }
+.steps-list li { margin: 6px 0; }
+
+/* Operating procedures */
+.instructions { white-space: pre-line; margin: 4px 0 10px; }
+.proc-notes { background: var(--surface-0); border-radius: 10px; padding: 10px 14px; margin: 10px 0 4px; }
+.proc-notes h3 { font-size: 13px; margin: 0 0 4px; color: var(--text-secondary); }
+.proc-notes .instructions { margin: 0; }
+.step-fields { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end; margin: 10px 0 2px; }
+.step-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.step-fields .check-field { flex-direction: row; align-items: center; gap: 8px; color: var(--text-primary); font-size: 14px; }
+.field-target { font-size: 12px; color: var(--text-muted); }
+.field-target.over { color: var(--bad-ink); font-weight: 600; }
+.text-input { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); width: 220px; max-width: 100%; }
+.step-values { margin: 10px 0 0; }
+.proc input:not([type="checkbox"]), .proc select, .proc textarea {
+  font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); max-width: 100%; box-sizing: border-box;
+}
+.proc textarea { width: 100%; resize: vertical; }
+.proc .block { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+.proc .block .checks label { color: var(--text-primary); font-size: 14px; }
+.proc-head { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.proc-head label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.proc-head .grow { flex: 1 1 240px; }
+.proc-head .grow input { width: 100%; }
+.proc-head .pos input { width: 72px; }
+.proc-fields input.short { width: 90px; }
+.proc-fields td { vertical-align: middle; }
+@media (max-width: 600px) { .wide-only { display: none; } .step .qty-input { width: 84px; } }
 details { margin-top: 10px; }
 summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 

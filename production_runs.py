@@ -1,18 +1,23 @@
-"""Production runs: the team records what it actually uses at each step of a
-production order, and closing the order out sends the totals to Unleashed as the
-quantities used (unleashed/assembly_writes.py).
+"""Production runs: production techs follow a product's operating procedure on each
+production order, recording what they use and the checks the procedure asks for
+(weights, temperatures, confirmations) step by step. Closing the order out sends the
+component totals to Unleashed as the quantities used (unleashed/assembly_writes.py).
 
-Steps are set per made product (its bill of materials), since Unleashed has none.
-A run keeps the steps it started with, so editing a recipe's steps doesn't change
-orders already being recorded. Components on the order that no step lists are
-recorded at the last step; a product without steps gets a single step with every
-component.
+Procedures are kept per made product (its bill of materials), since Unleashed has
+none: general notes, then steps, each with instructions, the components it uses and
+the fields to fill in. A run keeps the procedure it started with, so editing a
+procedure doesn't change orders already being recorded. Components on the order that
+no step lists are recorded at the last step; a product without a procedure gets a
+single step with every component.
 """
 import json
+import math
+import uuid
 
 from unleashed.store import utc_now
 
 DEFAULT_STEP = "Production"
+FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
 # A close-out that stopped mid-way (the app restarted) can be retried after this.
 STALE_CLOSING_SECONDS = 10 * 60
@@ -22,28 +27,66 @@ class RunError(ValueError):
     """A problem to show the person (missing quantity, order already closed)."""
 
 
+def parse_procedure(data):
+    """{"notes", "steps"} from stored JSON. Older records hold just a list of steps."""
+    if isinstance(data, str):
+        data = json.loads(data)
+    if isinstance(data, list):
+        data = {"notes": "", "steps": data}
+    return {"notes": data.get("notes") or "",
+            "steps": [{"name": s.get("name") or "", "instructions": s.get("instructions") or "",
+                       "components": list(s.get("components") or []),
+                       "fields": [dict(f) for f in s.get("fields") or []]}
+                      for s in data.get("steps") or []]}
+
+
 class ProductionRuns:
     def __init__(self, db):
         self.db = db
 
-    # ------------------------------------------------------------ steps per product
+    # ------------------------------------------------------------ procedures
 
-    def steps_for(self, product_code):
+    def procedure_for(self, product_code):
         rows = self.db.query("SELECT steps FROM prod_steps WHERE product_code = ?", (product_code,))
-        return json.loads(rows[0]["steps"]) if rows else []
+        return parse_procedure(rows[0]["steps"]) if rows else {"notes": "", "steps": []}
 
-    def set_steps(self, product_code, steps, user):
-        """Replace a product's steps: [{"name", "components": [codes]}]; unnamed steps are dropped."""
-        steps = [{"name": s["name"].strip(), "components": list(dict.fromkeys(s["components"]))}
-                 for s in steps if s["name"].strip()]
-        if not steps:
+    def set_procedure(self, product_code, notes, steps, user):
+        """Replace a product's procedure. `steps`: [{"name", "instructions", "components":
+        [codes], "fields": [{"id", "label", "type", "unit", "min", "max", "required"}]}].
+        Steps without a name and fields without a label are dropped."""
+        clean = []
+        for s in steps:
+            name = (s.get("name") or "").strip()
+            if not name:
+                continue
+            fields, ids = [], set()
+            for f in s.get("fields") or []:
+                label = (f.get("label") or "").strip()
+                if not label:
+                    continue
+                kind = f.get("type") if f.get("type") in FIELD_TYPES else "number"
+                field_id = f.get("id") or ""
+                if not field_id or field_id in ids:
+                    field_id = uuid.uuid4().hex[:8]
+                ids.add(field_id)
+                number = kind == "number"
+                fields.append({"id": field_id, "label": label[:100], "type": kind,
+                               "unit": (f.get("unit") or "").strip()[:20] if number else "",
+                               "min": _number(f.get("min")) if number else None,
+                               "max": _number(f.get("max")) if number else None,
+                               "required": bool(f.get("required"))})
+            clean.append({"name": name[:100], "instructions": (s.get("instructions") or "").strip()[:5000],
+                          "components": list(dict.fromkeys(s.get("components") or [])),
+                          "fields": fields})
+        notes = (notes or "").strip()[:5000]
+        if not clean and not notes:
             self.db.execute("DELETE FROM prod_steps WHERE product_code = ?", (product_code,))
             return
         self.db.execute(
             "INSERT INTO prod_steps (product_code, steps, updated_by, updated_at) VALUES (?, ?, ?, ?)"
             " ON CONFLICT (product_code) DO UPDATE SET steps = excluded.steps,"
             " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
-            (product_code, json.dumps(steps), user, utc_now()))
+            (product_code, json.dumps({"notes": notes, "steps": clean}), user, utc_now()))
 
     # ------------------------------------------------------------ runs
 
@@ -52,25 +95,29 @@ class ProductionRuns:
         if not rows:
             return None
         run = dict(rows[0])
-        run["steps"] = json.loads(run["steps"])
+        run["procedure"] = parse_procedure(run["steps"])
         run["sent"] = json.loads(run["sent"]) if run["sent"] else None
         return run
 
     def records(self, guid):
-        return {r["step_index"]: {"quantities": json.loads(r["quantities"]), "by": r["recorded_by"],
-                                  "at": r["recorded_at"]}
+        entries = {r["step_index"]: json.loads(r["entries"]) for r in self.db.query(
+            "SELECT step_index, entries FROM prod_step_entries WHERE assembly_guid = ?", (guid,))}
+        return {r["step_index"]: {"quantities": json.loads(r["quantities"]),
+                                  "entries": entries.get(r["step_index"], {}),
+                                  "by": r["recorded_by"], "at": r["recorded_at"]}
                 for r in self.db.query("SELECT * FROM prod_step_records WHERE assembly_guid = ?",
                                        (guid,))}
 
     def view(self, order):
-        """An order's steps and what's been recorded at each, plus totals per component.
+        """An order's procedure, what's been recorded at each step, and totals per component.
 
         `order` is a production order with "components" (Production.order): what Unleashed
         calculated it needs, from the bill of materials.
         """
         run = self.run(order["guid"])
-        definition = (run["steps"] if run else self.steps_for(order["product_code"])) \
-            or [{"name": DEFAULT_STEP, "components": []}]
+        procedure = run["procedure"] if run else self.procedure_for(order["product_code"])
+        definition = procedure["steps"] or [{"name": DEFAULT_STEP, "instructions": "",
+                                             "components": [], "fields": []}]
         records = self.records(order["guid"]) if run else {}
         # The recipe quantity: Unleashed's calculation while open; once completed, the
         # components hold what was used, and "planned" holds the recipe.
@@ -81,7 +128,8 @@ class ProductionRuns:
         for i, s in enumerate(definition):
             codes = [c for c in s["components"] if c in components]  # may repeat across steps
             listed.update(codes)
-            steps.append({"index": i, "name": s["name"], "codes": codes})
+            steps.append({"index": i, "name": s["name"], "instructions": s["instructions"],
+                          "codes": codes, "fields": s["fields"]})
         steps[-1]["codes"] += [c for c in components if c not in listed]
 
         recorded = {code: 0.0 for code in components}
@@ -93,6 +141,8 @@ class ProductionRuns:
             s["rows"] = [{"product_code": code, "description": components[code]["description"],
                           "recipe": components[code]["recipe"],
                           "qty": rec["quantities"].get(code) if rec else None} for code in s["codes"]]
+            s["fields"] = [_field_view(f, rec["entries"].get(f["id"]) if rec else None)
+                           for f in s["fields"]]
             for code, qty in (rec["quantities"] if rec else {}).items():
                 if code in recorded:
                     recorded[code] += qty
@@ -101,18 +151,22 @@ class ProductionRuns:
                 current = s["index"]
         status = run["status"] if run else RECORDING
         return {
-            "definition": definition, "steps": steps, "started": run is not None,
+            "procedure": {"notes": procedure["notes"], "steps": definition},
+            "notes": procedure["notes"], "steps": steps, "started": run is not None,
             "status": status, "error": run["error"] if run else None,
             "locked": status in (CLOSING, CLOSED), "all_done": current is None,
             "closed_by": run["closed_by"] if run else None,
             "closed_at": run["closed_at"] if run else None, "sent": run["sent"] if run else None,
+            "out_of_range": [dict(f, step=s["name"]) for s in steps for f in s["fields"]
+                             if f["out_of_range"]],
             "totals": [{"product_code": code, "description": c["description"], "recipe": c["recipe"],
                         "recorded": recorded[code], "difference": recorded[code] - c["recipe"]}
                        for code, c in components.items()],
         }
 
-    def save_step(self, order, index, quantities, user):
-        """Record what was used at step `index`: {component code: quantity} (all its components)."""
+    def save_step(self, order, index, quantities, entries, user):
+        """Record step `index`: {component code: quantity used} for all its components, and
+        {field id: value as entered} for the fields its procedure asks for."""
         view = self.view(order)
         step = next((s for s in view["steps"] if s["index"] == index), None)
         if step is None:
@@ -126,12 +180,13 @@ class ProductionRuns:
             if qty < 0:
                 raise RunError("Quantities can't be negative.")
             values[row["product_code"]] = qty
+        checks = {f["id"]: _entry(f, entries.get(f["id"])) for f in step["fields"]}
         guid = order["guid"]
         with self.db.connect() as conn:
             conn.execute(
                 "INSERT INTO prod_runs (assembly_guid, assembly_number, steps, status, updated_at)"
                 " VALUES (?, ?, ?, ?, ?) ON CONFLICT (assembly_guid) DO NOTHING",
-                (guid, order["number"], json.dumps(view["definition"]), RECORDING, utc_now()))
+                (guid, order["number"], json.dumps(view["procedure"]), RECORDING, utc_now()))
             # Only while the order is open here: never after close-out has started.
             if conn.execute("UPDATE prod_runs SET updated_at = ? WHERE assembly_guid = ?"
                             " AND status IN (?, ?)", (utc_now(), guid, RECORDING, FAILED)) != 1:
@@ -143,6 +198,10 @@ class ProductionRuns:
                 " DO UPDATE SET quantities = excluded.quantities, recorded_by = excluded.recorded_by,"
                 " recorded_at = excluded.recorded_at",
                 (guid, index, json.dumps(values), user, utc_now()))
+            conn.execute(
+                "INSERT INTO prod_step_entries (assembly_guid, step_index, entries) VALUES (?, ?, ?)"
+                " ON CONFLICT (assembly_guid, step_index) DO UPDATE SET entries = excluded.entries",
+                (guid, index, json.dumps(checks)))
 
     # ------------------------------------------------------------ close-out
 
@@ -163,3 +222,49 @@ class ProductionRuns:
         self.db.execute("UPDATE prod_runs SET status = ?, error = NULL, sent = ?, closed_by = ?,"
                         " closed_at = ?, updated_at = ? WHERE assembly_guid = ?",
                         (CLOSED, json.dumps(sent), user, now, now, guid))
+
+
+def _number(value):
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if math.isfinite(n) else None
+
+
+def _entry(field, raw):
+    """A field's value as entered (form text, or "on" for a ticked box), checked."""
+    label = field["label"]
+    if field["type"] == "check":
+        value = raw in ("on", "1", "true", True)
+        if field["required"] and not value:
+            raise RunError(f"Confirm “{label}” before saving this step.")
+        return value
+    text = raw.strip() if isinstance(raw, str) else raw
+    if field["type"] == "number":
+        if text in (None, ""):
+            value = None
+        else:
+            value = _number(text)
+            if value is None:
+                raise RunError(f"{label} needs a number.")
+    else:
+        value = (text or "")[:500] or None
+    if field["required"] and value is None:
+        raise RunError(f"Enter {label} before saving this step.")
+    return value
+
+
+def _field_view(field, value):
+    low, high, unit = field.get("min"), field.get("max"), field.get("unit") or ""
+    if low is not None and high is not None:
+        target = f"{low:g}–{high:g}"
+    elif low is not None:
+        target = f"at least {low:g}"
+    elif high is not None:
+        target = f"at most {high:g}"
+    else:
+        target = ""
+    out = field["type"] == "number" and value is not None and (
+        (low is not None and value < low) or (high is not None and value > high))
+    return dict(field, value=value, out_of_range=out, target=f"{target} {unit}".strip() if target else "")
