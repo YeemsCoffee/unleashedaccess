@@ -297,8 +297,13 @@ with a padlock in the browser.
    - Someone forgot their password? **Settings** → **Team** → **Reset password** gives them a new
      temporary one. Someone left? **Deactivate** signs them out immediately.
    - Locked out of every admin account? Set `ADMIN_EMAIL`, a new temporary
-     `ADMIN_PASSWORD`, and `ADMIN_RESET` = `1` in the environment properties →
-     **Apply** → sign in → then remove `ADMIN_RESET` and `ADMIN_PASSWORD`.
+     `ADMIN_PASSWORD` (one you haven't used for a reset before), and `ADMIN_RESET` =
+     `1` in the environment properties → **Apply** → sign in with that password →
+     choose your own → then remove `ADMIN_RESET` and `ADMIN_PASSWORD`.
+   - `ADMIN_PASSWORD` only works until you choose your own password; after that,
+     your own password is the one that works, saved in the database across
+     restarts and deploys. Five wrong tries lock an account for 15 minutes, even
+     against the right password.
 
 ---
 

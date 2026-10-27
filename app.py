@@ -2,7 +2,7 @@
 import hashlib
 import os
 
-from flask import Flask
+from flask import Flask, redirect, request
 
 import dashboard
 from accounts import AccountError, UserStore, app_secret
@@ -94,6 +94,17 @@ def create_app(test_config=None):
     # accounts: everyone has their own sign-in; password: one shared password; open: no sign-in
     cfg["AUTH_MODE"] = "accounts" if has_accounts else (
         "password" if cfg["DASHBOARD_PASSWORD"] else "open")
+
+    if cfg["SESSION_COOKIE_SECURE"]:
+        @app.before_request
+        def _https_only():
+            """The sign-in cookie only travels over HTTPS, so send http:// visits to https://.
+            Behind a load balancer the app itself sees http; X-Forwarded-Proto says what the
+            browser used (health checks, sent straight to the server, carry none)."""
+            if request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "http":
+                return redirect(request.url.replace("http://", "https://", 1),
+                                code=301 if request.method in ("GET", "HEAD") else 308)
+            return None
 
     dashboard.init_app(app)
     return app

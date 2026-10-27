@@ -973,6 +973,27 @@ class TeamAccountTests(unittest.TestCase):
         recovered = self._app(ADMIN_PASSWORD="recovery-pass-1", ADMIN_RESET=True)
         c = recovered.test_client()
         self.assertEqual(self._sign_in(c, "owner@yeems.test", "recovery-pass-1").headers["Location"], "/account")
+        self._choose_password(c, "recovery-pass-1", "owner-new-password")
+        # ADMIN_RESET left set: a restart doesn't undo the password chosen after the reset.
+        restarted = self._app(ADMIN_PASSWORD="recovery-pass-1", ADMIN_RESET=True)
+        c = restarted.test_client()
+        self.assertIn("don&#39;t match", self._sign_in(c, "owner@yeems.test", "recovery-pass-1").get_data(as_text=True))
+        self.assertEqual(self._sign_in(c, "owner@yeems.test", "owner-new-password").headers["Location"], "/")
+        # A new reset password is a new reset.
+        again = self._app(ADMIN_PASSWORD="recovery-pass-2", ADMIN_RESET=True)
+        self.assertEqual(self._sign_in(again.test_client(), "owner@yeems.test", "recovery-pass-2").headers["Location"],
+                         "/account")
+
+    def test_https_only_when_secure_cookies_are_on(self):
+        app = self._app(SESSION_COOKIE_SECURE=True)
+        c = app.test_client()
+        res = c.get("/cogs?month=2026-01", headers={"X-Forwarded-Proto": "http"})
+        self.assertEqual(res.status_code, 301)
+        self.assertEqual(res.headers["Location"], "https://localhost/cogs?month=2026-01")
+        self.assertEqual(c.post("/login", headers={"X-Forwarded-Proto": "http"}).status_code, 308)
+        self.assertEqual(c.get("/healthz").status_code, 200)  # load balancer health checks
+        self.assertEqual(c.get("/login", headers={"X-Forwarded-Proto": "https"}).status_code, 200)
+        self.assertEqual(self.app.test_client().get("/login", headers={"X-Forwarded-Proto": "http"}).status_code, 200)
 
     def test_sign_in_key_is_generated_once_and_shared(self):
         other = self._app()

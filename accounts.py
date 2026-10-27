@@ -153,13 +153,24 @@ class UserStore:
             return f"created the first admin account, {email.strip().lower()}"
         if not reset:
             return None
+        # A reset applies once per email and password: if ADMIN_RESET stays set, a restart
+        # must not undo the password chosen after the reset.
+        token = f"{email.strip().lower()}\n{password}"
+        applied = self.db.query("SELECT value FROM app_settings WHERE key = 'admin_reset_applied'")
+        if applied and check_password_hash(applied[0]["value"], token):
+            return None
         user = self.by_email(email)
         if user is None:
             self.create(email, name, password, role="admin", must_change=True)
-            return f"created admin account {email.strip().lower()}"
-        self.db.execute("UPDATE app_users SET role = 'admin', active = 1 WHERE id = ?", (user["id"],))
-        self.set_password(user["id"], password, must_change=True)
-        return f"restored admin access for {user['email']}"
+            note = f"created admin account {email.strip().lower()}"
+        else:
+            self.db.execute("UPDATE app_users SET role = 'admin', active = 1 WHERE id = ?", (user["id"],))
+            self.set_password(user["id"], password, must_change=True)
+            note = f"restored admin access for {user['email']}"
+        self.db.execute("INSERT INTO app_settings (key, value) VALUES ('admin_reset_applied', ?)"
+                        " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        (generate_password_hash(token),))
+        return note
 
 
 def app_secret(db):

@@ -363,12 +363,12 @@ Calculator for your region.
 | `DATABASE_PATH` | `unleashedaccess.db` | SQLite file used when `DATABASE_URL` isn't set |
 | `ALLOW_DATABASE_RESET` | — | `1` lets this instance replace a shared database holding another account's data |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | — | Creates the first admin account (it must choose a new password at first sign-in); turns on team accounts |
-| `ADMIN_RESET` | — | `1` restores admin access for `ADMIN_EMAIL` with `ADMIN_PASSWORD` (for when you're locked out) |
+| `ADMIN_RESET` | — | `1` restores admin access for `ADMIN_EMAIL` with `ADMIN_PASSWORD` (for when you're locked out). It applies once per password, so a restart while it's still set doesn't undo the password chosen afterwards |
 | `DASHBOARD_PASSWORD` | — | Simpler alternative to accounts: one shared password (ignored once accounts exist) |
 | `ALLOW_NO_SIGN_IN` | — | Real Unleashed data is only shown after sign-in; `1` lifts that on a private computer |
 | `SECRET_KEY` | generated and stored in the database | Signs the sign-in cookie |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
-| `SECURE_COOKIES` | — | `1` when served over HTTPS (sign-in cookie only sent over HTTPS) |
+| `SECURE_COOKIES` | — | `1` when served over HTTPS: the sign-in cookie is only sent over HTTPS, and `http://` visits through the load balancer are redirected to `https://` |
 | `WEB_CONCURRENCY`, `GUNICORN_THREADS` | `1`, `8` | gunicorn workers and threads (`gunicorn.conf.py`) |
 | `ENV_FILE` | `.env` | Settings file to load instead of `.env` |
 | `PORT` | `8000` | Web server port |
