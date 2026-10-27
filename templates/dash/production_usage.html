@@ -1,5 +1,5 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import range_filters, production_notice, vs_standard %}
+{% from "dash/_macros.html" import range_filters, production_notice, vs_standard, yield_pct %}
 {% block title %}Component usage{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -15,6 +15,8 @@
     <div class="tile-sub">{{ u.qty_made|qty }} units made</div></div>
   <div class="tile card"><div class="tile-label">Components used</div><div class="tile-value">{{ u.cost|money(false) }}</div>
     <div class="tile-sub">at cost{{ ', partly estimated' if u.estimated }}</div></div>
+  <div class="tile card"><div class="tile-label">Yield</div><div class="tile-value">{{ yield_pct(u['yield']) }}</div>
+    <div class="tile-sub">made ÷ planned, orders completed here</div></div>
   <div class="tile card"><div class="tile-label">Wastage</div><div class="tile-value">{{ u.wastage_cost|money(false) }}</div>
     <div class="tile-sub">{{ u.wastage_pct|pct }} of components used</div></div>
 </section>
@@ -35,12 +37,12 @@
 <section class="card">
   <h2>Products made</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Yield</th><th class="num">Component cost</th><th class="num">Unit cost</th><th class="num">Recipe cost</th><th class="num">vs recipe</th></tr></thead>
     <tbody>{% for p in u.products %}
     <tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.orders }}</td><td class="num">{{ p.qty|qty }}</td>
-      <td class="num">{{ p.cost|money }}</td><td class="num">{{ p.unit_cost|money }}</td>
+      <td class="num">{{ yield_pct(p.yield) }}</td><td class="num">{{ p.cost|money }}</td><td class="num">{{ p.unit_cost|money }}</td>
       <td class="num">{{ p.standard_unit_cost|money }}</td><td class="num">{{ vs_standard(p.variance_pct) }}</td></tr>
-    {% else %}<tr><td colspan="7" class="muted">Nothing made in this period.</td></tr>{% endfor %}</tbody>
+    {% else %}<tr><td colspan="8" class="muted">Nothing made in this period.</td></tr>{% endfor %}</tbody>
   </table></div>
   <p class="muted">Recipe cost is the bill of materials at today's average costs, so price changes since an order also show in "vs recipe".</p>
 </section>

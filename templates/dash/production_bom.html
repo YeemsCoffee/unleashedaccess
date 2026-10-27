@@ -1,5 +1,5 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import status_pill, production_notice %}
+{% from "dash/_macros.html" import status_pill, production_notice, yield_pct %}
 {% block title %}{{ b.number }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -54,12 +54,12 @@
     <a href="{{ url_for('dash.production_orders', product=b.product_code) }}">All for this product →</a>
   </div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th class="num">Qty</th><th>Status</th><th class="num">Unit cost</th></tr></thead>
+    <thead><tr><th>Order</th><th>Assembly date</th><th>Assemble by</th><th class="num">Qty</th><th class="num">Yield</th><th>Status</th><th class="num">Unit cost</th></tr></thead>
     <tbody>{% for o in b.orders %}
     <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
-      <td>{{ o.date|d }}</td><td>{{ o.due|d }}</td><td class="num">{{ o.qty|qty }}</td>
+      <td>{{ o.date|d }}</td><td>{{ o.due|d }}</td><td class="num">{{ o.qty|qty }}</td><td class="num">{{ yield_pct(o.yield) }}</td>
       <td>{{ status_pill(o.status) }}</td><td class="num">{{ o.unit_cost|money }}</td></tr>
-    {% else %}<tr><td colspan="6" class="muted">Not made yet.</td></tr>{% endfor %}</tbody>
+    {% else %}<tr><td colspan="7" class="muted">Not made yet.</td></tr>{% endfor %}</tbody>
   </table></div>
 </section>
 {% endblock %}

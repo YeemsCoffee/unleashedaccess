@@ -387,12 +387,13 @@ class ProductionRunTests(unittest.TestCase):
         c = app.test_client()
         page = c.get(self.url).get_data(as_text=True)
         self.assertIn("1. Production", page)  # no steps set up: one step with everything
-        self.assertIn("Save every step to close out", page)
-        self.assertIn("Save every step", c.get(self.url + "/close", follow_redirects=True).get_data(as_text=True))
+        self.assertIn("To complete the order, save", page)
+        self.assertIn("To complete the order, first save step 1 (Production)",
+                      c.get(self.url + "/close", follow_redirects=True).get_data(as_text=True))
 
         self._record(c, espresso="1.2")
         page = c.get(self.url).get_data(as_text=True)
-        for text in ("1. Steep", "2. Filter", "3. Bottle", "3 of 3 steps saved", "Close out order"):
+        for text in ("1. Steep", "2. Filter", "3. Bottle", "3 of 3 steps saved", "Complete order"):
             self.assertIn(text, page)
         missing = c.post(self.url + "/steps/0", data={}, follow_redirects=True).get_data(as_text=True)
         self.assertIn("Enter how much Espresso Blend 5 lb was used", missing)
@@ -412,7 +413,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertAlmostEqual(self.ds.stock_as_at("COF-ESP-5LB")[0], espresso_before - 1.2)
 
         page = c.get(self.url).get_data(as_text=True)
-        self.assertIn("Closed out by Team", page)
+        self.assertIn("Completed by Team", page)
         self.assertNotIn("Save step", page)
         order = app.extensions["unleashed"]["production"].order(self.asm["AssemblyNumber"])
         self.assertTrue(order["completed"])  # the stored copy already shows it
@@ -433,13 +434,13 @@ class ProductionRunTests(unittest.TestCase):
         html = self._close(c)
         self.assertIn("didn&#39;t keep the new quantities", html)
         self.assertEqual(self.asm["Status"], "Parked")
-        self.assertIn("The last close-out didn't finish", c.get(self.url).get_data(as_text=True))
+        self.assertIn("The last attempt to complete it didn't finish", c.get(self.url).get_data(as_text=True))
 
     def test_unleashed_refusing_to_complete_leaves_the_order_open_to_retry(self):
         c = self._app().test_client()
         self._record(c, espresso="500")  # more than is in stock
         html = self._close(c)
-        self.assertIn("Not closed out", html)
+        self.assertIn("Not completed", html)
         self.assertIn("Not enough stock of COF-ESP-5LB", html)
         self.assertEqual(self.asm["Status"], "Parked")
         c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.3"})  # fix it and try again
@@ -542,6 +543,63 @@ class ProductionRunTests(unittest.TestCase):
         for text in ("Lot code", "CB-1027", "Yes", "outside 0.5–0.6 kg", "4 °C"):
             self.assertIn(text, record)
         self.assertNotIn('name="field:', record)
+
+    def test_yield_is_made_over_planned(self):
+        app = self._app()
+        c = app.test_client()
+        self._record(c)
+        done = self._close(c, made="6.5")  # of 7 planned
+        self.assertIn("made 6.5 of 7 planned, a yield of 92.9%", done)
+        page = c.get(self.url).get_data(as_text=True)
+        for text in ("<dt>Planned</dt><dd>7</dd>", "<dt>Made</dt><dd>6.5</dd>", "92.9%"):
+            self.assertIn(text, page)
+        start = f"?start={TODAY.replace(day=1).isoformat()}&end={TODAY.isoformat()}"
+        self.assertIn("92.9%", c.get("/production/orders" + start).get_data(as_text=True))
+        csv_text = c.get("/production/orders" + start + "&format=csv").get_data(as_text=True)
+        self.assertIn(f"{self.asm['AssemblyNumber']},", csv_text)
+        self.assertIn(",6.5,7,0.9286,", csv_text)  # made, planned, yield
+        usage = app.extensions["unleashed"]["production"].usage(
+            TODAY.replace(day=1), TODAY, planned=app.extensions["production_runs"].planned_quantities())
+        self.assertAlmostEqual(usage["yield"], 6.5 / 7)  # only orders completed here have a plan
+        cold_brew = next(p for p in usage["products"] if p["product_code"] == "CB-CONC-GAL")
+        self.assertAlmostEqual(cold_brew["yield"], 6.5 / 7)
+        self.assertIsNone(next(p for p in usage["products"] if p["product_code"] == "VSC-HG")["yield"])
+
+    def test_steps_with_nothing_to_record_do_not_hold_up_completing(self):
+        c = self._app().test_client()
+        c.post("/production/boms/BOM-CB/procedure", data={
+            "rows": 3, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "name-1": "Filter",
+            "name-2": "Bottle", "components-2": ["JUG-GAL"]})
+        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.2"})
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("To complete the order, save", page)
+        self.assertIn("step 3 (Bottle)", page)
+        self.assertNotIn("step 2 (Filter)", page)  # nothing to record there
+        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": "7"})
+        self.assertIn("Complete order", c.get(self.url).get_data(as_text=True))
+        self.assertIn("is completed in Unleashed", self._close(c, made="7"))
+
+    def test_an_interrupted_completion_can_be_finished(self):
+        import dashboard
+        app = self._app()
+        c = app.test_client()
+        self._record(c)
+        real = dashboard.close_out
+        dashboard.close_out = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("connection reset"))
+        try:
+            html = self._close(c)
+        finally:
+            dashboard.close_out = real
+        self.assertIn("Not completed: something unexpected went wrong", html)
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("RuntimeError: connection reset", page)
+        self.assertIn("Complete order", page)  # not stuck
+        # A completion that never came back (the app restarted mid-way) is retried after a while.
+        app.extensions["db"].execute("UPDATE prod_runs SET status = 'closing', updated_at = '2020-01-01 00:00:00'")
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("was interrupted before it finished", page)
+        self.assertIn("is completed in Unleashed", self._close(c))
+        self.assertEqual(self.asm["Status"], "Completed")
 
     def test_procedures_saved_as_a_plain_list_of_steps_still_load(self):
         from production_runs import parse_procedure
@@ -1012,7 +1070,7 @@ class TeamAccountTests(unittest.TestCase):
             "qty:CRM-HVY-HG": "2", "qty:MILK-WHL-GAL": "1", "qty:SYR-VAN-750": "0.8"}).get_data(as_text=True)
         self.assertIn("Saved step 1", page)
         self.assertIn("✓ Barista Bea", page)
-        self.assertIn("Close out order", page)
+        self.assertIn("Complete order", page)
 
     def test_wrong_passwords_lock_the_account(self):
         c = self.app.test_client()

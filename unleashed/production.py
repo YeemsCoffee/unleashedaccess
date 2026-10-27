@@ -10,6 +10,9 @@ organised like an ERP's production module.
   in due-date order (first come, first served), with shortages before and after
   incoming purchase orders.
 - Usage: components used and wasted, and products made, over a period.
+- Yield: quantity made ÷ quantity planned. Unleashed keeps only the quantity made, so
+  the planned quantities come from the caller (orders completed in this app record
+  them), as `planned`: {assembly guid: quantity planned}.
 
 Everything comes from Reports, so it reads the stored copy or the live API alike.
 """
@@ -46,7 +49,7 @@ class Production:
             b["last_made"] = last_made.get(b["product_code"])
         return sorted(boms, key=lambda b: (b["obsolete"], b["product_code"] or "", b["number"] or ""))
 
-    def bom(self, number):
+    def bom(self, number, planned=None):
         bom = next((b for b in self.reports.bills_of_materials() if b["number"] == number), None)
         if bom is None:
             return None
@@ -57,7 +60,7 @@ class Production:
         bom["buildable"] = _buildable(bom, stock)
         orders = [a for a in self.reports.assemblies(product=bom["product_code"])
                   if a["open"] or a["completed"]]
-        bom["orders"] = sorted(orders, key=_newest_first, reverse=True)[:15]
+        bom["orders"] = _with_yield(sorted(orders, key=_newest_first, reverse=True)[:15], planned)
         return bom
 
     def preview(self, product_code, qty):
@@ -79,9 +82,9 @@ class Production:
 
     # ------------------------------------------------------------ production orders
 
-    def orders(self, start, end, status=None, product=None):
+    def orders(self, start, end, status=None, product=None, planned=None):
         """Production order enquiry, by assembly date. `status`: Open, or an Unleashed status."""
-        orders = self.reports.assemblies(start, end, product=product)
+        orders = _with_yield(self.reports.assemblies(start, end, product=product), planned)
         if status == "Open":
             orders = [o for o in orders if o["open"]]
         elif status:
@@ -95,13 +98,15 @@ class Production:
             "open": sum(1 for o in orders if o["open"]),
             "qty_made": sum(o["qty"] for o in done), "cost": sum(o["cost"] for o in done),
             "by_product": made, "estimated": any(o["estimated"] for o in done),
+            "yield": _overall_yield(done),
         }
 
-    def order(self, number):
+    def order(self, number, planned=None):
         """One production order: components planned against used, and availability if open."""
         order = self.reports.assembly(number)
         if order is None:
             return None
+        _with_yield([order], planned)
         bom = bom_for(order["product_code"], self.reports.bills_of_materials())
         planned = {l["product_code"]: l["per_unit"] * order["qty"] for l in bom["lines"]} if bom else {}
         stock = self._stock() if order["open"] else {}
@@ -186,10 +191,10 @@ class Production:
 
     # ------------------------------------------------------------ usage
 
-    def usage(self, start, end):
+    def usage(self, start, end, planned=None):
         """Components used and wasted, and products made, by completed orders start..end."""
-        done = [a for a in self.reports.assemblies(start, end)
-                if a["completed"] and start <= a["completed_date"] <= end]
+        done = _with_yield([a for a in self.reports.assemblies(start, end)
+                            if a["completed"] and start <= a["completed_date"] <= end], planned)
         components = defaultdict(lambda: {"description": "", "qty": 0, "wastage": 0, "consumed": 0,
                                           "cost": 0, "wastage_cost": 0, "orders": 0})
         by_day = defaultdict(float)
@@ -211,13 +216,13 @@ class Production:
             "products": _made_by_product(done, self.reports.bills_of_materials()),
             "qty_made": sum(a["qty"] for a in done), "cost": cost, "wastage_cost": wastage_cost,
             "wastage_pct": wastage_cost / cost if cost else None, "by_day": dict(by_day),
-            "estimated": any(a["estimated"] for a in done),
+            "estimated": any(a["estimated"] for a in done), "yield": _overall_yield(done),
         }
 
-    def overview(self, month):
+    def overview(self, month, planned=None):
         start = month_start(month)
         through = min(month_end(start), self.today)
-        return {"month": start, "through": through, "usage": self.usage(start, through),
+        return {"month": start, "through": through, "usage": self.usage(start, through, planned),
                 "requirements": self.requirements()}
 
     # ------------------------------------------------------------ helpers
@@ -251,21 +256,40 @@ def _buildable(bom, stock):
     return int(min(counts) + 1e-9) if counts else None
 
 
+def _with_yield(orders, planned):
+    """Adds "planned_qty" and "yield" (made ÷ planned) to completed orders whose plan is known."""
+    for o in orders:
+        plan = (planned or {}).get(o["guid"]) if o["completed"] else None
+        o["planned_qty"] = plan
+        o["yield"] = o["qty"] / plan if plan else None
+    return orders
+
+
+def _overall_yield(done):
+    """Made ÷ planned over the completed orders whose plan is known."""
+    known = [o for o in done if o.get("planned_qty")]
+    planned = sum(o["planned_qty"] for o in known)
+    return sum(o["qty"] for o in known) / planned if planned else None
+
+
 def _made_by_product(done, boms):
-    made = defaultdict(lambda: {"description": "", "orders": 0, "qty": 0, "cost": 0})
+    made = defaultdict(lambda: {"description": "", "orders": 0, "qty": 0, "cost": 0, "done": []})
     for a in done:
         m = made[a["product_code"]]
         m["description"] = a["description"]
         m["orders"] += 1
         m["qty"] += a["qty"]
         m["cost"] += a["cost"]
+        m["done"].append(a)
     rows = []
     for code, m in made.items():
         bom = bom_for(code, boms)
+        orders = m.pop("done")
         unit = m["cost"] / m["qty"] if m["qty"] else 0
         standard = bom["unit_cost"] if bom else None
         rows.append({"product_code": code, **m, "unit_cost": unit, "standard_unit_cost": standard,
-                     "variance_pct": unit / standard - 1 if standard else None})
+                     "variance_pct": unit / standard - 1 if standard else None,
+                     "yield": _overall_yield(orders)})
     return sorted(rows, key=lambda r: -r["cost"])
 
 

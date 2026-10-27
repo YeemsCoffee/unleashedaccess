@@ -1,5 +1,5 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import status_pill, production_notice %}
+{% from "dash/_macros.html" import status_pill, production_notice, complete_action %}
 {% block title %}{{ o.number }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -10,7 +10,13 @@
 <section class="card">
   <dl class="facts">
     <div><dt>Product</dt><dd>{{ o.description }} ({{ o.product_code }})</dd></div>
-    <div><dt>Quantity</dt><dd>{{ o.qty|qty }}</dd></div>
+    {% if o.planned_qty %}
+    <div><dt>Planned</dt><dd>{{ o.planned_qty|qty }}</dd></div>
+    <div><dt>Made</dt><dd>{{ o.qty|qty }}</dd></div>
+    <div><dt>Yield</dt><dd><span class="{{ 'over' if o.yield < 0.95 }}">{{ o.yield|pct }}</span></dd></div>
+    {% else %}
+    <div><dt>{{ 'Made' if o.completed else 'Quantity' }}</dt><dd>{{ o.qty|qty }}</dd></div>
+    {% endif %}
     <div><dt>Assembly date</dt><dd>{{ o.date|d }}</dd></div>
     <div><dt>Assemble by</dt><dd>{{ o.due|d }}</dd></div>
     {% if o.completed %}<div><dt>Completed</dt><dd>{{ o.completed_date|d }}</dd></div>{% endif %}
@@ -33,14 +39,15 @@
     {% if editable %}<span class="muted">{{ run.steps|selectattr('done')|list|length }} of {{ run.steps|length }} steps saved</span>{% endif %}
   </div>
   {% if editable %}
-  <p class="muted">Work through each step, record what you used and what the step asks for, then save it. Closing out
+  <p class="muted">Work through each step, record what you used and what the step asks for, then save it. Completing
     the order sends each component's total to Unleashed as the quantity used, in place of what Unleashed calculated
-    from the bill of materials.</p>
+    from the bill of materials, along with how much was made.</p>
+  {{ complete_action(o, run, close_problem) }}
   {% endif %}
   {% if run.notes %}<div class="proc-notes"><h3>Before you start</h3><p class="instructions">{{ run.notes }}</p></div>{% endif %}
-  {% if run.status == 'failed' and o.open %}<p class="recon recon-warn">! The last close-out didn't finish: {{ run.error }}</p>{% endif %}
-  {% if run.status == 'closing' %}<p class="recon recon-warn">! This order is being closed out.</p>{% endif %}
-  {% if run.status == 'closed' %}<p class="recon recon-ok">✓ Closed out by {{ run.closed_by }} on {{ run.closed_at|local }}: Unleashed holds the quantities recorded here.</p>
+  {% if run.status == 'failed' and o.open %}<p class="recon recon-warn">! The last attempt to complete it didn't finish: {{ run.error }}</p>{% endif %}
+  {% if run.status == 'closing' %}<p class="recon recon-warn">! This order is being completed.</p>{% endif %}
+  {% if run.status == 'closed' %}<p class="recon recon-ok">✓ Completed by {{ run.closed_by }} on {{ run.closed_at|local }}: Unleashed holds the quantities recorded here.</p>
   {% elif not o.open and run.started %}<p class="recon recon-warn">! This order was {{ o.status|lower }} in Unleashed directly, so the quantities recorded here weren't sent.</p>{% endif %}
 
   {% for s in run.steps %}
@@ -99,13 +106,7 @@
       <td class="num">{{ t.recorded|qty }}</td><td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
-  {% if editable %}
-  <div class="run-actions">
-    {% if close_problem %}<p class="muted">{{ close_problem }}</p>
-    {% elif run.all_done %}<a class="btn btn-primary" href="{{ url_for('dash.production_close', number=o.number) }}">Close out order →</a>
-    {% else %}<p class="muted">Save every step to close out the order.</p>{% endif %}
-  </div>
-  {% endif %}
+  {% if editable %}{{ complete_action(o, run, close_problem) }}{% endif %}
   {% endif %}
 </section>
 {% endif %}

@@ -53,7 +53,7 @@ app's tables in it.
 | Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
 | Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
 | Production | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
-| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then close out to Unleashed |
+| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then complete them in Unleashed, with yield |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
@@ -130,23 +130,32 @@ closing the order out replaces Unleashed's figures with those.
    instructions. At each step, enter how much of each component was used,
    wastage included, fill in the step's fields, and **Save step**. A number
    outside its range is flagged. A saved step shows who saved it and when, and
-   can be updated until close-out. An order keeps the procedure it started
+   can be updated until the order is completed. An order keeps the procedure it started
    with, so editing the procedure doesn't change orders already underway.
-3. **Close out** (anyone, once every step is saved): enter how much was made
+3. **Complete** (anyone): **Complete order** appears at the top and bottom of
+   the procedure once every step that records something is saved (steps with
+   nothing to record don't hold it up; until then it lists the steps still to
+   save). Enter how much was made, which shows the **yield** (made ÷ planned),
    and the date, check the totals against Unleashed's calculation, then
    **Complete in Unleashed**. Anything recorded outside its range is listed
    there first. For each component, the sum over all steps is
    sent as the quantity used (wastage 0). The quantity made and the assembly
    date are set, and the assembly is completed, which moves the stock.
 
-Unleashed doesn't allow a completed assembly to be edited, so close-out reads
+Unleashed doesn't allow a completed assembly to be edited, so completing reads
 the quantities back first. If Unleashed didn't keep them, or refuses to complete
-(e.g. not enough stock), the order stays parked, the reason shows on the order,
-and it can be closed out again. Procedures, step quantities and field entries live in
+(e.g. not enough stock), or anything else goes wrong, the order stays parked,
+the reason shows on the order, and it can be completed again. A completion cut
+off part-way (the app restarted) can be retried after 10 minutes.
+
+**Yield** is the quantity made ÷ the quantity planned. Unleashed only keeps the
+quantity made, so yield is known for orders completed here: it shows on the
+order, in Production orders (and its CSV), on the Production overview and in
+Component usage, by product and overall. Procedures, step quantities and field entries live in
 this app's database (`prod_steps`, `prod_runs`, `prod_step_records`,
 `prod_step_entries`); Unleashed only receives the totals. A completed order's
 page keeps everything recorded, read-only, as its batch record. Starting and closing out orders needs the instance with the Unleashed API key
-(a view-only instance can record steps but not start or close out orders), and
+(a view-only instance can record steps but not start or complete orders), and
 an API key allowed to create and change assemblies.
 
 ## The mock Unleashed server

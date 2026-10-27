@@ -32,3 +32,19 @@
 {% macro vs_standard(pct) %}
 {% if pct is none %}—{% else %}<span class="{{ 'over' if pct > 0.005 else 'under' if pct < -0.005 }}">{{ '+' if pct > 0 }}{{ pct|pct }}</span>{% endif %}
 {% endmacro %}
+
+{% macro yield_pct(y) %}
+{% if y is none %}—{% else %}<span class="{{ 'over' if y < 0.95 }}">{{ y|pct }}</span>{% endif %}
+{% endmacro %}
+
+{% macro complete_action(o, run, problem) %}
+<div class="run-actions">
+  {% if problem %}<p class="muted">{{ problem }}</p>
+  {% elif run.can_complete %}
+  <a class="btn btn-primary" href="{{ url_for('dash.production_close', number=o.number) }}">Complete order →</a>
+  <span class="muted">Records how much was made and sends what you used to Unleashed.</span>
+  {% else %}
+  <p class="muted">To complete the order, save {% for s in run.blocking %}<a href="#step-{{ s.index }}">step {{ s.index + 1 }} ({{ s.name }})</a>{{ ', ' if not loop.last }}{% endfor %}.</p>
+  {% endif %}
+</div>
+{% endmacro %}

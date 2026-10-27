@@ -19,7 +19,7 @@ from unleashed.store import utc_now
 DEFAULT_STEP = "Production"
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
-# A close-out that stopped mid-way (the app restarted) can be retried after this.
+# Completing an order that stopped mid-way (the app restarted) can be retried after this.
 STALE_CLOSING_SECONDS = 10 * 60
 
 
@@ -149,12 +149,18 @@ class ProductionRuns:
             s["current"] = not rec and current is None
             if s["current"]:
                 current = s["index"]
-        status = run["status"] if run else RECORDING
+        status, error = (run["status"], run["error"]) if run else (RECORDING, None)
+        if status == CLOSING and run["updated_at"] < utc_now(-STALE_CLOSING_SECONDS):
+            status, error = FAILED, ("Completing this order was interrupted before it finished. Check "
+                                     "it in Unleashed, then complete it again.")
+        # Steps that record something must be saved before completing; the others needn't be.
+        blocking = [s for s in steps if not s["done"]
+                    and (s["rows"] or any(f["required"] for f in s["fields"]))]
         return {
             "procedure": {"notes": procedure["notes"], "steps": definition},
             "notes": procedure["notes"], "steps": steps, "started": run is not None,
-            "status": status, "error": run["error"] if run else None,
-            "locked": status in (CLOSING, CLOSED), "all_done": current is None,
+            "status": status, "error": error, "locked": status in (CLOSING, CLOSED),
+            "all_done": current is None, "blocking": blocking, "can_complete": not blocking,
             "closed_by": run["closed_by"] if run else None,
             "closed_at": run["closed_at"] if run else None, "sent": run["sent"] if run else None,
             "out_of_range": [dict(f, step=s["name"]) for s in steps for f in s["fields"]
@@ -183,11 +189,8 @@ class ProductionRuns:
         checks = {f["id"]: _entry(f, entries.get(f["id"])) for f in step["fields"]}
         guid = order["guid"]
         with self.db.connect() as conn:
-            conn.execute(
-                "INSERT INTO prod_runs (assembly_guid, assembly_number, steps, status, updated_at)"
-                " VALUES (?, ?, ?, ?, ?) ON CONFLICT (assembly_guid) DO NOTHING",
-                (guid, order["number"], json.dumps(view["procedure"]), RECORDING, utc_now()))
-            # Only while the order is open here: never after close-out has started.
+            _start_run(conn, order, view)
+            # Only while the order is open here: never after completing has started.
             if conn.execute("UPDATE prod_runs SET updated_at = ? WHERE assembly_guid = ?"
                             " AND status IN (?, ?)", (utc_now(), guid, RECORDING, FAILED)) != 1:
                 raise RunError("This order is being closed out or is already closed, so its steps "
@@ -205,23 +208,44 @@ class ProductionRuns:
 
     # ------------------------------------------------------------ close-out
 
-    def begin_close(self, guid):
-        """Claim the order for close-out; False if someone else is closing it or it's closed."""
-        return self.db.execute(
-            "UPDATE prod_runs SET status = ?, error = NULL, updated_at = ? WHERE assembly_guid = ?"
-            " AND (status IN (?, ?) OR (status = ? AND updated_at < ?))",
-            (CLOSING, utc_now(), guid, RECORDING, FAILED, CLOSING,
-             utc_now(-STALE_CLOSING_SECONDS))) == 1
+    def begin_close(self, order, view):
+        """Claim the order for completing; False if someone else is completing it or it's done."""
+        with self.db.connect() as conn:
+            _start_run(conn, order, view)
+            return conn.execute(
+                "UPDATE prod_runs SET status = ?, error = NULL, updated_at = ? WHERE assembly_guid = ?"
+                " AND (status IN (?, ?) OR (status = ? AND updated_at < ?))",
+                (CLOSING, utc_now(), order["guid"], RECORDING, FAILED, CLOSING,
+                 utc_now(-STALE_CLOSING_SECONDS))) == 1
 
     def close_failed(self, guid, error):
         self.db.execute("UPDATE prod_runs SET status = ?, error = ?, updated_at = ?"
                         " WHERE assembly_guid = ?", (FAILED, error, utc_now(), guid))
 
+    def planned_quantities(self):
+        """{assembly guid: quantity planned} for orders completed here (Unleashed then holds
+        the quantity made), for working out yield."""
+        planned = {}
+        for r in self.db.query("SELECT assembly_guid, sent FROM prod_runs WHERE status = ?", (CLOSED,)):
+            sent = json.loads(r["sent"]) if r["sent"] else {}
+            if sent.get("planned"):
+                planned[r["assembly_guid"]] = sent["planned"]
+        return planned
+
     def closed(self, guid, sent, user):
+        """Record a completed order: `sent` is what Unleashed now holds, plus "planned"."""
         now = utc_now()
         self.db.execute("UPDATE prod_runs SET status = ?, error = NULL, sent = ?, closed_by = ?,"
                         " closed_at = ?, updated_at = ? WHERE assembly_guid = ?",
                         (CLOSED, json.dumps(sent), user, now, now, guid))
+
+
+def _start_run(conn, order, view):
+    """The order's run row, created with the procedure it starts with if it has none."""
+    conn.execute(
+        "INSERT INTO prod_runs (assembly_guid, assembly_number, steps, status, updated_at)"
+        " VALUES (?, ?, ?, ?, ?) ON CONFLICT (assembly_guid) DO NOTHING",
+        (order["guid"], order["number"], json.dumps(view["procedure"]), RECORDING, utc_now()))
 
 
 def _number(value):

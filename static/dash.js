@@ -50,6 +50,22 @@
   });
 })();
 
+/* Yield (made ÷ planned) as it's typed, on the page that completes a production order. */
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-yield-of]").forEach(function (out) {
+    var input = document.getElementById(out.dataset.yieldOf);
+    var planned = parseFloat(out.dataset.planned);
+    function show() {
+      var made = parseFloat(input.value);
+      out.textContent = made > 0 && planned > 0 ? (made / planned * 100).toFixed(1) + "%" : "—";
+      out.classList.toggle("over", made > 0 && planned > 0 && made / planned < 0.95);
+    }
+    input.addEventListener("input", show);
+    show();
+  });
+})();
+
 /* On narrow screens the tab rows scroll sideways: bring the open tab into view. */
 (function () {
   "use strict";

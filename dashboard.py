@@ -5,6 +5,7 @@ import datetime as dt
 import hmac
 import io
 import math
+import traceback
 from functools import wraps
 
 from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, render_template,
@@ -656,7 +657,7 @@ def production():
     month = _month_arg(month_start(p.today))
     if month > p.today:
         month = month_start(p.today)
-    ov = p.overview(month)
+    ov = p.overview(month, planned=_planned())
     u = ov["usage"]
     days = [month + dt.timedelta(days=i) for i in range((ov["through"] - month).days + 1)]
     bars = [(str(d.day), u["by_day"].get(d, 0),
@@ -673,12 +674,14 @@ def production_orders():
     start, end = _range_args()
     status = request.args.get("status") or None
     product = request.args.get("product") or None
-    po = p.orders(start, end, status, product)
+    po = p.orders(start, end, status, product, planned=_planned())
     if _wants_csv():
         return _csv("production-orders", [
             ("Order", "number"), ("Assembly date", lambda x: _iso(x["date"])),
             ("Assemble by", lambda x: _iso(x["due"])), ("Status", "status"),
             ("Product Code", "product_code"), ("Description", "description"), ("Qty", "qty"),
+            ("Planned qty", lambda x: _round(x["planned_qty"], 4)),
+            ("Yield", lambda x: _round(x["yield"], 4)),
             ("Component cost", lambda x: round(x["cost"], 2)),
             ("Unit cost", lambda x: round(x["unit_cost"], 4)),
             ("Cost estimated", lambda x: "yes" if x["estimated"] else ""),
@@ -742,7 +745,7 @@ def production_new():
 
 @bp.get("/production/orders/<number>")
 def production_order(number):
-    order = _production().order(number)
+    order = _production().order(number, planned=_planned())
     if order is None:
         abort(404)
     runs = current_app.extensions["production_runs"]
@@ -791,8 +794,9 @@ def production_close(number):
         return back
     runs = current_app.extensions["production_runs"]
     run = runs.view(order)
-    if not run["all_done"]:
-        flash("Save every step before closing out the order.", "warn")
+    if not run["can_complete"]:
+        flash("To complete the order, first save " + ", ".join(
+            f"step {s['index'] + 1} ({s['name']})" for s in run["blocking"]) + ".", "warn")
         return back
     today = reports().today
     if request.method == "GET":
@@ -806,8 +810,8 @@ def production_close(number):
     if not math.isfinite(made) or made <= 0 or on_date is None or on_date > today:
         flash("Enter how much was made (more than 0) and a date that isn't in the future.", "warn")
         return redirect(url_for("dash.production_close", number=number))
-    if not runs.begin_close(order["guid"]):
-        flash("Someone is closing this order out right now, or it's already closed.", "warn")
+    if not runs.begin_close(order, run):
+        flash("Someone is completing this order right now, or it's already completed.", "warn")
         return back
     quantities = {t["product_code"]: t["recorded"] for t in run["totals"]}
     ext = _ext()
@@ -815,13 +819,21 @@ def production_close(number):
         done = close_out(ext["client"], order["guid"], quantities, made, on_date)
     except (CloseOutError, UnleashedError) as e:
         runs.close_failed(order["guid"], str(e))
-        flash(f"Not closed out: {e}", "warn")
+        flash(f"Not completed: {e}", "warn")
         return back
-    runs.closed(order["guid"], sent_summary(done), _person())
+    except Exception as e:  # noqa: BLE001 - never leave the order stuck half-completed
+        traceback.print_exc()
+        runs.close_failed(order["guid"], f"Something unexpected went wrong ({e.__class__.__name__}: {e}). "
+                          "Check the order in Unleashed before trying again.")
+        flash("Not completed: something unexpected went wrong. The order page says what.", "warn")
+        return back
+    runs.closed(order["guid"], dict(sent_summary(done), planned=order["qty"]), _person())
     ext["store"].upsert_documents("Assemblies", [done])  # shows as completed straight away
     ext["store_client"].clear_cache()
     _sync_soon()  # stock on hand
-    flash(f"{order['number']} is completed in Unleashed with the quantities your team recorded.", "ok")
+    made_now = done.get("Quantity") or made
+    flash(f"{order['number']} is completed in Unleashed: made {qty(made_now)} of {qty(order['qty'])} "
+          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}.", "ok")
     return back
 
 
@@ -925,7 +937,7 @@ def production_boms():
 
 @bp.get("/production/boms/<number>")
 def production_bom(number):
-    bom = _production().bom(number)
+    bom = _production().bom(number, planned=_planned())
     if bom is None:
         abort(404)
     procedure = current_app.extensions["production_runs"].procedure_for(bom["product_code"])
@@ -935,7 +947,7 @@ def production_bom(number):
 @bp.get("/production/usage")
 def production_usage():
     start, end = _range_args()
-    u = _production().usage(start, end)
+    u = _production().usage(start, end, planned=_planned())
     if _wants_csv():
         return _csv("component-usage", [
             ("Component", "product_code"), ("Description", "description"), ("Orders", "orders"),
@@ -944,6 +956,11 @@ def production_usage():
             ("Wastage cost", lambda x: round(x["wastage_cost"], 2)),
         ], u["components"])
     return _render_production("production_usage", u=u, start=start, end=end, csv_url=_csv_url())
+
+
+def _planned():
+    """{assembly guid: quantity planned} for orders completed here, for yield."""
+    return current_app.extensions["production_runs"].planned_quantities()
 
 
 def _made_products():

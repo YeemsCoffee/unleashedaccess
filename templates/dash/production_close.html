@@ -1,24 +1,28 @@
 {% extends "dash/base.html" %}
-{% block title %}Close out {{ o.number }}{% endblock %}
+{% block title %}Complete {{ o.number }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Close out {{ o.number }}</h1>
+  <h1>Complete {{ o.number }}</h1>
   <a href="{{ url_for('dash.production_order', number=o.number) }}">← Back to the order</a>
 </div>
 <form method="post" class="card">
   <p class="recon recon-warn">! This completes {{ o.number }} in Unleashed: the components below come out of stock and
     what you made goes in. Unleashed doesn't let a completed assembly be edited or reversed.</p>
   <div class="filters close-fields">
+    <label>Planned
+      <span class="yield-out">{{ o.qty|qty }}</span></label>
     <label>{{ o.description or o.product_code }} made
-      <input type="number" name="made" value="{{ o.qty|plain }}" min="0" step="any" inputmode="decimal" required></label>
+      <input id="made" type="number" name="made" value="{{ o.qty|plain }}" min="0" step="any" inputmode="decimal" required autofocus></label>
+    <label>Yield
+      <output class="yield-out" data-yield-of="made" data-planned="{{ o.qty|plain }}">{{ 1|pct }}</output></label>
     <label>Completed on
       <input type="date" name="date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
   </div>
-  <p class="muted">The order planned {{ o.qty|qty }}. Change it if the batch made more or less.</p>
+  <p class="muted">Enter what the batch actually made. Yield is made ÷ planned.</p>
   {% if run.out_of_range %}
   <p class="recon recon-warn">! Recorded outside the procedure's target:
     {% for f in run.out_of_range %}{{ f.label }} at {{ f.step }} was {{ f.value|qty }}{{ ' ' ~ f.unit if f.unit }} (target {{ f.target }}){{ '; ' if not loop.last }}{% endfor %}.
-    Check the batch before closing it out.</p>
+    Check the batch before completing it.</p>
   {% endif %}
 
   <h2>Components to send</h2>
@@ -30,8 +34,8 @@
       <td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
-  <p class="muted">Each component's total over all {{ run.steps|length }} step(s), wastage included, becomes its quantity
-    used in Unleashed (with wastage 0). The assembly date becomes the date above.</p>
+  <p class="muted">Each component's total over the saved steps, wastage included, becomes its quantity used in Unleashed
+    (with wastage 0). The assembly date becomes the date above.</p>
   <div class="run-actions">
     <button class="btn btn-primary">Complete in Unleashed</button>
     <a class="btn" href="{{ url_for('dash.production_order', number=o.number) }}">Cancel</a>
