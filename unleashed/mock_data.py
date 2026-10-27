@@ -264,26 +264,42 @@ class MockDataset:
         asm = {"Guid": self._guid(), "AssemblyNumber": self._next("ASM"), "ProductCode": made,
                "Quantity": qty, "AssemblyDate": day, "AssembleBy": due or day, "Status": status,
                "Lines": []}
-        total = 0.0
         for l in bom["Lines"]:
             code = l["ProductCode"]
             line = {"ProductCode": code, "Quantity": round(l["Quantity"] * qty, 4),
                     "WastageQuantity": round(l["WastageQuantity"] * qty, 4)}
-            if status == "Completed":
-                if l["WastageQuantity"] and self.rng.random() < 0.3:  # a messier batch than planned
-                    extra = round(l["Quantity"] * qty * self.rng.uniform(0.01, 0.06), 4)
-                    line["WastageQuantity"] = round(min(line["WastageQuantity"] + extra,
-                                                        self._qty[code] - line["Quantity"]), 4)
-                used = line["Quantity"] + line["WastageQuantity"]
-                avg = self._value[code] / self._qty[code]
-                self._move(day, "Assembly", asm["AssemblyNumber"], made, code, -used, -used * avg)
-                line["UnitCost"] = round(avg, 4)
-                total += used * avg
+            if status == "Completed" and l["WastageQuantity"] and self.rng.random() < 0.3:
+                # a messier batch than planned
+                extra = round(l["Quantity"] * qty * self.rng.uniform(0.01, 0.06), 4)
+                line["WastageQuantity"] = round(min(line["WastageQuantity"] + extra,
+                                                    self._qty[code] - line["Quantity"]), 4)
             asm["Lines"].append(line)
         if status == "Completed":
-            self._move(day, "Assembly", asm["AssemblyNumber"], made, made, qty, total)
+            self._complete(asm, day)
         self.assemblies.append(asm)
         return asm
+
+    def complete(self, asm):
+        """Complete a parked assembly as it now stands (its quantities may have been edited),
+        today. Returns the first component without enough stock, or None once done."""
+        for line in asm["Lines"]:
+            if self._qty[line["ProductCode"]] + 1e-9 < line["Quantity"] + line["WastageQuantity"]:
+                return line["ProductCode"]
+        self._complete(asm, self.today)
+        asm["Modified"] = dt.date.today()  # Unleashed stamps changes with the real clock
+        return None
+
+    def _complete(self, asm, day):
+        made, total = asm["ProductCode"], 0.0
+        for line in asm["Lines"]:
+            code = line["ProductCode"]
+            used = line["Quantity"] + line["WastageQuantity"]
+            avg = self._value[code] / self._qty[code] if self._qty[code] else 0.0
+            self._move(day, "Assembly", asm["AssemblyNumber"], made, code, -used, -used * avg)
+            line["UnitCost"] = round(avg, 4)
+            total += used * avg
+        self._move(day, "Assembly", asm["AssemblyNumber"], made, made, asm["Quantity"], total)
+        asm["Status"], asm["AssemblyDate"] = "Completed", day
 
     def _pos_sales(self, day, month_factor):
         lines = []

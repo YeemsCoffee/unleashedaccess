@@ -18,7 +18,8 @@ SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
 # Every table the app owns in that database is dropped before each test.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snapshots",
-              "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings")
+              "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings",
+              "prod_steps", "prod_runs", "prod_step_records")
 
 
 def sqlite_database(testcase):
@@ -350,6 +351,123 @@ class ProductionTests(unittest.TestCase):
         self.assertTrue(order["estimated"])
         line = order["lines"][0]
         self.assertAlmostEqual(line["cost"], line["consumed"] * costs[line["product_code"]], places=6)
+
+
+class ProductionRunTests(unittest.TestCase):
+    """Recording what's used at each step, and closing the order out to Unleashed."""
+
+    def setUp(self):
+        self.mock = create_mock_app(today=TODAY)
+        self.ds = self.mock.config["DATASET"]
+        # Cold brew: espresso and a jug per gallon.
+        self.asm = next(a for a in self.ds.assemblies
+                        if a["Status"] == "Parked" and a["ProductCode"] == "CB-CONC-GAL")
+        self.url = f"/production/orders/{self.asm['AssemblyNumber']}"
+
+    def _app(self, transport=None):
+        return make_app(self, UNLEASHED_MODE="live", UNLEASHED_API_ID=MOCK_API_ID,
+                        UNLEASHED_API_KEY=MOCK_API_KEY, TODAY=TODAY,
+                        UNLEASHED_TRANSPORT=transport or WsgiTransport(self.mock))
+
+    def _record(self, c, espresso="1.2", jugs="7"):
+        """Steps Steep (espresso), Filter (nothing), Bottle (jugs), all saved."""
+        c.post("/production/boms/BOM-CB/steps", data={
+            "rows": 4, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "name-1": "Filter",
+            "name-2": "Bottle", "components-2": ["JUG-GAL"], "name-3": ""})
+        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": espresso})
+        c.post(self.url + "/steps/1", data={})
+        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": jugs})
+
+    def _close(self, c, made="6.5"):
+        return c.post(self.url + "/close", data={"made": made, "date": TODAY.isoformat()},
+                      follow_redirects=True).get_data(as_text=True)
+
+    def test_recorded_totals_replace_the_recipe_quantities_in_unleashed(self):
+        app = self._app()
+        c = app.test_client()
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("1. Production", page)  # no steps set up: one step with everything
+        self.assertIn("Save every step to close out", page)
+        self.assertIn("Save every step", c.get(self.url + "/close", follow_redirects=True).get_data(as_text=True))
+
+        self._record(c, espresso="1.2")
+        page = c.get(self.url).get_data(as_text=True)
+        for text in ("1. Steep", "2. Filter", "3. Bottle", "3 of 3 steps saved", "Close out order"):
+            self.assertIn(text, page)
+        missing = c.post(self.url + "/steps/0", data={}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Enter how much Espresso Blend 5 lb was used", missing)
+        confirm = c.get(self.url + "/close").get_data(as_text=True)
+        self.assertIn("Complete in Unleashed", confirm)
+        self.assertIn("<strong>1.2</strong>", confirm)
+
+        made_before = self.ds.stock_as_at("CB-CONC-GAL")[0]
+        espresso_before = self.ds.stock_as_at("COF-ESP-5LB")[0]
+        done = self._close(c, made="6.5")
+        self.assertIn("is completed in Unleashed", done)
+        self.assertEqual(self.asm["Status"], "Completed")
+        self.assertEqual(self.asm["Quantity"], 6.5)
+        self.assertEqual([(l["ProductCode"], l["Quantity"], l["WastageQuantity"]) for l in self.asm["Lines"]],
+                         [("COF-ESP-5LB", 1.2, 0), ("JUG-GAL", 7, 0)])
+        self.assertAlmostEqual(self.ds.stock_as_at("CB-CONC-GAL")[0], made_before + 6.5)
+        self.assertAlmostEqual(self.ds.stock_as_at("COF-ESP-5LB")[0], espresso_before - 1.2)
+
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("Closed out by Team", page)
+        self.assertNotIn("Save step", page)
+        order = app.extensions["unleashed"]["production"].order(self.asm["AssemblyNumber"])
+        self.assertTrue(order["completed"])  # the stored copy already shows it
+        espresso = next(x for x in order["components"] if x["product_code"] == "COF-ESP-5LB")
+        self.assertAlmostEqual(espresso["variance"], 1.2 - 0.36 * 6.5)  # recipe for what was made
+        late = c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1"}, follow_redirects=True)
+        self.assertIn("isn&#39;t open in Unleashed any more", late.get_data(as_text=True))
+
+    def test_nothing_completes_if_unleashed_does_not_keep_the_quantities(self):
+        class IgnoresUpdates(WsgiTransport):
+            def send(self, method, path, query_string, headers, body=None):
+                if method == "PUT":
+                    return 200, "{}"
+                return super().send(method, path, query_string, headers, body)
+
+        c = self._app(IgnoresUpdates(self.mock)).test_client()
+        self._record(c)
+        html = self._close(c)
+        self.assertIn("didn&#39;t keep the new quantities", html)
+        self.assertEqual(self.asm["Status"], "Parked")
+        self.assertIn("The last close-out didn't finish", c.get(self.url).get_data(as_text=True))
+
+    def test_unleashed_refusing_to_complete_leaves_the_order_open_to_retry(self):
+        c = self._app().test_client()
+        self._record(c, espresso="500")  # more than is in stock
+        html = self._close(c)
+        self.assertIn("Not closed out", html)
+        self.assertIn("Not enough stock of COF-ESP-5LB", html)
+        self.assertEqual(self.asm["Status"], "Parked")
+        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.3"})  # fix it and try again
+        self.assertIn("is completed in Unleashed", self._close(c, made="7"))
+        self.assertEqual(self.asm["Lines"][0]["Quantity"], 1.3)
+
+    def test_close_out_retry_after_unleashed_completed(self):
+        from unleashed.closeout import CloseOutError, close_out
+        client = UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(self.mock))
+        quantities = {"COF-ESP-5LB": 1.3, "JUG-GAL": 7}  # what stock allows
+        first = close_out(client, self.asm["Guid"], quantities, 7, TODAY)
+        self.assertEqual(first["AssemblyStatus"], "Completed")
+        again = close_out(client, self.asm["Guid"], quantities, 7, TODAY)  # e.g. the app restarted
+        self.assertEqual(again["AssemblyNumber"], self.asm["AssemblyNumber"])
+        with self.assertRaises(CloseOutError):
+            close_out(client, self.asm["Guid"], {"COF-ESP-5LB": 3, "JUG-GAL": 7}, 7, TODAY)
+
+    def test_close_out_checks_its_inputs(self):
+        c = self._app().test_client()
+        self._record(c)
+        for made, date in (("0", TODAY.isoformat()), ("x", TODAY.isoformat()),
+                           ("7", (TODAY + dt.timedelta(days=1)).isoformat())):
+            html = c.post(self.url + "/close", data={"made": made, "date": date},
+                          follow_redirects=True).get_data(as_text=True)
+            self.assertIn("Enter how much was made", html)
+        self.assertEqual(self.asm["Status"], "Parked")
+        bad = c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "-1"}, follow_redirects=True)
+        self.assertIn("can&#39;t be negative", bad.get_data(as_text=True))
 
 
 class RefusingTransport(WsgiTransport):
@@ -782,6 +900,27 @@ class TeamAccountTests(unittest.TestCase):
         self.assertEqual(bea.post("/team/add", data={"name": "x", "email": "x@y.z"}).status_code, 403)
         self.assertIn("already an account", admin.post(
             "/team/add", data={"name": "Again", "email": "BEA@yeems.test"}).get_data(as_text=True))
+
+    def test_members_record_production_steps_but_only_admins_set_them_up(self):
+        admin = self._admin_client()
+        temp = self._add(admin, "Barista Bea", "bea@yeems.test")
+        bea = self.app.test_client()
+        self._sign_in(bea, "bea@yeems.test", temp)
+        self._choose_password(bea, temp, "bea-own-password")
+        self.assertIn("Set up steps", admin.get("/production/boms/BOM-VSC").get_data(as_text=True))
+        self.assertNotIn("Set up steps", bea.get("/production/boms/BOM-VSC").get_data(as_text=True))
+        self.assertEqual(bea.get("/production/boms/BOM-VSC/steps").status_code, 403)
+        self.assertEqual(bea.post("/production/boms/BOM-VSC/steps", data={"rows": 1, "name-0": "x"}).status_code, 403)
+        admin.post("/production/boms/BOM-VSC/steps", data={
+            "rows": 2, "name-0": "Mix", "components-0": ["CRM-HVY-HG", "MILK-WHL-GAL", "SYR-VAN-750"]})
+        ds = self.app.extensions["unleashed"]["client"].transport.app.config["DATASET"]
+        number = next(a["AssemblyNumber"] for a in ds.assemblies
+                      if a["Status"] == "Parked" and a["ProductCode"] == "VSC-HG")
+        page = bea.post(f"/production/orders/{number}/steps/0", follow_redirects=True, data={
+            "qty:CRM-HVY-HG": "2", "qty:MILK-WHL-GAL": "1", "qty:SYR-VAN-750": "0.8"}).get_data(as_text=True)
+        self.assertIn("Saved step 1", page)
+        self.assertIn("✓ Barista Bea", page)
+        self.assertIn("Close out order", page)
 
     def test_wrong_passwords_lock_the_account(self):
         c = self.app.test_client()

@@ -143,6 +143,26 @@ tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--li
 .row-warn td { background: var(--warn-bg); }
 .row-sub td { color: var(--text-secondary); font-style: italic; }
 .nowrap { white-space: nowrap; }
+
+/* Production run: one form per step */
+.step { border-top: 1px solid var(--line); padding: 12px 0 14px; }
+.step-current { border-left: 3px solid var(--accent); padding-left: 12px; margin-left: -15px; }
+.step-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.step-head h3, .run-totals { font-size: 15px; margin: 0; }
+.run-totals { margin-top: 16px; }
+.step .btn { margin-top: 8px; }
+.run-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.qty-input, .step-name {
+  font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary);
+}
+.qty-input { width: 120px; text-align: right; }
+.step-name { width: 100%; min-width: 140px; }
+.close-fields { margin: 16px 0 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.checks label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.steps-list { margin: 0; padding-left: 20px; }
+.steps-list li { margin: 4px 0; }
 details { margin-top: 10px; }
 summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 
@@ -214,6 +234,7 @@ td.wrap { white-space: normal; min-width: 280px; }
 .first-sync .step { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .banner { padding: 10px 20px; font-size: 14px; }
 .banner-warn { background: var(--warn-bg); color: var(--warn-ink); }
+.banner-ok { background: var(--good-bg); color: var(--good-ink); }
 .login { max-width: 380px; margin: 60px auto; }
 .login form { display: grid; gap: 12px; margin-top: 12px; }
 .stack-label { display: grid; gap: 4px; font-size: 13px; color: var(--text-secondary); }

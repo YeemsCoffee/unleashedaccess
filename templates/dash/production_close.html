@@ -1,0 +1,35 @@
+{% extends "dash/base.html" %}
+{% block title %}Close out {{ o.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Close out {{ o.number }}</h1>
+  <a href="{{ url_for('dash.production_order', number=o.number) }}">← Back to the order</a>
+</div>
+<form method="post" class="card">
+  <p class="recon recon-warn">! This completes {{ o.number }} in Unleashed: the components below come out of stock and
+    what you made goes in. Unleashed doesn't let a completed assembly be edited or reversed.</p>
+  <div class="filters close-fields">
+    <label>{{ o.description or o.product_code }} made
+      <input type="number" name="made" value="{{ o.qty|plain }}" min="0" step="any" inputmode="decimal" required></label>
+    <label>Completed on
+      <input type="date" name="date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
+  </div>
+  <p class="muted">The order planned {{ o.qty|qty }}. Change it if the batch made more or less.</p>
+
+  <h2>Components to send</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Unleashed's calculation</th><th class="num">Your team recorded</th><th class="num">Difference</th></tr></thead>
+    <tbody>{% for t in run.totals %}
+    <tr class="{{ 'row-warn' if t.difference|abs > 0.0005 }}"><td>{{ t.product_code }}</td><td>{{ t.description }}</td>
+      <td class="num">{{ t.recipe|qty }}</td><td class="num"><strong>{{ t.recorded|qty }}</strong></td>
+      <td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <p class="muted">Each component's total over all {{ run.steps|length }} step(s), wastage included, becomes its quantity
+    used in Unleashed (with wastage 0). The assembly date becomes the date above.</p>
+  <div class="run-actions">
+    <button class="btn btn-primary">Complete in Unleashed</button>
+    <a class="btn" href="{{ url_for('dash.production_order', number=o.number) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -46,6 +46,9 @@
   {% if source_error %}
   <div class="banner banner-warn">! {{ source_error }}</div>
   {% endif %}
+  {% for category, message in get_flashed_messages(with_categories=true) %}
+  <div class="banner banner-{{ category }}" role="status">{{ '✓' if category == 'ok' else '!' }} {{ message }}</div>
+  {% endfor %}
   {% if not signed_out %}
   <nav class="dash-nav">
     {% for tab in nav %}

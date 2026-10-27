@@ -1,0 +1,29 @@
+{% extends "dash/base.html" %}
+{% block title %}Steps for {{ b.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Steps for {{ b.description or b.product_code }}</h1>
+  <a href="{{ url_for('dash.production_bom', number=b.number) }}">← {{ b.number }}</a>
+</div>
+<p class="muted">The steps your team works through to make this, in order, and which components each step uses. Tick a
+  component at every step that uses it; anything not ticked at any step is recorded at the last step. Clear a step's
+  name to remove it. Orders already being recorded keep the steps they started with.</p>
+<form method="post" class="card">
+  <input type="hidden" name="rows" value="{{ rows }}">
+  <div class="table-wrap"><table>
+    <thead><tr><th class="num">#</th><th>Step</th><th>Components used at this step</th></tr></thead>
+    <tbody>
+    {% for i in range(rows) %}
+    {% set s = steps[i] if i < steps|length else none %}
+    <tr><td class="num">{{ i + 1 }}</td>
+      <td><input class="step-name" name="name-{{ i }}" value="{{ s.name if s }}" placeholder="{{ 'e.g. Steep' if i == 0 else '' }}" aria-label="Step {{ i + 1 }} name"></td>
+      <td class="checks">{% for l in b.lines %}
+        <label><input type="checkbox" name="components-{{ i }}" value="{{ l.product_code }}" {{ 'checked' if s and l.product_code in s.components }}>
+          {{ l.description or l.product_code }}</label>{% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted">Need more steps? Save, and three more empty rows appear.</p>
+  <div class="run-actions"><button class="btn btn-primary">Save steps</button></div>
+</form>
+{% endblock %}

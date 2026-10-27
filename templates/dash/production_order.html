@@ -25,6 +25,65 @@
   {% endif %}
 </section>
 
+{% if run %}
+{% set editable = o.open and not run.locked %}
+<section class="card" id="run">
+  <div class="card-head">
+    <h2>Production run</h2>
+    {% if editable %}<span class="muted">{{ run.steps|selectattr('done')|list|length }} of {{ run.steps|length }} steps saved</span>{% endif %}
+  </div>
+  {% if editable %}
+  <p class="muted">Record what was actually used at each step. Closing out the order sends each component's total to
+    Unleashed as the quantity used, in place of what Unleashed calculated from the bill of materials.</p>
+  {% endif %}
+  {% if run.status == 'failed' and o.open %}<p class="recon recon-warn">! The last close-out didn't finish: {{ run.error }}</p>{% endif %}
+  {% if run.status == 'closing' %}<p class="recon recon-warn">! This order is being closed out.</p>{% endif %}
+  {% if run.status == 'closed' %}<p class="recon recon-ok">✓ Closed out by {{ run.closed_by }} on {{ run.closed_at|local }}: Unleashed holds the quantities recorded here.</p>
+  {% elif not o.open and run.started %}<p class="recon recon-warn">! This order was {{ o.status|lower }} in Unleashed directly, so the quantities recorded here weren't sent.</p>{% endif %}
+
+  {% for s in run.steps %}
+  <form method="post" action="{{ url_for('dash.production_step', number=o.number, index=s.index) }}"
+        class="step{{ ' step-current' if s.current and editable }}" id="step-{{ s.index }}">
+    <div class="step-head">
+      <h3>{{ s.index + 1 }}. {{ s.name }}</h3>
+      {% if s.done %}<span class="pill pill-ready">✓ {{ s.by }} · {{ s.at|local }}</span>
+      {% elif s.current and editable %}<span class="pill pill-receipted">Current step</span>{% endif %}
+    </div>
+    {% if s.rows %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe (whole order)</th><th class="num">Used at this step</th></tr></thead>
+      <tbody>{% for r in s.rows %}
+      <tr><td>{{ r.product_code }}</td><td>{{ r.description }}</td><td class="num">{{ r.recipe|qty }}</td>
+        <td class="num">{% if editable %}<input class="qty-input" type="number" name="qty:{{ r.product_code }}"
+          value="{{ r.qty|plain }}" min="0" step="any" inputmode="decimal" required
+          aria-label="{{ r.description or r.product_code }} used at {{ s.name }}">{% else %}{{ r.qty|qty }}{% endif %}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="muted">No components at this step{{ ". Save it when it's done" if editable }}.</p>{% endif %}
+    {% if editable %}<button class="btn{{ ' btn-primary' if s.current }}">{{ 'Update step' if s.done else 'Save step' }}</button>{% endif %}
+  </form>
+  {% endfor %}
+
+  {% if o.open %}
+  <h3 class="run-totals">Totals</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Unleashed's calculation</th><th class="num">Recorded so far</th><th class="num">Difference</th></tr></thead>
+    <tbody>{% for t in run.totals %}
+    <tr><td>{{ t.product_code }}</td><td>{{ t.description }}</td><td class="num">{{ t.recipe|qty }}</td>
+      <td class="num">{{ t.recorded|qty }}</td><td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% if editable %}
+  <div class="run-actions">
+    {% if close_problem %}<p class="muted">{{ close_problem }}</p>
+    {% elif run.all_done %}<a class="btn btn-primary" href="{{ url_for('dash.production_close', number=o.number) }}">Close out order →</a>
+    {% else %}<p class="muted">Save every step to close out the order.</p>{% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="card">
   <h2>Components</h2>
   <div class="table-wrap"><table>

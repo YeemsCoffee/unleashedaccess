@@ -4,14 +4,17 @@ import csv
 import datetime as dt
 import hmac
 import io
+import math
 from functools import wraps
 
-from flask import (Blueprint, Response, abort, current_app, g, redirect, render_template,
+from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, render_template,
                    request, session, url_for)
 
 from accounts import ROLES, AccountError, check_new_password, temporary_password
+from production_runs import ProductionRuns, RunError
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
+from unleashed.closeout import CloseOutError, close_out, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
 
@@ -44,6 +47,12 @@ def qty(v):
     if abs(v) < 0.0005:
         return "0"
     return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.3f}".rstrip("0").rstrip(".")
+
+
+@bp.app_template_filter("plain")
+def plain_number(v):
+    """A number for a form field's value: no thousands separators or trailing zeros."""
+    return "" if v is None else f"{v:.6f}".rstrip("0").rstrip(".")
 
 
 @bp.app_template_filter("pct")
@@ -139,7 +148,9 @@ _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "
 # Pages shown under another page's tab.
 _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
+            "dash.production_close": "dash.production_orders",
             "dash.production_bom": "dash.production_boms",
+            "dash.production_steps": "dash.production_boms",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
 
 
@@ -680,7 +691,130 @@ def production_order(number):
     order = _production().order(number)
     if order is None:
         abort(404)
-    return _render_production("production_order", o=order)
+    runs = current_app.extensions["production_runs"]
+    run = runs.view(order) if order["open"] or runs.run(order["guid"]) else None
+    return _render_production("production_order", o=order, run=run, close_problem=_close_problem())
+
+
+@bp.post("/production/orders/<number>/steps/<int:index>")
+def production_step(number, index):
+    """Record what was used at one step of an open production order."""
+    order = _open_order(number)
+    back = redirect(url_for("dash.production_order", number=number) + f"#step-{index}")
+    if order is None:
+        return back
+    quantities = {}
+    for key, value in request.form.items():
+        if key.startswith("qty:"):
+            try:
+                qty = float(value) if value.strip() else None
+            except ValueError:
+                qty = math.nan
+            if qty is not None and not math.isfinite(qty):
+                flash(f"\"{value}\" isn't a quantity.", "warn")
+                return back
+            quantities[key[4:]] = qty
+    try:
+        current_app.extensions["production_runs"].save_step(order, index, quantities, _person())
+    except RunError as e:
+        flash(str(e), "warn")
+        return back
+    flash(f"Saved step {index + 1}.", "ok")
+    return back
+
+
+@bp.route("/production/orders/<number>/close", methods=["GET", "POST"])
+def production_close(number):
+    """Confirm, then send the recorded totals to Unleashed and complete the assembly."""
+    order = _open_order(number)
+    back = redirect(url_for("dash.production_order", number=number))
+    if order is None:
+        return back
+    if _close_problem():
+        flash(_close_problem(), "warn")
+        return back
+    runs = current_app.extensions["production_runs"]
+    run = runs.view(order)
+    if not run["all_done"]:
+        flash("Save every step before closing out the order.", "warn")
+        return back
+    today = reports().today
+    if request.method == "GET":
+        return _render_production("production_close", o=order, run=run, today=today)
+
+    try:
+        made = float(request.form.get("made", ""))
+        on_date = dt.date.fromisoformat(request.form.get("date", ""))
+    except ValueError:
+        made, on_date = math.nan, None
+    if not math.isfinite(made) or made <= 0 or on_date is None or on_date > today:
+        flash("Enter how much was made (more than 0) and a date that isn't in the future.", "warn")
+        return redirect(url_for("dash.production_close", number=number))
+    if not runs.begin_close(order["guid"]):
+        flash("Someone is closing this order out right now, or it's already closed.", "warn")
+        return back
+    quantities = {t["product_code"]: t["recorded"] for t in run["totals"]}
+    ext = _ext()
+    try:
+        done = close_out(ext["client"], order["guid"], quantities, made, on_date)
+    except (CloseOutError, UnleashedError) as e:
+        runs.close_failed(order["guid"], str(e))
+        flash(f"Not closed out: {e}", "warn")
+        return back
+    runs.closed(order["guid"], sent_summary(done), _person())
+    ext["store"].upsert_documents("Assemblies", [done])  # shows as completed straight away
+    ext["store_client"].clear_cache()
+    _sync_soon()  # stock on hand
+    flash(f"{order['number']} is completed in Unleashed with the quantities your team recorded.", "ok")
+    return back
+
+
+def _open_order(number):
+    """The production order if it's still open in Unleashed; None (with a message) if not."""
+    order = _production().order(number)
+    if order is None:
+        abort(404)
+    if not order["open"]:
+        flash(f"{number} isn't open in Unleashed any more ({order['status']}).", "warn")
+        return None
+    return order
+
+
+def _close_problem():
+    """Why this instance can't close orders out, or None."""
+    ext = _ext()
+    if ext["client"] is not None:
+        return None
+    if ext["source_error"]:
+        return "Orders can't be closed out while the shared database holds another account's data."
+    return ("Orders are closed out by the instance with the Unleashed API key; this one only "
+            "reads the shared copy.")
+
+
+def _person():
+    """Who did something, for the records: the signed-in person, or "Team" without accounts."""
+    user = current_user()
+    return user["name"] if user else "Team"
+
+
+@bp.route("/production/boms/<number>/steps", methods=["GET", "POST"])
+@admin_only
+def production_steps(number):
+    """The process steps for making a bill of materials' product, and what each step uses."""
+    bom = _production().bom(number)
+    if bom is None:
+        abort(404)
+    runs = current_app.extensions["production_runs"]
+    if request.method == "POST":
+        rows = min(request.form.get("rows", 0, type=int), 50)
+        runs.set_steps(bom["product_code"], [
+            {"name": request.form.get(f"name-{i}", ""),
+             "components": request.form.getlist(f"components-{i}")} for i in range(rows)],
+            _person())
+        flash("Saved the steps. Orders already being recorded keep the steps they started with.", "ok")
+        return redirect(url_for("dash.production_bom", number=number))
+    steps = runs.steps_for(bom["product_code"])
+    return _render_production("production_steps", b=bom, steps=steps, rows=len(steps) + 3)
 
 
 @bp.get("/production/requirements")
@@ -723,7 +857,8 @@ def production_bom(number):
     bom = _production().bom(number)
     if bom is None:
         abort(404)
-    return _render_production("production_bom", b=bom)
+    steps = current_app.extensions["production_runs"].steps_for(bom["product_code"])
+    return _render_production("production_bom", b=bom, steps=steps)
 
 
 @bp.get("/production/usage")
@@ -794,13 +929,17 @@ def connection():
 
 @bp.post("/sync")
 def sync_now():
+    _sync_soon(full=request.form.get("full") == "1" and is_admin())
+    return redirect(request.referrer or url_for("dash.overview"))
+
+
+def _sync_soon(full=False):
+    """Run a sync: in the background when the scheduler runs, else right away."""
     ext = _ext()
-    full = request.form.get("full") == "1" and is_admin()
     if ext["scheduler"] and ext["scheduler"].started:
         ext["scheduler"].trigger(full=full)
     elif ext["syncer"]:
         ext["syncer"].sync(full=full or None)
-    return redirect(request.referrer or url_for("dash.overview"))
 
 
 # ---------------------------------------------------------------- wiring
@@ -885,11 +1024,12 @@ def init_app(app):
     app.extensions["unleashed"] = {
         "mode": mode, "client": client, "live_client": live_client, "db": db,
         "store": store, "syncer": syncer, "scheduler": scheduler,
-        "reports": reports, "production": Production(reports),
+        "reports": reports, "production": Production(reports), "store_client": store_client,
         "base_url": cfg["UNLEASHED_BASE_URL"], "display_tz": display_tz,
         "has_credentials": bool(cfg["UNLEASHED_API_ID"] and cfg["UNLEASHED_API_KEY"]),
         "source_error": source_error,
     }
+    app.extensions["production_runs"] = ProductionRuns(db)
     app.register_blueprint(bp)
 
     if syncer is not None:

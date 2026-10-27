@@ -181,6 +181,41 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  and _match(a["ProductCode"], "productCode", exact=True)]
         return _paged([_assembly(ds, a) for a in items], int(page_or_guid))
 
+    @app.put("/Assemblies/<guid>")
+    def update_assembly(guid):
+        """Change a parked assembly's quantity and its lines' quantities."""
+        a = next((a for a in ds.assemblies if a["Guid"] == guid), None)
+        if a is None:
+            return jsonify({"description": "Assembly not found"}), 404
+        if a["Status"] != "Parked":
+            return jsonify({"description": f"Assembly {a['AssemblyNumber']} is {a['Status']} and can't be changed"}), 400
+        body = request.get_json(silent=True) or {}
+        if body.get("Quantity") is not None:
+            a["Quantity"] = float(body["Quantity"])
+        for given in body.get("AssemblyLines") or []:
+            code = (given.get("Product") or {}).get("ProductCode")
+            line = next((l for i, l in enumerate(a["Lines"], 1)
+                         if given.get("LineNumber") == i or l["ProductCode"] == code), None)
+            if line is None:
+                return jsonify({"description": f"No line for {code} on this assembly"}), 400
+            for field in ("Quantity", "WastageQuantity"):
+                if given.get(field) is not None:
+                    line[field] = float(given[field])
+        a["Modified"] = dt.date.today()
+        return jsonify(_assembly(ds, a))
+
+    @app.post("/Assemblies/<guid>/Complete")
+    def complete_assembly(guid):
+        a = next((a for a in ds.assemblies if a["Guid"] == guid), None)
+        if a is None:
+            return jsonify({"description": "Assembly not found"}), 404
+        if a["Status"] != "Parked":
+            return jsonify({"description": f"Assembly {a['AssemblyNumber']} is {a['Status']}"}), 400
+        short = ds.complete(a)
+        if short:
+            return jsonify({"description": f"Not enough stock of {short} to complete the assembly"}), 400
+        return jsonify(_assembly(ds, a))
+
     return app
 
 

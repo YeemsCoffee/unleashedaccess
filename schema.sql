@@ -1,5 +1,5 @@
--- Unleashed Access local database (SQLite). Business data lives in Unleashed;
--- this only stores the log of API calls the dashboard makes.
+-- Unleashed Access database (SQLite or PostgreSQL). Business data lives in Unleashed;
+-- this holds a copy of it, the API call log, team accounts and production records.
 
 CREATE TABLE IF NOT EXISTS unleashed_api_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,4 +88,37 @@ CREATE TABLE IF NOT EXISTS app_users (
 CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- Production (production_runs.py). Steps are kept here, not in Unleashed, which has none.
+-- The process steps for making a product: JSON [{"name": ..., "components": [codes]}].
+CREATE TABLE IF NOT EXISTS prod_steps (
+    product_code TEXT PRIMARY KEY,
+    steps        TEXT NOT NULL,
+    updated_by   TEXT,
+    updated_at   TEXT NOT NULL
+);
+
+-- A production order (Unleashed assembly) the team is recording, with the steps it
+-- started with, and how its close-out to Unleashed went.
+CREATE TABLE IF NOT EXISTS prod_runs (
+    assembly_guid   TEXT PRIMARY KEY,
+    assembly_number TEXT NOT NULL,
+    steps           TEXT NOT NULL,
+    status          TEXT NOT NULL,      -- recording | closing | closed | failed
+    error           TEXT,
+    sent            TEXT,               -- JSON: what close-out sent to Unleashed
+    closed_by       TEXT,
+    closed_at       TEXT,
+    updated_at      TEXT NOT NULL
+);
+
+-- What was used at each step: JSON {component code: quantity}.
+CREATE TABLE IF NOT EXISTS prod_step_records (
+    assembly_guid TEXT NOT NULL,
+    step_index    INTEGER NOT NULL,
+    quantities    TEXT NOT NULL,
+    recorded_by   TEXT,
+    recorded_at   TEXT NOT NULL,
+    PRIMARY KEY (assembly_guid, step_index)
 );

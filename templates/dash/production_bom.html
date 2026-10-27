@@ -30,6 +30,21 @@
 
 <section class="card">
   <div class="card-head">
+    <h2>Process steps</h2>
+    {% if is_admin %}<a href="{{ url_for('dash.production_steps', number=b.number) }}">{{ 'Edit steps' if steps else 'Set up steps' }} →</a>{% endif %}
+  </div>
+  {% if steps %}
+  {% set names = {} %}{% for l in b.lines %}{% set _ = names.update({l.product_code: l.description or l.product_code}) %}{% endfor %}
+  <ol class="steps-list">{% for s in steps %}
+    <li><strong>{{ s.name }}</strong>{% if s.components %}: {% for c in s.components %}{{ names.get(c, c) }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}</li>
+  {% endfor %}</ol>
+  {% else %}
+  <p class="muted">No steps set up, so orders for this product are recorded in one step with every component.{{ ' An admin can set them up.' if not is_admin }}</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head">
     <h2>Recent production orders</h2>
     <a href="{{ url_for('dash.production_orders', product=b.product_code) }}">All for this product →</a>
   </div>

@@ -53,7 +53,7 @@ app's tables in it.
 | Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
 | Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
 | Production | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
-| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance |
+| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Open orders: record what's used at each step, then close out to Unleashed |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
@@ -103,6 +103,36 @@ materials** (recipes), organised like an ERP's production module:
 - If the API user can't read assemblies or bills of materials, everything else
   still syncs, and the Production pages say why they're empty.
 
+### Recording a production run and closing it out
+
+Unleashed fills a parked assembly's component quantities from the bill of
+materials. Here, the team records what they **actually** use, step by step, and
+closing the order out replaces Unleashed's figures with those.
+
+1. **Steps** (admins, once per recipe): Bills of materials → a bill → **Set up
+   steps**. Name the steps in order (e.g. Steep, Filter, Bottle) and tick the
+   components each step uses. A component can be used at several steps; one
+   ticked nowhere is recorded at the last step. Without steps, an order is
+   recorded in a single step with every component.
+2. **Record** (anyone): open a parked order under Production orders. At each
+   step, enter how much of each component was used, wastage included, and
+   **Save step**. A saved step shows who saved it and when, and can be updated
+   until close-out.
+3. **Close out** (anyone, once every step is saved): enter how much was made
+   and the date, check the totals against Unleashed's calculation, then
+   **Complete in Unleashed**. For each component, the sum over all steps is
+   sent as the quantity used (wastage 0). The quantity made and the assembly
+   date are set, and the assembly is completed, which moves the stock.
+
+Unleashed doesn't allow a completed assembly to be edited, so close-out reads
+the quantities back first. If Unleashed didn't keep them, or refuses to complete
+(e.g. not enough stock), the order stays parked, the reason shows on the order,
+and it can be closed out again. Steps and step quantities live in this app's
+database (`prod_steps`, `prod_runs`, `prod_step_records`); Unleashed only
+receives the totals. Close-out needs the instance with the Unleashed API key
+(a view-only instance can record steps but not close out), and an API key
+allowed to change assemblies.
+
 ## The mock Unleashed server
 
 `unleashed/mock_server.py` implements the endpoints the dashboard uses, with
@@ -110,7 +140,7 @@ the same request signing (`api-auth-id` / `api-auth-signature`), paging and
 JSON shapes as the real API: `/Products`, `/ProductGroups`, `/Warehouses`,
 `/Suppliers`, `/Customers`, `/StockOnHand` (including `asAtDate`),
 `/PurchaseOrders`, `/SalesOrders`, `/StockAdjustments`, `/Assemblies`,
-`/BillOfMaterials`.
+`/BillOfMaterials`, plus updating and completing a parked assembly (`PUT /Assemblies/{guid}`, `POST /Assemblies/{guid}/Complete`).
 
 Its data (`unleashed/mock_data.py`) is about 13 months of simulated café
 history: dairy, coffee, syrup and packaging purchase orders with freight,
@@ -349,6 +379,8 @@ Calculator for your region.
 unleashedaccess/
 ├── app.py              # Flask app factory
 ├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
+├── accounts.py         # team accounts
+├── production_runs.py  # process steps and what's recorded at each step
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── sync_once.py        # run one sync and exit (scheduled jobs)
@@ -362,6 +394,7 @@ unleashedaccess/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
 │   ├── production.py   # production orders, BOM costing, material requirements, usage
+│   ├── closeout.py     # send recorded quantities to an assembly and complete it
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)
 │   ├── store.py        # the data copy + a client that answers queries from it
 │   ├── sync.py         # full/incremental sync from the API + background scheduler

@@ -60,8 +60,12 @@ class HttpTransport:
         self.timeout = timeout
 
     def get(self, path, query_string, headers):
+        return self.send("GET", path, query_string, headers)
+
+    def send(self, method, path, query_string, headers, body=None):
         url = f"{self.base_url}{path}" + (f"?{query_string}" if query_string else "")
-        req = urllib.request.Request(url, headers=headers, method="GET")
+        data = body.encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read().decode("utf-8")
@@ -79,6 +83,13 @@ class WsgiTransport:
 
     def get(self, path, query_string, headers):
         resp = self.app.test_client().get(path, query_string=query_string, headers=headers)
+        return resp.status_code, resp.get_data(as_text=True)
+
+    def send(self, method, path, query_string, headers, body=None):
+        if method == "GET":
+            return self.get(path, query_string, headers)
+        resp = self.app.test_client().open(path, method=method, query_string=query_string,
+                                           headers=headers, data=body)
         return resp.status_code, resp.get_data(as_text=True)
 
 
@@ -145,6 +156,48 @@ class UnleashedClient:
         self._cache[key] = (time.monotonic(), data)
         return data
 
+    def post(self, endpoint, body=None):
+        return self._write("POST", endpoint, body)
+
+    def put(self, endpoint, body):
+        return self._write("PUT", endpoint, body)
+
+    def _write(self, method, endpoint, body):
+        """One POST/PUT with a JSON body. Unleashed signs the query string, empty here.
+        Only a rate limit is retried: anything else may already have taken effect."""
+        if not self.api_id or not self.api_key:
+            raise UnleashedError("Unleashed API ID/key are not configured "
+                                 "(set UNLEASHED_API_ID and UNLEASHED_API_KEY).")
+        path = f"/{endpoint}"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "api-auth-id": self.api_id,
+            "api-auth-signature": sign("", self.api_key),
+            "client-type": self.client_type,
+        }
+        started = time.monotonic()
+        status, text, error = None, None, None
+        try:
+            for wait in RETRY_WAITS:
+                status, text = self.transport.send(method, path, "", headers, json.dumps(body or {}))
+                if status != 429 or wait is None:
+                    break
+                time.sleep(_retry_after(text, wait))
+            if status not in (200, 201, 204):
+                error = _error_message(text) or f"HTTP {status}"
+                raise UnleashedError(f"Unleashed {method} {path} failed: {error}", status)
+            data = json.loads(text) if text and text.strip() else {}
+        except UnleashedError as e:
+            error = error or str(e)
+            raise
+        except ValueError:
+            data = {}  # accepted, but the reply isn't JSON
+        finally:
+            self._log(path, "", status, started, None, error, method=method)
+            self._cache.clear()  # whatever changed may be in cached reads
+        return data
+
     def get_all(self, endpoint, params=None, page_size=500, max_pages=200):
         """Follow Pagination across pages and return the combined Items list."""
         if endpoint in UNPAGED_ENDPOINTS:
@@ -165,7 +218,7 @@ class UnleashedClient:
     def clear_cache(self):
         self._cache.clear()
 
-    def _log(self, path, query_string, status, started, body, error):
+    def _log(self, path, query_string, status, started, body, error, method="GET"):
         if not self.log_fn:
             return
         item_count = None
@@ -175,7 +228,7 @@ class UnleashedClient:
             except (ValueError, AttributeError):
                 pass
         self.log_fn({
-            "method": "GET",
+            "method": method,
             "endpoint": path,
             "query": query_string,
             "status_code": status,
