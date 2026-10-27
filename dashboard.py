@@ -14,7 +14,7 @@ from accounts import ROLES, AccountError, check_new_password, temporary_password
 from production_runs import ProductionRuns, RunError
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
-from unleashed.closeout import CloseOutError, close_out, sent_summary
+from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
 
@@ -149,6 +149,7 @@ _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "
 _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
             "dash.production_close": "dash.production_orders",
+            "dash.production_new": "dash.production_orders",
             "dash.production_bom": "dash.production_boms",
             "dash.production_steps": "dash.production_boms",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
@@ -686,6 +687,59 @@ def production_orders():
                               product=product, made=_made_products(), csv_url=_csv_url())
 
 
+@bp.route("/production/orders/new", methods=["GET", "POST"])
+def production_new():
+    """Start a production order: created in Unleashed as a parked assembly, which Unleashed
+    numbers and fills with components from the bill of materials."""
+    p = _production()
+    products = dict(sorted({b["product_code"]: b["description"] for b in p.reports.bills_of_materials()
+                            if not b["obsolete"]}.items(), key=lambda x: x[1] or x[0]))
+    warehouses = p.reports.warehouses()
+    default_wh = next((w for w in warehouses if w.get("IsDefault")), warehouses[0] if warehouses else {})
+    form = request.form if request.method == "POST" else request.args
+    product = form.get("product") or None
+    qty_text = form.get("qty", "").strip()
+    try:
+        qty = float(qty_text)
+    except ValueError:
+        qty = None
+    if qty is not None and (not math.isfinite(qty) or qty <= 0):
+        qty = None
+    try:
+        due = dt.date.fromisoformat(form.get("assemble_by", ""))
+    except ValueError:
+        due = p.today
+    warehouse = form.get("warehouse") or default_wh.get("WarehouseCode")
+    comments = form.get("comments", "").strip()[:500]
+
+    error = None
+    checking = request.method == "POST" or form.get("check")
+    if checking and product not in products:
+        error = "Choose a product that has a bill of materials."
+    elif checking and qty is None:
+        error = "Enter how much to make (more than 0)."
+    preview = p.preview(product, qty) if product in products and qty else None
+
+    if request.method == "POST" and not error:
+        if _write_problem():
+            error = _write_problem()
+        else:
+            ext = _ext()
+            try:
+                order = create_assembly(ext["client"], product, qty, due, warehouse, comments or None)
+            except (CloseOutError, UnleashedError) as e:
+                error = f"Unleashed didn't start the order: {e}"
+            else:
+                ext["store"].upsert_documents("Assemblies", [order])  # shows straight away
+                ext["store_client"].clear_cache()
+                flash(f"Started {order['AssemblyNumber']} in Unleashed. Record each step as it's done.", "ok")
+                return redirect(url_for("dash.production_order", number=order["AssemblyNumber"]))
+    return _render_production("production_new", products=products, warehouses=warehouses,
+                              product=product, qty=qty_text, due=due, warehouse=warehouse,
+                              comments=comments, preview=preview, error=error,
+                              write_problem=_write_problem())
+
+
 @bp.get("/production/orders/<number>")
 def production_order(number):
     order = _production().order(number)
@@ -693,7 +747,7 @@ def production_order(number):
         abort(404)
     runs = current_app.extensions["production_runs"]
     run = runs.view(order) if order["open"] or runs.run(order["guid"]) else None
-    return _render_production("production_order", o=order, run=run, close_problem=_close_problem())
+    return _render_production("production_order", o=order, run=run, close_problem=_write_problem())
 
 
 @bp.post("/production/orders/<number>/steps/<int:index>")
@@ -730,8 +784,8 @@ def production_close(number):
     back = redirect(url_for("dash.production_order", number=number))
     if order is None:
         return back
-    if _close_problem():
-        flash(_close_problem(), "warn")
+    if _write_problem():
+        flash(_write_problem(), "warn")
         return back
     runs = current_app.extensions["production_runs"]
     run = runs.view(order)
@@ -780,15 +834,16 @@ def _open_order(number):
     return order
 
 
-def _close_problem():
-    """Why this instance can't close orders out, or None."""
+def _write_problem():
+    """Why this instance can't start or close out production orders in Unleashed, or None."""
     ext = _ext()
     if ext["client"] is not None:
         return None
     if ext["source_error"]:
-        return "Orders can't be closed out while the shared database holds another account's data."
-    return ("Orders are closed out by the instance with the Unleashed API key; this one only "
-            "reads the shared copy.")
+        return ("Production orders can't be started or closed out while the shared database "
+                "holds another account's data.")
+    return ("Production orders are started and closed out by the instance with the Unleashed "
+            "API key; this one only reads the shared copy.")
 
 
 def _person():

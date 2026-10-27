@@ -159,6 +159,12 @@ tfoot td { font-weight: 600; border-bottom: none; border-top: 1px solid var(--li
 .qty-input { width: 120px; text-align: right; }
 .step-name { width: 100%; min-width: 140px; }
 .close-fields { margin: 16px 0 4px; }
+.filters label.grow { flex: 1 1 220px; }
+.new-order { margin-bottom: 20px; }
+.new-order label { flex: 1 1 180px; min-width: 0; }
+.new-order input, .new-order select { width: 100%; box-sizing: border-box; }
+.new-order label.wide { flex: 2 1 280px; }
+.page-actions { margin: -4px 0 16px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .checks label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
 .steps-list { margin: 0; padding-left: 20px; }

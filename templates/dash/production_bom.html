@@ -12,6 +12,7 @@
     <div><dt>Makes</dt><dd>{{ b.description }} ({{ b.product_code }})</dd></div>
     <div><dt>Recipe cost per unit</dt><dd>{{ b.unit_cost|money }}</dd></div>
     <div><dt>Could make now</dt><dd>{{ b.buildable if b.buildable is not none else '—' }}</dd></div>
+    {% if not b.obsolete %}<div><dt>Make it</dt><dd><a href="{{ url_for('dash.production_new', product=b.product_code) }}">New production order →</a></dd></div>{% endif %}
     <div><dt>Auto-assemble</dt><dd>{{ 'Yes' if b.auto_assemble else 'No' }}</dd></div>
   </dl>
   <div class="table-wrap"><table>

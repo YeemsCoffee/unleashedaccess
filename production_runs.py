@@ -1,6 +1,6 @@
 """Production runs: the team records what it actually uses at each step of a
 production order, and closing the order out sends the totals to Unleashed as the
-quantities used (unleashed/closeout.py).
+quantities used (unleashed/assembly_writes.py).
 
 Steps are set per made product (its bill of materials), since Unleashed has none.
 A run keeps the steps it started with, so editing a recipe's steps doesn't change

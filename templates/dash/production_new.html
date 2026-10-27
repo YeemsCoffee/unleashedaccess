@@ -1,0 +1,55 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import production_notice %}
+{% block title %}New production order{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>New production order</h1>
+  <a href="{{ url_for('dash.production_orders') }}">← Production orders</a>
+</div>
+{{ production_notice(problem) }}
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error and error != write_problem %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card">
+  <p class="muted">The order is started in Unleashed as a parked assembly: Unleashed numbers it and fills in its
+    components from the bill of materials. Your team then records what's actually used at each step and closes it out.</p>
+  <div class="filters new-order">
+    <label class="wide">Product
+      <select name="product" required>
+        <option value="">Choose…</option>
+        {% for code, desc in products.items() %}<option value="{{ code }}" {{ 'selected' if code == product }}>{{ desc or code }} ({{ code }})</option>{% endfor %}
+      </select></label>
+    <label>Quantity to make
+      <input type="number" name="qty" value="{{ qty }}" min="0" step="any" inputmode="decimal" required></label>
+    <label>Assemble by
+      <input type="date" name="assemble_by" value="{{ due.isoformat() }}" required></label>
+    {% if warehouses|length > 1 %}
+    <label>Warehouse
+      <select name="warehouse">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    {% elif warehouse %}<input type="hidden" name="warehouse" value="{{ warehouse }}">{% endif %}
+    <label class="grow">Comments (optional)
+      <input name="comments" value="{{ comments }}" maxlength="500"></label>
+  </div>
+  {% if not products %}<p class="muted">No products have a current bill of materials in Unleashed, so there's nothing to make yet.</p>{% endif %}
+
+  {% if preview %}
+  <h2>Components needed</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th><th class="num">Available now</th><th class="num">Short</th><th class="num">Cost</th></tr></thead>
+    <tbody>{% for r in preview.rows %}
+    <tr class="{{ 'row-warn' if r.short > 0.000001 }}"><td>{{ r.product_code }}</td><td>{{ r.description }}</td>
+      <td class="num">{{ r.need|qty }}</td><td class="num">{{ r.wastage|qty }}</td><td class="num">{{ r.available|qty }}</td>
+      <td class="num">{{ r.short|qty if r.short > 0.000001 else '' }}</td><td class="num">{{ r.cost|money }}</td></tr>
+    {% endfor %}</tbody>
+    <tfoot><tr><td colspan="6">Planned component cost, at today's average costs ({{ preview.bom.number }})</td><td class="num">{{ preview.cost|money }}</td></tr></tfoot>
+  </table></div>
+  {% if preview.short %}<p class="recon recon-warn">! Available stock doesn't cover every component. You can still start the
+    order; Material requirements shows what's short across all open orders.</p>
+  {% else %}<p class="muted">Available stock covers it, before other open orders take theirs (see Material requirements).</p>{% endif %}
+  {% endif %}
+
+  <div class="run-actions">
+    <button class="btn" formmethod="get" name="check" value="1">Check materials</button>
+    <button class="btn btn-primary" {{ 'disabled' if write_problem or not products }}>Start order in Unleashed</button>
+  </div>
+</form>
+{% endblock %}

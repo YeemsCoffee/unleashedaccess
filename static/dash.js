@@ -33,6 +33,23 @@
   });
 })();
 
+/* A form that changes something is sent once, so a double click can't, say, start two
+   production orders. (Buttons that only look something up, formmethod="get", don't count.) */
+(function () {
+  "use strict";
+  var forms = document.querySelectorAll('form[method="post"]');
+  forms.forEach(function (form) {
+    form.addEventListener("submit", function (e) {
+      if (e.submitter && e.submitter.getAttribute("formmethod") === "get") return;
+      if (form.dataset.sent) { e.preventDefault(); return; }
+      form.dataset.sent = "1";
+    });
+  });
+  window.addEventListener("pageshow", function () {  // back button: the form can be sent again
+    forms.forEach(function (form) { delete form.dataset.sent; });
+  });
+})();
+
 /* On narrow screens the tab rows scroll sideways: bring the open tab into view. */
 (function () {
   "use strict";

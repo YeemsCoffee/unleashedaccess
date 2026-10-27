@@ -1,14 +1,14 @@
-"""Close out a production order: send what was actually used to its Unleashed
-assembly, then complete it.
+"""Production orders written to Unleashed: starting one, and closing one out.
 
-Unleashed fills an assembly's component quantities from the bill of materials.
-Close-out replaces them with the quantities the team recorded (each component's
+Starting an order creates a parked assembly (POST /Assemblies). Unleashed numbers
+it and fills its component quantities from the product's bill of materials.
+
+Close-out replaces those quantities with what the team recorded (each component's
 total, wastage included, so wastage is sent as 0), sets the quantity made and the
-assembly date, then completes the assembly, which moves the stock.
-
-A completed assembly can't be edited or reversed in Unleashed, so the quantities
-are read back before completing: if Unleashed didn't keep them, the order is left
-parked and nothing moves.
+assembly date, then completes the assembly, which moves the stock. A completed
+assembly can't be edited or reversed in Unleashed, so the quantities are read back
+before completing: if Unleashed didn't keep them, the order is left parked and
+nothing moves.
 """
 import copy
 
@@ -21,7 +21,30 @@ TOLERANCE = 0.0051
 
 
 class CloseOutError(Exception):
-    """Why close-out stopped, in words for the person closing out."""
+    """Why a change to Unleashed stopped, in words for the person making it."""
+
+
+def create_assembly(client, product_code, qty, assemble_by, warehouse_code=None, comments=None):
+    """Start a production order: a parked assembly making `qty` of `product_code` by
+    `assemble_by`. Returns it as Unleashed reports it, number and components included."""
+    body = {"Product": {"ProductCode": product_code}, "Quantity": qty,
+            "AssembleBy": f"{assemble_by.isoformat()}T00:00:00"}
+    if warehouse_code:
+        body["SourceWarehouse"] = body["DestinationWarehouse"] = {"WarehouseCode": warehouse_code}
+    if comments:
+        body["Comments"] = comments
+    created = client.post("Assemblies", body)
+    if isinstance(created, dict) and created.get("Items"):
+        created = created["Items"][0]
+    guid = created.get("Guid") if isinstance(created, dict) else None
+    if not guid:
+        raise CloseOutError("Unleashed accepted the order but didn't say which one it is. It will "
+                            "show under Production orders after the next sync.")
+    order = client.get(f"Assemblies/{guid}")
+    if not order.get("AssemblyNumber"):
+        raise CloseOutError("Unleashed created the order, but reading it back failed. It will show "
+                            "under Production orders after the next sync.")
+    return order
 
 
 def close_out(client, guid, quantities, made, on_date):

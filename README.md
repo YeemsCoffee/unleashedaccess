@@ -53,7 +53,7 @@ app's tables in it.
 | Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
 | Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
 | Production | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
-| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Open orders: record what's used at each step, then close out to Unleashed |
+| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then close out to Unleashed |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
@@ -103,7 +103,14 @@ materials** (recipes), organised like an ERP's production module:
 - If the API user can't read assemblies or bills of materials, everything else
   still syncs, and the Production pages say why they're empty.
 
-### Recording a production run and closing it out
+### Starting, recording and closing out a production order
+
+Production orders can be started here or in Unleashed. **New production
+order** (Production overview, Production orders, or **Make it** on a bill of
+materials) takes the product, quantity, assemble-by date and comments, shows
+what it needs against available stock (**Check materials**), and creates a
+parked assembly in Unleashed (`POST /Assemblies`), which Unleashed numbers and
+fills with components from the bill of materials.
 
 Unleashed fills a parked assembly's component quantities from the bill of
 materials. Here, the team records what they **actually** use, step by step, and
@@ -129,9 +136,9 @@ the quantities back first. If Unleashed didn't keep them, or refuses to complete
 (e.g. not enough stock), the order stays parked, the reason shows on the order,
 and it can be closed out again. Steps and step quantities live in this app's
 database (`prod_steps`, `prod_runs`, `prod_step_records`); Unleashed only
-receives the totals. Close-out needs the instance with the Unleashed API key
-(a view-only instance can record steps but not close out), and an API key
-allowed to change assemblies.
+receives the totals. Starting and closing out orders needs the instance with the Unleashed API key
+(a view-only instance can record steps but not start or close out orders), and
+an API key allowed to create and change assemblies.
 
 ## The mock Unleashed server
 
@@ -394,7 +401,7 @@ unleashedaccess/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
 │   ├── production.py   # production orders, BOM costing, material requirements, usage
-│   ├── closeout.py     # send recorded quantities to an assembly and complete it
+│   ├── assembly_writes.py # create production orders in Unleashed; close them out
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)
 │   ├── store.py        # the data copy + a client that answers queries from it
 │   ├── sync.py         # full/incremental sync from the API + background scheduler

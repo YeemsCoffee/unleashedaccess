@@ -279,6 +279,20 @@ class MockDataset:
         self.assemblies.append(asm)
         return asm
 
+    def create_assembly(self, code, qty, assemble_by=None, comments=None):
+        """A new parked assembly with components from the product's bill of materials, or None
+        if the product has no current bill of materials (isn't an assembled product)."""
+        bom = next((b for b in self.active_boms() if b["ProductCode"] == code), None)
+        if bom is None:
+            return None
+        asm = {"Guid": self._guid(), "AssemblyNumber": self._next("ASM"), "ProductCode": code,
+               "Quantity": qty, "AssemblyDate": self.today, "AssembleBy": assemble_by or self.today,
+               "Status": "Parked", "Comments": comments, "Modified": dt.date.today(),
+               "Lines": [{"ProductCode": l["ProductCode"], "Quantity": round(l["Quantity"] * qty, 4),
+                          "WastageQuantity": round(l["WastageQuantity"] * qty, 4)} for l in bom["Lines"]]}
+        self.assemblies.append(asm)
+        return asm
+
     def complete(self, asm):
         """Complete a parked assembly as it now stands (its quantities may have been edited),
         today. Returns the first component without enough stock, or None once done."""

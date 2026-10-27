@@ -12,6 +12,7 @@
   {% endcall %}
 </div>
 {{ production_notice(problem) }}
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.production_new') }}">+ New production order</a></div>
 <p class="muted">Unleashed assemblies, filtered by assembly date. Component cost is what the components used were
   worth{{ ", partly estimated at today's average costs where Unleashed gives no cost" if po.estimated }}.</p>
 

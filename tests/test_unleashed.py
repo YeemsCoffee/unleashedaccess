@@ -447,7 +447,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertEqual(self.asm["Lines"][0]["Quantity"], 1.3)
 
     def test_close_out_retry_after_unleashed_completed(self):
-        from unleashed.closeout import CloseOutError, close_out
+        from unleashed.assembly_writes import CloseOutError, close_out
         client = UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(self.mock))
         quantities = {"COF-ESP-5LB": 1.3, "JUG-GAL": 7}  # what stock allows
         first = close_out(client, self.asm["Guid"], quantities, 7, TODAY)
@@ -456,6 +456,39 @@ class ProductionRunTests(unittest.TestCase):
         self.assertEqual(again["AssemblyNumber"], self.asm["AssemblyNumber"])
         with self.assertRaises(CloseOutError):
             close_out(client, self.asm["Guid"], {"COF-ESP-5LB": 3, "JUG-GAL": 7}, 7, TODAY)
+
+    def test_start_a_production_order_from_the_erp(self):
+        c = self._app().test_client()
+        form = c.get("/production/orders/new?product=VSC-HG").get_data(as_text=True)
+        self.assertIn('value="VSC-HG" selected', form)
+        self.assertNotIn('value="MILK-WHL-GAL"', form)  # only products with a bill of materials
+        check = c.get("/production/orders/new?product=VSC-HG&qty=4&assemble_by=2026-07-17&check=1")
+        self.assertIn("Components needed", check.get_data(as_text=True))
+        self.assertIn("CRM-HVY-HG", check.get_data(as_text=True))
+        for data, message in (({"product": "MILK-WHL-GAL", "qty": "1"}, "Choose a product that has a bill"),
+                              ({"product": "VSC-HG", "qty": "0"}, "Enter how much to make")):
+            self.assertIn(message, c.post("/production/orders/new", data=data).get_data(as_text=True))
+        before = len(self.ds.assemblies)
+
+        res = c.post("/production/orders/new", data={"product": "VSC-HG", "qty": "4",
+                                                     "assemble_by": "2026-07-17", "comments": "Weekend batch"})
+        self.assertEqual(len(self.ds.assemblies), before + 1)
+        new = self.ds.assemblies[-1]
+        self.assertEqual((new["ProductCode"], new["Quantity"], new["Status"], new["AssembleBy"], new["Comments"]),
+                         ("VSC-HG", 4, "Parked", dt.date(2026, 7, 17), "Weekend batch"))
+        number = new["AssemblyNumber"]
+        self.assertTrue(res.headers["Location"].endswith(f"/production/orders/{number}"))
+        page = c.get(res.headers["Location"]).get_data(as_text=True)
+        for text in (f"Started {number} in Unleashed", "Production run", "Weekend batch"):
+            self.assertIn(text, page)
+        self.assertIn(number, c.get("/production/requirements").get_data(as_text=True))  # no sync needed
+
+        c.post(f"/production/orders/{number}/steps/0", data={
+            "qty:CRM-HVY-HG": "2", "qty:MILK-WHL-GAL": "1", "qty:SYR-VAN-750": "0.8"})
+        done = c.post(f"/production/orders/{number}/close", data={"made": "4", "date": TODAY.isoformat()},
+                      follow_redirects=True).get_data(as_text=True)
+        self.assertIn("is completed in Unleashed", done)
+        self.assertEqual(new["Status"], "Completed")
 
     def test_close_out_checks_its_inputs(self):
         c = self._app().test_client()

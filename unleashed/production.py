@@ -60,6 +60,23 @@ class Production:
         bom["orders"] = sorted(orders, key=_newest_first, reverse=True)[:15]
         return bom
 
+    def preview(self, product_code, qty):
+        """What making `qty` of a product needs, from its bill of materials, against available
+        stock (ignoring other open orders); None without a bill of materials."""
+        bom = bom_for(product_code, self.reports.bills_of_materials())
+        if bom is None:
+            return None
+        stock = self._stock()
+        rows = []
+        for l in bom["lines"]:
+            need = l["per_unit"] * qty
+            available = stock.get(l["product_code"], {}).get("available", 0)
+            rows.append({"product_code": l["product_code"], "description": l["description"],
+                         "need": need, "wastage": l["wastage"] * qty, "available": available,
+                         "short": max(need - max(available, 0), 0), "cost": l["unit_cost"] * need})
+        return {"bom": bom, "rows": rows, "cost": sum(r["cost"] for r in rows),
+                "short": any(r["short"] > 1e-9 for r in rows)}
+
     # ------------------------------------------------------------ production orders
 
     def orders(self, start, end, status=None, product=None):

@@ -181,6 +181,20 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  and _match(a["ProductCode"], "productCode", exact=True)]
         return _paged([_assembly(ds, a) for a in items], int(page_or_guid))
 
+    @app.post("/Assemblies")
+    def create_assembly():
+        """A new parked assembly; Unleashed numbers it and fills its lines from the BOM."""
+        body = request.get_json(silent=True) or {}
+        code = (body.get("Product") or {}).get("ProductCode")
+        if not code:
+            return jsonify({"description": "Product is required"}), 400
+        qty = float(body.get("Quantity") or 0)
+        a = ds.create_assembly(code, qty, assemble_by=_body_date(body.get("AssembleBy")),
+                               comments=body.get("Comments"))
+        if a is None:
+            return jsonify({"description": f"Product {code} is not an assembled product"}), 400
+        return jsonify(_assembly(ds, a)), 201
+
     @app.put("/Assemblies/<guid>")
     def update_assembly(guid):
         """Change a parked assembly's quantity and its lines' quantities."""
@@ -241,6 +255,16 @@ def _ms(d):
 def _date_arg(name):
     v = request.args.get(name)
     return dt.date.fromisoformat(v[:10]) if v else None
+
+
+def _body_date(v):
+    """A date sent in a request body: "2026-07-15T00:00:00" or "/Date(ms)/"."""
+    if not v:
+        return None
+    if v.startswith("/Date("):
+        return dt.datetime.fromtimestamp(int(v[6:-2].split("+")[0].split("-")[0]) / 1000,
+                                         tz=dt.timezone.utc).date()
+    return dt.date.fromisoformat(v[:10])
 
 
 def _modified(doc, *date_fields):
@@ -392,7 +416,7 @@ def _assembly(ds, a):
         "Product": _product_ref(ds, a["ProductCode"]), "Quantity": a["Quantity"],
         "AssemblyDate": _ms(a["AssemblyDate"]), "AssembleBy": _ms(a["AssembleBy"]),
         "AssemblyStatus": a["Status"], "SourceWarehouse": WAREHOUSE_REF,
-        "DestinationWarehouse": WAREHOUSE_REF, "Comments": None,
+        "DestinationWarehouse": WAREHOUSE_REF, "Comments": a.get("Comments"),
         "AssemblyLines": lines, "LastModifiedOn": _ms(_modified(a, "AssemblyDate")),
     }
 
