@@ -11,9 +11,10 @@
   </form>
 </div>
 {{ production_notice(problem) }}
-<p class="muted">What open production orders need, against available stock (on hand minus what sales orders have
-  allocated). Orders take stock in due-date order, so an order is Ready only if what's left after earlier orders
-  covers it. "After purchases" counts stock on open purchase orders.</p>
+<p class="muted">What open production orders need, against the stock they can draw on: on hand, less what Unleashed
+  has set aside for sales orders (what it set aside for these production orders is theirs). Orders take stock in
+  due-date order, so an order is Ready only if what's left after earlier orders covers it. "After purchases" counts
+  stock on open purchase orders.</p>
 
 <section class="tiles">
   <div class="tile card"><div class="tile-label">Open orders{{ ' due by ' ~ (through|d) if through }}</div><div class="tile-value">{{ req.orders|length }}</div>

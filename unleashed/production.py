@@ -106,16 +106,21 @@ class Production:
         }
 
     def order(self, number, planned=None):
-        """One production order: components planned against used, and availability if open."""
+        """One production order: components planned against used, and, if open, the stock
+        left for it once orders due before it take theirs (as in Material requirements)."""
         order = self.reports.assembly(number)
         if order is None:
             return None
         _with_yield([order], planned)
         bom = bom_for(order["product_code"], self.reports.bills_of_materials())
         planned = {l["product_code"]: l["per_unit"] * order["qty"] for l in bom["lines"]} if bom else {}
-        stock = self._stock() if order["open"] else {}
+        needs = _needs(order, bom)
+        queued = None
+        if order["open"]:
+            queued = next((o["needs"] for o in self.requirements()["orders"]
+                           if o["guid"] == order["guid"] and len(o["needs"]) == len(needs)), None)
         components = []
-        for n in _needs(order, bom):
+        for i, n in enumerate(needs):
             code = n["product_code"]
             plan = planned.get(code, 0) if bom else None
             row = {**n, "planned": plan, "variance": None, "variance_cost": None, "yield": None}
@@ -124,8 +129,8 @@ class Production:
                 row["variance_cost"] = row["variance"] * n["unit_cost"]
                 row["yield"] = plan / n["consumed"] if n["consumed"] else None
             if order["open"]:
-                row["available"] = stock.get(code, {}).get("available", 0)
-                row["short"] = max(n["consumed"] - max(row["available"], 0), 0)
+                row["available"], row["short"] = ((queued[i]["available"], queued[i]["missing"])
+                                                  if queued else (None, 0))
             components.append(row)
         used = {c["product_code"] for c in components}
         for l in (bom["lines"] if bom and order["completed"] else []):
@@ -152,21 +157,25 @@ class Production:
         """
         boms = self.reports.bills_of_materials()
         made_here = {b["product_code"] for b in boms if not b["obsolete"]}
-        orders = [a for a in self.reports.assemblies()
-                  if a["open"] and (through is None or a["due"] is None or a["due"] <= through)]
-        orders.sort(key=lambda o: (o["due"] or dt.date.max, o["number"] or ""))
+        open_orders = sorted((a for a in self.reports.assemblies() if a["open"]),
+                             key=lambda o: (o["due"] or dt.date.max, o["number"] or ""))
         stock = self._stock()
-        left = {code: s["available"] for code, s in stock.items()}
+        supply = _for_production(stock, open_orders, boms)
+        orders = [o for o in open_orders if through is None or o["due"] is None or o["due"] <= through]
+        left = dict(supply)
         components = {}
         for o in orders:
             needs = _needs(o, bom_for(o["product_code"], boms))
-            o["shortages"] = []
+            o["shortages"], o["needs"] = [], []
             for n in needs:
                 code = n["product_code"]
-                covered = min(max(left.get(code, 0), 0), n["consumed"])
-                left[code] = left.get(code, 0) - n["consumed"]
-                if n["consumed"] - covered > 1e-9:
-                    o["shortages"].append({**n, "missing": n["consumed"] - covered})
+                have = left.get(code, 0)
+                missing = n["consumed"] - min(max(have, 0), n["consumed"])
+                missing = missing if missing > 1e-9 else 0
+                left[code] = have - n["consumed"]
+                o["needs"].append({**n, "available": have, "missing": missing})
+                if missing:
+                    o["shortages"].append({**n, "missing": missing})
                 c = components.setdefault(code, {
                     "product_code": code, "description": n["description"], "required": 0,
                     "orders": 0, "unit_cost": n["unit_cost"], "made_here": code in made_here})
@@ -178,7 +187,7 @@ class Production:
         for code, c in components.items():
             s = stock.get(code, {})
             c["on_hand"] = s.get("qty", 0)
-            c["available"] = s.get("available", 0)
+            c["available"] = supply.get(code, 0)
             c["on_purchase"] = s.get("on_purchase", 0)
             c["shortage"] = max(c["required"] - max(c["available"], 0), 0)
             c["shortage_after_po"] = max(c["shortage"] - c["on_purchase"], 0)
@@ -261,6 +270,22 @@ def _needs(order, bom):
              "qty": l["qty"] * order["qty"], "wastage": l["wastage"] * order["qty"],
              "consumed": l["per_unit"] * order["qty"], "unit_cost": l["unit_cost"],
              "cost": l["cost"] * order["qty"], "estimated": True} for l in bom["lines"]]
+
+
+def _for_production(stock, open_orders, boms):
+    """Stock that open production orders can draw on, by component.
+
+    Unleashed allocates a parked assembly's components, so its available figure (on hand
+    less allocated) has already taken them out. That's added back here, so the orders can
+    share it in due-date order without an order being short of stock set aside for it. It
+    is never more than Unleashed has allocated: the rest is for sales orders.
+    """
+    held = defaultdict(float)
+    for o in open_orders:
+        for n in _needs(o, bom_for(o["product_code"], boms)):
+            held[n["product_code"]] += n["consumed"]
+    return {code: s.get("available", 0) + min(held.get(code, 0), max(s.get("allocated", 0), 0))
+            for code, s in stock.items()}
 
 
 def _buildable(bom, stock):

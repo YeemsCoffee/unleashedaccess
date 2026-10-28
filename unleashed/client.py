@@ -54,6 +54,21 @@ def format_date(d):
     return d.isoformat() if d else None
 
 
+def writable(value):
+    """`value` (a document as Unleashed returned it) with every "/Date(ms)/" in the
+    "2026-07-15T00:00:00" form: Unleashed rejects its own date format in a request body
+    ("... is not a valid value for DateTime")."""
+    if isinstance(value, dict):
+        return {k: writable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [writable(v) for v in value]
+    m = _DATE_RE.fullmatch(value) if isinstance(value, str) else None
+    if m:
+        moment = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc)
+        return moment.strftime("%Y-%m-%dT%H:%M:%S")
+    return value
+
+
 class HttpTransport:
     def __init__(self, base_url, timeout=30):
         self.base_url = base_url.rstrip("/")

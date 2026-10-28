@@ -1,4 +1,5 @@
 """Tests for the Unleashed client, mock server, reports and dashboard."""
+import copy
 import datetime as dt
 import os
 import sys
@@ -7,7 +8,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from unleashed.client import UnleashedClient, UnleashedError, WsgiTransport, parse_date, sign  # noqa: E402
+from unleashed.client import (UnleashedClient, UnleashedError, WsgiTransport, parse_date, sign,  # noqa: E402
+                              writable)
 from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app  # noqa: E402
 from unleashed.reports import Reports, add_months  # noqa: E402
 
@@ -78,6 +80,14 @@ class ReportsTests(unittest.TestCase):
     def test_parse_date(self):
         self.assertEqual(parse_date("/Date(1784073600000)/"), dt.date(2026, 7, 15))
         self.assertIsNone(parse_date(None))
+
+    def test_dates_sent_back_to_unleashed_are_in_the_form_it_accepts(self):
+        doc = {"AssembleBy": "/Date(1793059200000)/", "Quantity": 2, "Comments": "/Date( in a note",
+               "AssemblyLines": [{"LastModifiedOn": "/Date(1793080800500+1300)/", "Product": None}]}
+        self.assertEqual(writable(doc), {
+            "AssembleBy": "2026-10-27T00:00:00", "Quantity": 2, "Comments": "/Date( in a note",
+            "AssemblyLines": [{"LastModifiedOn": "2026-10-27T06:00:00", "Product": None}]})
+        self.assertEqual(doc["AssembleBy"], "/Date(1793059200000)/")  # a copy; the original is unchanged
 
     def test_cogs_formula_matches_cost_of_sales(self):
         for month in (TODAY, add_months(TODAY.replace(day=1), -1), add_months(TODAY.replace(day=1), -5)):
@@ -329,6 +339,30 @@ class ProductionTests(unittest.TestCase):
         due_by = self.production.requirements(through=TODAY)
         self.assertEqual(len(due_by["orders"]), 1)
 
+    def test_stock_set_aside_for_an_order_is_not_counted_against_it_twice(self):
+        """Unleashed allocates a parked assembly's components, so its Available has already
+        taken them out. Received cream covering the order mustn't still show it short."""
+        from unleashed.production import Production
+        first = Production(AllocationReports(allocated=204000 + 200000))  # Unleashed allocates both
+        order = first.order("ASM-1")
+        self.assertFalse(order["short"])
+        self.assertEqual(order["components"][0]["available"], 358944)
+        # The later order gets what's left: 358,944 - 204,000.
+        later = first.order("ASM-2")["components"][0]
+        self.assertEqual((later["available"], later["short"]), (154944, 45056))
+        req = first.requirements()
+        self.assertEqual([o["ready"] for o in req["orders"]], [True, False])
+        cream = req["components"][0]
+        self.assertEqual((cream["required"], cream["available"], cream["shortage"]), (404000, 358944, 45056))
+        # Only orders due by the first's date: the later one's stock is still there for it.
+        self.assertTrue(first.requirements(through=dt.date(2026, 10, 30))["orders"][0]["ready"])
+        # Had Unleashed allocated nothing to assemblies, the answer is the same.
+        unallocated = Production(AllocationReports(allocated=0)).requirements()["components"][0]
+        self.assertEqual((unallocated["available"], unallocated["shortage"]), (358944, 45056))
+        # What sales orders hold stays theirs.
+        with_sales = Production(AllocationReports(allocated=404000 + 8944)).requirements()["components"][0]
+        self.assertEqual((with_sales["available"], with_sales["shortage"]), (350000, 54000))
+
     def test_bill_of_materials_cost_and_what_stock_can_make(self):
         bom = self.production.bom("BOM-CB")
         stock = {r["product_code"]: r for r in self.reports.stock_on_hand()["rows"]}
@@ -351,6 +385,37 @@ class ProductionTests(unittest.TestCase):
         self.assertTrue(order["estimated"])
         line = order["lines"][0]
         self.assertAlmostEqual(line["cost"], line["consumed"] * costs[line["product_code"]], places=6)
+
+
+class AllocationReports:
+    """Heavy cream after a purchase is received: 358,944 on hand, and two parked orders
+    needing 204,000 (due first) and 200,000. `allocated` is what Unleashed says it set aside."""
+    today = dt.date(2026, 10, 28)
+
+    def __init__(self, allocated):
+        self.row = {"product_code": "30000049", "qty": 358944, "allocated": allocated,
+                    "available": 358944 - allocated, "on_purchase": 0, "avg_cost": 0.007}
+        line = {"product_code": "30000049", "description": "Heavy Cream 40% Clover", "qty": 0,
+                "wastage": 0, "consumed": 0, "unit_cost": 0.007, "cost": 0, "estimated": True}
+        self.orders = [
+            {"guid": f"g{n}", "number": f"ASM-{n}", "status": "Parked", "open": True, "completed": False,
+             "product_code": "SWEET-CREAM", "description": "Sweet cream", "qty": need / 1000,
+             "date": self.today, "due": due, "completed_date": None, "cost": 0, "unit_cost": 0,
+             "estimated": True, "warehouse": None, "comments": None,
+             "lines": [dict(line, qty=need, consumed=need)]}
+            for n, need, due in ((1, 204000, dt.date(2026, 10, 30)), (2, 200000, dt.date(2026, 11, 6)))]
+
+    def stock_on_hand(self, **_):
+        return {"rows": [self.row]}
+
+    def bills_of_materials(self):
+        return []
+
+    def assemblies(self, *_, **__):
+        return copy.deepcopy(self.orders)
+
+    def assembly(self, number):
+        return next((copy.deepcopy(o) for o in self.orders if o["number"] == number), None)
 
 
 class ProductionRunTests(unittest.TestCase):

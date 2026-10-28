@@ -22,8 +22,8 @@
   {% if o.comments %}<p>{{ o.comments }}</p>{% endif %}
   {% if o.open %}
   <p class="recon {{ 'recon-warn' if o.short else 'recon-ok' }}">
-    {% if o.short %}! Not enough stock available for every component (see Short below). Material requirements
-      shows which orders get stock first.{% else %}✓ Available stock covers every component.{% endif %}</p>
+    {% if o.short %}! Not enough stock for every component once orders due before this one take theirs (see Short
+      below and Material requirements).{% else %}✓ Stock covers every component, after orders due before this one take theirs.{% endif %}</p>
   {% endif %}
 </section>
 
@@ -128,11 +128,11 @@
       {% endif %}
     </tfoot>
     {% else %}
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th>{% if o.open %}<th class="num">Available now</th><th class="num">Short</th>{% endif %}<th class="num">Unit cost</th><th class="num">Planned cost</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th>{% if o.open %}<th class="num" title="On hand, less what's set aside for sales orders and production orders due before this one">Available to it</th><th class="num">Short</th>{% endif %}<th class="num">Unit cost</th><th class="num">Planned cost</th></tr></thead>
     <tbody>{% for c in o.components %}
     <tr class="{{ 'row-warn' if c.short }}"><td>{{ c.product_code }}</td><td>{{ c.description }}</td>
       <td class="num">{{ c.consumed|qty }}</td><td class="num">{{ c.wastage|qty }}</td>
-      {% if o.open %}<td class="num">{{ c.available|qty }}</td><td class="num">{{ c.short|qty if c.short else '' }}</td>{% endif %}
+      {% if o.open %}<td class="num">{{ c.available|qty if c.available is not none else '—' }}</td><td class="num">{{ c.short|qty if c.short else '' }}</td>{% endif %}
       <td class="num">{{ c.unit_cost|money }}</td><td class="num">{{ c.cost|money }}</td></tr>
     {% else %}<tr><td colspan="8" class="muted">No components on this order, and no bill of materials for the product.</td></tr>{% endfor %}</tbody>
     <tfoot><tr><td colspan="{{ 7 if o.open else 5 }}">Planned component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td></tr></tfoot>

@@ -142,9 +142,15 @@ class MockDataset:
         return [b for b in self.boms if not b["Obsolete"]]
 
     def allocated(self, product_code):
-        return sum(line["OrderQuantity"] for so in self.sales_orders
-                   if so["OrderStatus"] in ("Parked", "Placed")
-                   for line in so["Lines"] if line["ProductCode"] == product_code)
+        """Set aside for open sales orders and, as Unleashed does, for the components of
+        parked assemblies."""
+        sales = sum(line["OrderQuantity"] for so in self.sales_orders
+                    if so["OrderStatus"] in ("Parked", "Placed")
+                    for line in so["Lines"] if line["ProductCode"] == product_code)
+        production = sum(line["Quantity"] + line["WastageQuantity"] for a in self.assemblies
+                         if a["Status"] == "Parked"
+                         for line in a["Lines"] if line["ProductCode"] == product_code)
+        return sales + production
 
     def last_sale_date(self, product_code, as_at=None):
         last = None

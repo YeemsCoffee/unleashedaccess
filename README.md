@@ -98,7 +98,10 @@ materials** (recipes), organised like an ERP's production module:
   reports which cost field your account returns.
 - **Material requirements** gives stock to open orders in due-date (Assemble
   by) order, so an order is Ready only if what's left after earlier orders
-  covers it.
+  covers it. Unleashed allocates a parked assembly's components, so its
+  Available figure has already taken them out; that's added back first (never
+  more than Unleashed has allocated), so an order isn't short of stock set
+  aside for it. A production order's page shows the same figures.
 - Assemblies only move value between products, so COGS is unchanged by them.
 - If the API user can't read assemblies or bills of materials, everything else
   still syncs, and the Production pages say why they're empty.

@@ -10,9 +10,7 @@ assembly can't be edited or reversed in Unleashed, so the quantities are read ba
 before completing: if Unleashed didn't keep them, the order is left parked and
 nothing moves.
 """
-import copy
-
-from .client import parse_date
+from .client import parse_date, writable
 from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
 
 # Unleashed may round quantities to a product's decimal places; this much difference is the
@@ -69,7 +67,7 @@ def close_out(client, guid, quantities, made, on_date):
         raise CloseOutError(f"{number} in Unleashed has no line for {', '.join(missing)}, so its "
                             "quantity can't be sent. Nothing was sent.")
 
-    body = copy.deepcopy(current)
+    body = writable(current)  # a copy, its dates in a form Unleashed accepts back
     body["Quantity"] = made
     body["AssemblyDate"] = f"{on_date.isoformat()}T00:00:00"
     seen = set()

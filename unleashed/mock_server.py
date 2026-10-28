@@ -185,6 +185,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     def create_assembly():
         """A new parked assembly; Unleashed numbers it and fills its lines from the BOM."""
         body = request.get_json(silent=True) or {}
+        if _ms_date_in(body):
+            return _bad_date(body)
         code = (body.get("Product") or {}).get("ProductCode")
         if not code:
             return jsonify({"description": "Product is required"}), 400
@@ -204,6 +206,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         if a["Status"] != "Parked":
             return jsonify({"description": f"Assembly {a['AssemblyNumber']} is {a['Status']} and can't be changed"}), 400
         body = request.get_json(silent=True) or {}
+        if _ms_date_in(body):
+            return _bad_date(body)
         if body.get("Quantity") is not None:
             a["Quantity"] = float(body["Quantity"])
         for given in body.get("AssemblyLines") or []:
@@ -258,13 +262,22 @@ def _date_arg(name):
 
 
 def _body_date(v):
-    """A date sent in a request body: "2026-07-15T00:00:00" or "/Date(ms)/"."""
-    if not v:
-        return None
-    if v.startswith("/Date("):
-        return dt.datetime.fromtimestamp(int(v[6:-2].split("+")[0].split("-")[0]) / 1000,
-                                         tz=dt.timezone.utc).date()
-    return dt.date.fromisoformat(v[:10])
+    """A date sent in a request body: "2026-07-15T00:00:00"."""
+    return dt.date.fromisoformat(v[:10]) if v else None
+
+
+def _ms_date_in(value):
+    """The first "/Date(ms)/" in a request body. Unleashed returns dates that way, but
+    rejects them in a request."""
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        return next((found for v in value if (found := _ms_date_in(v))), None)
+    return value if isinstance(value, str) and value.startswith("/Date(") else None
+
+
+def _bad_date(body):
+    return jsonify({"description": f"{_ms_date_in(body)} is not a valid value for DateTime."}), 400
 
 
 def _modified(doc, *date_fields):
