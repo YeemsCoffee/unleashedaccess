@@ -284,3 +284,13 @@ td.wrap { white-space: normal; min-width: 280px; }
 .temp-password { font-size: 20px; padding: 10px 14px; background: var(--surface-0); border-radius: 8px; display: inline-block; user-select: all; }
 .row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .row-actions form { margin: 0; }
+.batch-table .text-input { width: 200px; }
+.batch-table .date-input { width: 160px; }
+.batch-table output { font-weight: 600; }
+[data-add-batch] { margin-top: 8px; }
+@media (max-width: 600px) {
+  .batch-table { table-layout: fixed; width: 100%; }
+  .batch-table th:nth-child(1) { width: 36%; } .batch-table th:nth-child(2) { width: 22%; }
+  .batch-table th, .batch-table td { padding-left: 3px; padding-right: 3px; }
+  .batch-table input.text-input, .batch-table input.qty-input { width: 100%; box-sizing: border-box; padding: 6px 5px; }
+}

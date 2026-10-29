@@ -551,10 +551,62 @@ class ProductionRunTests(unittest.TestCase):
 
         c.post(f"/production/orders/{number}/steps/0", data={
             "qty:CRM-HVY-HG": "2", "qty:MILK-WHL-GAL": "1", "qty:SYR-VAN-750": "0.8"})
-        done = c.post(f"/production/orders/{number}/close", data={"made": "4", "date": TODAY.isoformat()},
-                      follow_redirects=True).get_data(as_text=True)
-        self.assertIn("is completed in Unleashed", done)
-        self.assertEqual(new["Status"], "Completed")
+        sent = c.post(f"/production/orders/{number}/close", data={
+            "made": "4", "date": TODAY.isoformat(), "batch_number": "VSC-0715",
+            "batch_qty": "", "batch_expiry": "2026-07-29"}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn(f"Sent what was used and made to {number}", sent)  # batch-tracked: finished in Unleashed
+        self.assertEqual((new["Status"], new["Quantity"]), ("Parked", 4))
+
+    def test_batches_are_recorded_and_the_order_finished_in_unleashed(self):
+        app = self._app()
+        c = app.test_client()
+        asm = self.ds.create_assembly("VSC-HG", 6, comments="Weekend batch")  # batch-tracked
+        url = f"/production/orders/{asm['AssemblyNumber']}"
+        app.extensions["unleashed"]["syncer"].sync()
+        c.post(url + "/steps/0", data={"qty:CRM-HVY-HG": "3", "qty:MILK-WHL-GAL": "1.5", "qty:SYR-VAN-750": "1.2"})
+        confirm = c.get(url + "/close").get_data(as_text=True)
+        for text in ("is batch-tracked", "Batches made", 'name="batch_expiry"', "Send to Unleashed"):
+            self.assertIn(text, confirm)
+
+        def close(batches, made="6"):
+            data = {"made": made, "date": TODAY.isoformat(), "batch_number": [b[0] for b in batches],
+                    "batch_qty": [b[1] for b in batches], "batch_expiry": [b[2] for b in batches]}
+            return c.post(url + "/close", data=data, follow_redirects=True).get_data(as_text=True)
+
+        for batches, message in (
+                ([("", "", "")], "Enter the batch number and expiry date"),
+                ([("A1", "3", "2026-07-29"), ("A2", "", "2026-07-30")], "Enter how much is in batch A2"),
+                ([("A1", "3", "2026-07-29"), ("a1", "3", "2026-07-30")], "Batch a1 is entered twice"),
+                ([("A1", "6", "")], "Enter the expiry date of batch A1"),
+                ([("A1", "6", "2026-07-01")], "Batch A1 would expire before the day it was made"),
+                ([("A1", "3", "2026-07-29"), ("A2", "2", "2026-07-30")], "The batches add up to 5, but 6 was made")):
+            html = close(batches)
+            self.assertIn(message, html.replace("&#39;", "'"))
+            self.assertIn('value="A1"' if batches[0][0] else "Batches made", html)  # what was typed is kept
+        self.assertEqual(asm["Status"], "Parked")
+
+        page = close([("VSC-0715-A", "3.5", "2026-07-29"), ("VSC-0715-B", "2.5", "2026-07-30"), ("", "", "")])
+        self.assertIn(f"Sent what was used and made to {asm['AssemblyNumber']}", page)
+        # Unleashed holds the quantities, and the batches in the comments, but it isn't completed.
+        self.assertEqual((asm["Status"], asm["Quantity"]), ("Parked", 6))
+        self.assertEqual({l["ProductCode"]: l["Quantity"] for l in asm["Lines"]},
+                         {"CRM-HVY-HG": 3, "MILK-WHL-GAL": 1.5, "SYR-VAN-750": 1.2})
+        self.assertEqual(asm["Comments"], "Weekend batch\nBatches made (from Core): VSC-0715-A qty 3.5, "
+                                          "expires 2026-07-29; VSC-0715-B qty 2.5, expires 2026-07-30")
+        for text in ("enter these batches and complete it there", "VSC-0715-A", "Jul 30, 2026"):
+            self.assertIn(text, page)
+        self.assertIn('<td class="num">3.12</td>', page)  # the recipe, not what was sent
+        self.assertNotIn("Save step", page)  # sent: the steps are locked
+        self.assertNotIn("Complete order", page)
+
+        # Someone enters the batches and completes it in Unleashed; Core picks that up.
+        self.ds.complete(asm)
+        app.extensions["unleashed"]["syncer"].sync()
+        page = c.get(url).get_data(as_text=True)
+        self.assertIn("completed in Unleashed with its batches", page)
+        self.assertNotIn("weren't sent", page.replace("&#39;", "'"))
+        self.assertIn("VSC-0715-B", page)
+        self.assertRegex(page, r"Product yield</dt><dd[^>]*>\s*<span[^>]*>100\.0%")
 
     def test_a_new_order_takes_from_one_warehouse_and_makes_into_another(self):
         self.ds.warehouses.append({"Guid": "wh-kit", "WarehouseCode": "KIT",

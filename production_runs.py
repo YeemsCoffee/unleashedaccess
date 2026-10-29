@@ -9,7 +9,13 @@ the fields to fill in. A run keeps the procedure it started with, so editing a
 procedure doesn't change orders already being recorded. Components on the order that
 no step lists are recorded at the last step; a product without a procedure gets a
 single step with every component.
+
+A batch-tracked product's order isn't completed from here: Unleashed's API can't take
+batch numbers for an assembled product, so close-out sends the quantities, records the
+batches made (number, quantity, expiry), and leaves the order parked ("sent") for
+someone to enter the batches and complete it in Unleashed.
 """
+import datetime as dt
 import json
 import math
 import uuid
@@ -19,6 +25,8 @@ from unleashed.store import utc_now
 DEFAULT_STEP = "Production"
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
+SENT = "sent"  # quantities in Unleashed; batches and completing are done there
+MAX_BATCHES = 50
 # Completing an order that stopped mid-way (the app restarted) can be retried after this.
 STALE_CLOSING_SECONDS = 10 * 60
 
@@ -119,9 +127,10 @@ class ProductionRuns:
         definition = procedure["steps"] or [{"name": DEFAULT_STEP, "instructions": "",
                                              "components": [], "fields": []}]
         records = self.records(order["guid"]) if run else {}
-        # The recipe quantity: Unleashed's calculation while open; once completed, the
-        # components hold what was used, and "planned" holds the recipe.
-        components = {c["product_code"]: dict(c, recipe=c["planned"] if order["completed"]
+        # The recipe quantity: Unleashed's calculation while open; once completed or sent,
+        # the components hold what was used, and "planned" holds the recipe.
+        sent = order["completed"] or (run is not None and run["status"] == SENT)
+        components = {c["product_code"]: dict(c, recipe=c["planned"] if sent
                                               and c.get("planned") is not None else c["consumed"])
                       for c in order["components"]}
         steps, listed = [], set()
@@ -159,7 +168,7 @@ class ProductionRuns:
         return {
             "procedure": {"notes": procedure["notes"], "steps": definition},
             "notes": procedure["notes"], "steps": steps, "started": run is not None,
-            "status": status, "error": error, "locked": status in (CLOSING, CLOSED),
+            "status": status, "error": error, "locked": status in (CLOSING, CLOSED, SENT),
             "all_done": current is None, "blocking": blocking, "can_complete": not blocking,
             "closed_by": run["closed_by"] if run else None,
             "closed_at": run["closed_at"] if run else None, "sent": run["sent"] if run else None,
@@ -223,21 +232,62 @@ class ProductionRuns:
                         " WHERE assembly_guid = ?", (FAILED, error, utc_now(), guid))
 
     def planned_quantities(self):
-        """{assembly guid: quantity planned} for orders completed here (Unleashed then holds
-        the quantity made), for working out yield."""
+        """{assembly guid: quantity planned} for orders completed or sent from here (Unleashed
+        then holds the quantity made), for working out yield."""
         planned = {}
-        for r in self.db.query("SELECT assembly_guid, sent FROM prod_runs WHERE status = ?", (CLOSED,)):
+        for r in self.db.query("SELECT assembly_guid, sent FROM prod_runs WHERE status IN (?, ?)",
+                               (CLOSED, SENT)):
             sent = json.loads(r["sent"]) if r["sent"] else {}
             if sent.get("planned"):
                 planned[r["assembly_guid"]] = sent["planned"]
         return planned
 
-    def closed(self, guid, sent, user):
-        """Record a completed order: `sent` is what Unleashed now holds, plus "planned"."""
+    def closed(self, guid, sent, user, status=CLOSED):
+        """Record a completed order (or with SENT, one left parked for its batches to be
+        entered in Unleashed): `sent` is what Unleashed now holds, plus "planned" (and
+        "batches")."""
         now = utc_now()
         self.db.execute("UPDATE prod_runs SET status = ?, error = NULL, sent = ?, closed_by = ?,"
                         " closed_at = ?, updated_at = ? WHERE assembly_guid = ?",
-                        (CLOSED, json.dumps(sent), user, now, now, guid))
+                        (status, json.dumps(sent), user, now, now, guid))
+
+
+def parse_batches(rows, made, made_on):
+    """The batches made, [{"number", "qty", "expiry"}], from (number, quantity, expiry)
+    rows as typed on the Complete page. Empty rows are skipped; a lone batch without a
+    quantity is everything made. Raises RunError."""
+    filled = []
+    for number, qty_text, expiry_text in rows:
+        number, qty_text, expiry_text = ((v or "").strip() for v in (number, qty_text, expiry_text))
+        if number or qty_text or expiry_text:
+            filled.append((number, qty_text, expiry_text))
+    if not filled:
+        raise RunError("Enter the batch number and expiry date of what was made.")
+    if len(filled) > MAX_BATCHES:
+        raise RunError(f"Enter at most {MAX_BATCHES} batches.")
+    batches, seen = [], set()
+    for number, qty_text, expiry_text in filled:
+        if not number:
+            raise RunError("Enter a batch number for each batch.")
+        if len(number) > 50:
+            raise RunError(f"Batch number {number[:50]}… is too long (50 characters at most).")
+        if number.lower() in seen:
+            raise RunError(f"Batch {number} is entered twice.")
+        seen.add(number.lower())
+        qty = made if not qty_text and len(filled) == 1 else _number(qty_text)
+        if qty is None or qty <= 0:
+            raise RunError(f"Enter how much is in batch {number} (more than 0).")
+        try:
+            expiry = dt.date.fromisoformat(expiry_text)
+        except ValueError:
+            raise RunError(f"Enter the expiry date of batch {number}.") from None
+        if expiry < made_on:
+            raise RunError(f"Batch {number} would expire before the day it was made.")
+        batches.append({"number": number, "qty": qty, "expiry": expiry.isoformat()})
+    total = sum(b["qty"] for b in batches)
+    if abs(total - made) > 0.0051:
+        raise RunError(f"The batches add up to {total:g}, but {made:g} was made. Make them match.")
+    return batches
 
 
 def _start_run(conn, order, view):

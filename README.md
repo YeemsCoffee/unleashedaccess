@@ -149,6 +149,17 @@ closing the order out replaces Unleashed's figures with those.
    sent as the quantity used (wastage 0). The quantity made and the assembly
    date are set, and the assembly is completed, which moves the stock.
 
+**Batch-tracked products** (`IsBatchTracked` on the product in Unleashed) are
+finished in Unleashed, because its API can't take batch numbers for an assembled
+product (they have to be entered in its web app). Their Complete page also asks
+for the batches made: one row per batch with its number, quantity and expiry
+date, adding up to the quantity made. **Send to Unleashed** sends the quantities
+used, the quantity made and the date as above, adds a "Batches made (from Core)"
+line to the assembly's comments, and leaves it parked. The order page lists the
+batches. Someone then opens the assembly in Unleashed, enters the batches and
+completes it there; Core shows it completed after the next sync, with product
+yield worked out from the plan recorded when it was sent.
+
 Unleashed doesn't allow a completed assembly to be edited, so completing reads
 the quantities back first. If Unleashed didn't keep them, or refuses to complete
 (e.g. not enough stock), or anything else goes wrong, the order stays parked,

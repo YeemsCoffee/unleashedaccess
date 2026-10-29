@@ -11,7 +11,7 @@ import math
 from flask import Flask, jsonify, request
 
 from .client import sign
-from .mock_data import MockDataset
+from .mock_data import BATCH_TRACKED, MockDataset
 
 MOCK_API_ID = "mock-api-id"
 MOCK_API_KEY = "mock-api-key"
@@ -225,6 +225,10 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             for field in ("Quantity", "WastageQuantity"):
                 if given.get(field) is not None:
                     line[field] = float(given[field])
+        if "Comments" in body:
+            a["Comments"] = body["Comments"]
+        if body.get("AssemblyDate"):
+            a["AssemblyDate"] = _body_date(body["AssemblyDate"])
         a["Modified"] = dt.date.today()
         return jsonify(_assembly(ds, a))
 
@@ -235,6 +239,10 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             return jsonify({"description": "Assembly not found"}), 404
         if a["Status"] != "Parked":
             return jsonify({"description": f"Assembly {a['AssemblyNumber']} is {a['Status']}"}), 400
+        if a["ProductCode"] in BATCH_TRACKED:
+            # Unleashed's API can't take batch numbers for an assembled product, so (it's
+            # assumed here) it can't complete one that needs them either.
+            return jsonify({"description": f"Batch numbers are required for {a['ProductCode']}"}), 400
         short = ds.complete(a)
         if short:
             return jsonify({"description": f"Not enough stock of {short} to complete the assembly"}), 400
@@ -336,6 +344,7 @@ def _product(ds, p):
         "DefaultPurchasePrice": p["BaseCost"], "DefaultSellPrice": p["SellPrice"],
         "Supplier": _supplier_ref(ds, p["SupplierCode"]) if p["SupplierCode"] else None,
         "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None,
+        "IsBatchTracked": p["ProductCode"] in BATCH_TRACKED,
         "Obsolete": False,
     }
 

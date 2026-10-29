@@ -44,6 +44,9 @@ PRODUCTS = [
     ("MATCHA-QT", "Matcha Concentrate 32 oz", "House-made", "Each", None, None, 32.00, 0.5),
 ]
 
+# Made products Unleashed tracks by batch number (and expiry).
+BATCH_TRACKED = {"VSC-HG"}
+
 # bill number, made product, [(component, qty per unit, wastage per unit)], batch days
 BILLS_OF_MATERIALS = [
     ("BOM-CB", "CB-CONC-GAL", [("COF-ESP-5LB", 0.35, 0.01), ("JUG-GAL", 1, 0)], 4),

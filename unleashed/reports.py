@@ -81,6 +81,11 @@ class Reports:
     def warehouses(self):
         return self.client.get_all("Warehouses")
 
+    def batch_tracked(self, product_code):
+        """Whether Unleashed tracks the product by batch number (False if it doesn't say)."""
+        return any(p.get("ProductCode") == product_code and p.get("IsBatchTracked")
+                   for p in self.client.get_all("Products", {"productCode": product_code}))
+
     # ------------------------------------------------------------ stock
 
     def stock_on_hand(self, as_at=None, warehouse=None, group=None, product=None):

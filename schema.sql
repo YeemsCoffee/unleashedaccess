@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS prod_runs (
     assembly_guid   TEXT PRIMARY KEY,
     assembly_number TEXT NOT NULL,
     steps           TEXT NOT NULL,
-    status          TEXT NOT NULL,      -- recording | closing | closed | failed
+    status          TEXT NOT NULL,      -- recording | closing | closed | failed | sent
     error           TEXT,
     sent            TEXT,               -- JSON: what close-out sent to Unleashed
     closed_by       TEXT,

@@ -70,6 +70,41 @@
   show();
 })();
 
+/* Batches made, on the same page: more rows on request, and their total against the
+   quantity made (red until they match). */
+(function () {
+  "use strict";
+  var body = document.querySelector("[data-batches]");
+  if (!body) return;
+  var made = document.getElementById("made");
+  var total = document.querySelector("[data-batch-total]");
+  var add = document.querySelector("[data-add-batch]");
+  function sum() {
+    var t = 0, rows = 0, blank = 0;
+    body.querySelectorAll("tr").forEach(function (row) {
+      var number = row.querySelector('[name="batch_number"]').value.trim();
+      var qty = row.querySelector('[name="batch_qty"]').value.trim();
+      if (!number && !qty) return;
+      rows += 1;
+      if (qty) t += parseFloat(qty) || 0; else blank += 1;
+    });
+    var m = parseFloat(made.value);
+    if (rows === 1 && blank === 1 && m > 0) t = m;  // a lone batch without a quantity is all of it
+    total.textContent = rows ? String(Math.round(t * 10000) / 10000) : "—";
+    total.classList.toggle("over", rows > 0 && !(Math.abs(t - m) <= 0.0051));
+  }
+  add.hidden = false;
+  add.addEventListener("click", function () {
+    var row = body.querySelector("tr:last-child").cloneNode(true);
+    row.querySelectorAll("input").forEach(function (input) { input.value = ""; });
+    body.appendChild(row);
+    row.querySelector("input").focus();
+  });
+  body.addEventListener("input", sum);
+  made.addEventListener("input", sum);
+  sum();
+})();
+
 /* On narrow screens the tab rows scroll sideways: bring the open tab into view. */
 (function () {
   "use strict";

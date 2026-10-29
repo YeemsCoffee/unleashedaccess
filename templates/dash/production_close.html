@@ -5,18 +5,25 @@
   <h1>Complete {{ o.number }}</h1>
   <a href="{{ url_for('dash.production_order', number=o.number) }}">← Back to the order</a>
 </div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card">
+  {% if batch_tracked %}
+  <p class="recon recon-warn">! {{ o.description or o.product_code }} is batch-tracked, and Unleashed only takes batch
+    numbers for what's made in its web app. So this sends what your team used and how much was made to {{ o.number }}
+    and leaves it parked. Then, in Unleashed, open {{ o.number }}, enter the batches below and complete it.</p>
+  {% else %}
   <p class="recon recon-warn">! This completes {{ o.number }} in Unleashed: the components below come out of stock and
     what you made goes in. Unleashed doesn't let a completed assembly be edited or reversed.</p>
+  {% endif %}
   <div class="filters close-fields">
     <label>Planned
       <span class="yield-out">{{ o.qty|qty }}</span></label>
     <label>{{ o.description or o.product_code }} made
-      <input id="made" type="number" name="made" value="{{ o.qty|plain }}" min="0" step="any" inputmode="decimal" required autofocus></label>
+      <input id="made" type="number" name="made" value="{{ made if made is not none else o.qty|plain }}" min="0" step="any" inputmode="decimal" required autofocus></label>
     <label>Product yield
       <output class="yield-out" data-yield data-flag data-num="1" data-den="{{ o.qty|plain }}">{{ 1|pct }}</output></label>
-    <label>Completed on
-      <input type="date" name="date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
+    <label>{{ 'Made on' if batch_tracked else 'Completed on' }}
+      <input type="date" name="date" value="{{ date or today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
   </div>
   <p class="muted">Enter what the batch actually made. <strong>Product yield</strong> is made ÷ planned. Each
     material's <strong>yield</strong> (below) is what the recipe calls for to make that much, wastage allowance
@@ -25,6 +32,22 @@
   <p class="recon recon-warn">! Recorded outside the procedure's target:
     {% for f in run.out_of_range %}{{ f.label }} at {{ f.step }} was {{ f.value|qty }}{{ ' ' ~ f.unit if f.unit }} (target {{ f.target }}){{ '; ' if not loop.last }}{% endfor %}.
     Check the batch before completing it.</p>
+  {% endif %}
+
+  {% if batch_tracked %}
+  <h2>Batches made</h2>
+  <div class="table-wrap"><table class="batch-table">
+    <thead><tr><th>Batch number</th><th class="num">Quantity</th><th>Expiry date</th></tr></thead>
+    <tbody data-batches>{% for b in batches %}
+    <tr><td><input class="text-input" name="batch_number" value="{{ b.number }}" maxlength="50" autocomplete="off" aria-label="Batch number"></td>
+      <td class="num"><input class="qty-input" type="number" name="batch_qty" value="{{ b.qty }}" min="0" step="any" inputmode="decimal" aria-label="Quantity in the batch"></td>
+      <td><input class="text-input date-input" type="date" name="batch_expiry" value="{{ b.expiry }}" aria-label="Expiry date"></td></tr>
+    {% endfor %}</tbody>
+    <tfoot><tr><td>Total</td><td class="num"><output data-batch-total></output></td><td></td></tr></tfoot>
+  </table></div>
+  <button type="button" class="btn" data-add-batch hidden>+ Add a batch</button>
+  <p class="muted">One row per batch: its number, how much is in it and when it expires. The quantities add up to how
+    much was made; with one batch you can leave its quantity empty.</p>
   {% endif %}
 
   <h2>Components to send</h2>
@@ -40,7 +63,7 @@
   <p class="muted">Each component's total over the saved steps, wastage included, becomes its quantity used in Unleashed
     (with wastage 0). The assembly date becomes the date above.</p>
   <div class="run-actions">
-    <button class="btn btn-primary">Complete in Unleashed</button>
+    <button class="btn btn-primary">{{ 'Send to Unleashed' if batch_tracked else 'Complete in Unleashed' }}</button>
     <a class="btn" href="{{ url_for('dash.production_order', number=o.number) }}">Cancel</a>
   </div>
 </form>

@@ -12,7 +12,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
                    request, session, url_for)
 
 from accounts import ROLES, AccountError, check_new_password, temporary_password
-from production_runs import FIELD_TYPES, ProductionRuns, RunError
+from production_runs import FIELD_TYPES, SENT, ProductionRuns, RunError, parse_batches
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, sent_summary
@@ -63,6 +63,8 @@ def pct(v):
 
 @bp.app_template_filter("d")
 def fmt_date(v):
+    if isinstance(v, str) and v:  # "2026-11-12", as dates are kept in JSON
+        v = dt.date.fromisoformat(v)
     return f"{v:%b} {v.day}, {v:%Y}" if v else "—"
 
 
@@ -787,7 +789,9 @@ def production_step(number, index):
 
 @bp.route("/production/orders/<number>/close", methods=["GET", "POST"])
 def production_close(number):
-    """Confirm, then send the recorded totals to Unleashed and complete the assembly."""
+    """Confirm, then send the recorded totals to Unleashed and complete the assembly. A
+    batch-tracked product's batches are recorded here, and its order is left parked for
+    them to be entered and the order completed in Unleashed (its API can't take them)."""
     order = _open_order(number)
     back = redirect(url_for("dash.production_order", number=number))
     if order is None:
@@ -802,26 +806,43 @@ def production_close(number):
             f"step {s['index'] + 1} ({s['name']})" for s in run["blocking"]) + ".", "warn")
         return back
     today = reports().today
-    if request.method == "GET":
+    batch_tracked = reports().batch_tracked(order["product_code"])
+    form = request.form
+    typed = list(zip(form.getlist("batch_number"), form.getlist("batch_qty"), form.getlist("batch_expiry")))
+
+    def page(error=None):
         # Each material's yield, worked out as the quantity made is typed: recipe per unit x made ÷ used.
         per_unit = {l["product_code"]: l["per_unit"] for l in order["bom"]["lines"]} if order["bom"] else {}
-        return _render_production("production_close", o=order, run=run, today=today, per_unit=per_unit)
+        rows = [{"number": n, "qty": q, "expiry": e} for n, q, e in typed if n or q or e]
+        rows += [{"number": "", "qty": "", "expiry": ""}] * max(3 - len(rows), 1)
+        html = _render_production("production_close", o=order, run=run, today=today, per_unit=per_unit,
+                                  batch_tracked=batch_tracked, batches=rows, error=error,
+                                  made=form.get("made"), date=form.get("date"))
+        return (html, 400) if error else html
 
+    if request.method == "GET":
+        return page()
     try:
-        made = float(request.form.get("made", ""))
-        on_date = dt.date.fromisoformat(request.form.get("date", ""))
+        made = float(form.get("made", ""))
+        on_date = dt.date.fromisoformat(form.get("date", ""))
     except ValueError:
         made, on_date = math.nan, None
     if not math.isfinite(made) or made <= 0 or on_date is None or on_date > today:
-        flash("Enter how much was made (more than 0) and a date that isn't in the future.", "warn")
-        return redirect(url_for("dash.production_close", number=number))
+        return page("Enter how much was made (more than 0) and a date that isn't in the future.")
+    batches = None
+    if batch_tracked:
+        try:
+            batches = parse_batches(typed, made, on_date)
+        except RunError as e:
+            return page(str(e))
     if not runs.begin_close(order, run):
         flash("Someone is completing this order right now, or it's already completed.", "warn")
         return back
     quantities = {t["product_code"]: t["recorded"] for t in run["totals"]}
     ext = _ext()
     try:
-        done = close_out(ext["client"], order["guid"], quantities, made, on_date)
+        done = close_out(ext["client"], order["guid"], quantities, made, on_date,
+                         complete=not batch_tracked, batches=batches)
     except (CloseOutError, UnleashedError) as e:
         runs.close_failed(order["guid"], str(e))
         flash(f"Not completed: {e}", "warn")
@@ -831,6 +852,14 @@ def production_close(number):
         runs.close_failed(order["guid"], f"Something unexpected went wrong ({e.__class__.__name__}: {e}). "
                           "Check the order in Unleashed before trying again.")
         flash("Not completed: something unexpected went wrong. The order page says what.", "warn")
+        return back
+    if batch_tracked:
+        runs.closed(order["guid"], dict(sent_summary(done), planned=order["qty"], batches=batches),
+                    _person(), status=SENT)
+        ext["store"].upsert_documents("Assemblies", [done])
+        ext["store_client"].clear_cache()
+        flash(f"Sent what was used and made to {order['number']} in Unleashed. It's still parked: enter its "
+              "batches there and complete it (they're listed below and in its comments).", "ok")
         return back
     runs.closed(order["guid"], dict(sent_summary(done), planned=order["qty"]), _person())
     ext["store"].upsert_documents("Assemblies", [done])  # shows as completed straight away

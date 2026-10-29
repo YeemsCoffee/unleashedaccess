@@ -9,6 +9,10 @@ assembly date, then completes the assembly, which moves the stock. A completed
 assembly can't be edited or reversed in Unleashed, so the quantities are read back
 before completing: if Unleashed didn't keep them, the order is left parked and
 nothing moves.
+
+Unleashed's API can't take batch numbers for an assembled product, so a batch-tracked
+product's order is left parked after the quantities are sent, with its batches in the
+comments, for someone to enter them and complete it in Unleashed.
 """
 from .client import parse_date, writable
 from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
@@ -16,6 +20,8 @@ from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
 # Unleashed may round quantities to a product's decimal places; this much difference is the
 # same quantity.
 TOLERANCE = 0.0051
+# Starts the line of an assembly's comments that lists the batches made.
+BATCH_NOTE = "Batches made (from Core):"
 
 
 class CloseOutError(Exception):
@@ -50,10 +56,13 @@ def create_assembly(client, product_code, qty, assemble_by, from_warehouse=None,
     return order
 
 
-def close_out(client, guid, quantities, made, on_date):
+def close_out(client, guid, quantities, made, on_date, complete=True, batches=None):
     """Send `quantities` ({component code: total used}) and `made` (quantity produced) to the
     parked assembly `guid`, dated `on_date`, and complete it. Returns the completed assembly
-    as Unleashed reports it. Raises CloseOutError (or UnleashedError) without completing."""
+    as Unleashed reports it. Raises CloseOutError (or UnleashedError) without completing.
+
+    With `complete` False the assembly is left parked once Unleashed holds the quantities,
+    and `batches` ([{"number", "qty", "expiry"}]) are listed in its comments."""
     client.clear_cache()
     current = client.get(f"Assemblies/{guid}")
     number = current.get("AssemblyNumber") or guid
@@ -75,6 +84,9 @@ def close_out(client, guid, quantities, made, on_date):
     body = writable(current)  # a copy, its dates in a form Unleashed accepts back
     body["Quantity"] = made
     body["AssemblyDate"] = f"{on_date.isoformat()}T00:00:00"
+    if batches:
+        kept = [l for l in (current.get("Comments") or "").splitlines() if not l.startswith(BATCH_NOTE)]
+        body["Comments"] = "\n".join(kept + [batch_note(batches)])
     seen = set()
     for line in body.get("AssemblyLines") or []:
         code = (line.get("Product") or {}).get("ProductCode")
@@ -87,12 +99,20 @@ def close_out(client, guid, quantities, made, on_date):
     if not _matches(updated, quantities, made):
         raise CloseOutError(f"Unleashed didn't keep the new quantities for {number}, so it was left "
                             "parked and not completed. Check it in Unleashed, then try again.")
+    if not complete:
+        return updated
     client.post(f"Assemblies/{guid}/Complete", {})
     done = client.get(f"Assemblies/{guid}")
     if _status(done) not in COMPLETED_ASSEMBLY_STATUSES:
         raise CloseOutError(f"Unleashed took the quantities for {number} but didn't complete it "
                             f"(it's {_status(done) or 'without a status'}). Complete it in Unleashed.")
     return done
+
+
+def batch_note(batches):
+    """The batches made, as one line of an assembly's comments."""
+    return BATCH_NOTE + " " + "; ".join(f"{b['number']} qty {b['qty']:g}, expires {b['expiry']}"
+                                        for b in batches)
 
 
 def sent_summary(done):
