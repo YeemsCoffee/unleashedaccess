@@ -110,10 +110,13 @@ materials** (recipes), organised like an ERP's production module:
 
 Production orders can be started here or in Unleashed. **New production
 order** (Production overview, Production orders, or **Make it** on a bill of
-materials) takes the product, quantity, assemble-by date and comments, shows
-what it needs against available stock (**Check materials**), and creates a
-parked assembly in Unleashed (`POST /Assemblies`), which Unleashed numbers and
-fills with components from the bill of materials.
+materials) takes the product, quantity, assemble-by date, the **From**
+warehouse (components are taken from it) and the **To** warehouse (what's made
+goes into it), and comments. It shows what the order needs against available
+stock in all warehouses (**Check materials**), and creates a parked assembly in
+Unleashed (`POST /Assemblies`, with `SourceWarehouse` and
+`DestinationWarehouse`), which Unleashed numbers and fills with components from
+the bill of materials.
 
 Unleashed fills a parked assembly's component quantities from the bill of
 materials. Here, the team records what they **actually** use, step by step, and

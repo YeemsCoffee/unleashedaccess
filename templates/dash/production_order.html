@@ -16,7 +16,8 @@
     <div><dt>Assembly date</dt><dd>{{ o.date|d }}</dd></div>
     <div><dt>Assemble by</dt><dd>{{ o.due|d }}</dd></div>
     {% if o.completed %}<div><dt>Completed</dt><dd>{{ o.completed_date|d }}</dd></div>{% endif %}
-    {% if o.warehouse %}<div><dt>Warehouse</dt><dd>{{ o.warehouse }}</dd></div>{% endif %}
+    {% if o.from_warehouse %}<div><dt>From warehouse</dt><dd title="Components are taken from here">{{ o.from_warehouse }}</dd></div>{% endif %}
+    {% if o.to_warehouse %}<div><dt>To warehouse</dt><dd title="What is made goes here">{{ o.to_warehouse }}</dd></div>{% endif %}
     <div><dt>Bill of materials</dt><dd>{% if o.bom %}<a href="{{ url_for('dash.production_bom', number=o.bom.number) }}">{{ o.bom.number }}</a>{% else %}None found{% endif %}</dd></div>
   </dl>
   {% if o.comments %}<p>{{ o.comments }}</p>{% endif %}

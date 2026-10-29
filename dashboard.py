@@ -712,7 +712,8 @@ def production_new():
         due = dt.date.fromisoformat(form.get("assemble_by", ""))
     except ValueError:
         due = p.today
-    warehouse = form.get("warehouse") or default_wh.get("WarehouseCode")
+    from_wh = form.get("from_warehouse") or default_wh.get("WarehouseCode")
+    to_wh = form.get("to_warehouse") or default_wh.get("WarehouseCode")
     comments = form.get("comments", "").strip()[:500]
 
     error = None
@@ -721,6 +722,8 @@ def production_new():
         error = "Choose a product that has a bill of materials."
     elif checking and qty is None:
         error = "Enter how much to make (more than 0)."
+    elif checking and warehouses and {from_wh, to_wh} - {w.get("WarehouseCode") for w in warehouses}:
+        error = "Choose the warehouses from the list."
     preview = p.preview(product, qty) if product in products and qty else None
 
     if request.method == "POST" and not error:
@@ -729,7 +732,7 @@ def production_new():
         else:
             ext = _ext()
             try:
-                order = create_assembly(ext["client"], product, qty, due, warehouse, comments or None)
+                order = create_assembly(ext["client"], product, qty, due, from_wh, to_wh, comments or None)
             except (CloseOutError, UnleashedError) as e:
                 error = f"Unleashed didn't start the order: {e}"
             else:
@@ -738,7 +741,7 @@ def production_new():
                 flash(f"Started {order['AssemblyNumber']} in Unleashed. Record each step as it's done.", "ok")
                 return redirect(url_for("dash.production_order", number=order["AssemblyNumber"]))
     return _render_production("production_new", products=products, warehouses=warehouses,
-                              product=product, qty=qty_text, due=due, warehouse=warehouse,
+                              product=product, qty=qty_text, due=due, from_wh=from_wh, to_wh=to_wh,
                               comments=comments, preview=preview, error=error,
                               write_problem=_write_problem())
 

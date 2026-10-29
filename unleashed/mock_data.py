@@ -285,15 +285,18 @@ class MockDataset:
         self.assemblies.append(asm)
         return asm
 
-    def create_assembly(self, code, qty, assemble_by=None, comments=None):
+    def create_assembly(self, code, qty, assemble_by=None, comments=None, source=None, destination=None):
         """A new parked assembly with components from the product's bill of materials, or None
-        if the product has no current bill of materials (isn't an assembled product)."""
+        if the product has no current bill of materials (isn't an assembled product).
+        `source` and `destination` are warehouse codes (the default warehouse if not given)."""
         bom = next((b for b in self.active_boms() if b["ProductCode"] == code), None)
         if bom is None:
             return None
+        default = next(w["WarehouseCode"] for w in self.warehouses if w["IsDefault"])
         asm = {"Guid": self._guid(), "AssemblyNumber": self._next("ASM"), "ProductCode": code,
                "Quantity": qty, "AssemblyDate": self.today, "AssembleBy": assemble_by or self.today,
                "Status": "Parked", "Comments": comments, "Modified": dt.date.today(),
+               "SourceWarehouse": source or default, "DestinationWarehouse": destination or default,
                "Lines": [{"ProductCode": l["ProductCode"], "Quantity": round(l["Quantity"] * qty, 4),
                           "WastageQuantity": round(l["WastageQuantity"] * qty, 4)} for l in bom["Lines"]]}
         self.assemblies.append(asm)

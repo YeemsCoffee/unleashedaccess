@@ -22,13 +22,18 @@ class CloseOutError(Exception):
     """Why a change to Unleashed stopped, in words for the person making it."""
 
 
-def create_assembly(client, product_code, qty, assemble_by, warehouse_code=None, comments=None):
+def create_assembly(client, product_code, qty, assemble_by, from_warehouse=None, to_warehouse=None,
+                    comments=None):
     """Start a production order: a parked assembly making `qty` of `product_code` by
-    `assemble_by`. Returns it as Unleashed reports it, number and components included."""
+    `assemble_by`, taking components from `from_warehouse` and putting what's made into
+    `to_warehouse` (warehouse codes). Returns it as Unleashed reports it, number and
+    components included."""
     body = {"Product": {"ProductCode": product_code}, "Quantity": qty,
             "AssembleBy": f"{assemble_by.isoformat()}T00:00:00"}
-    if warehouse_code:
-        body["SourceWarehouse"] = body["DestinationWarehouse"] = {"WarehouseCode": warehouse_code}
+    if from_warehouse:
+        body["SourceWarehouse"] = {"WarehouseCode": from_warehouse}
+    if to_warehouse:
+        body["DestinationWarehouse"] = {"WarehouseCode": to_warehouse}
     if comments:
         body["Comments"] = comments
     created = client.post("Assemblies", body)

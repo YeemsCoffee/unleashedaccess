@@ -383,7 +383,8 @@ class Reports:
         qty = i.get("Quantity") or 0
         cost = sum(l["cost"] for l in lines)
         date = parse_date(i.get("AssemblyDate"))
-        warehouse = i.get("DestinationWarehouse") or i.get("Warehouse") or {}
+        source = i.get("SourceWarehouse") or i.get("Warehouse") or {}
+        destination = i.get("DestinationWarehouse") or i.get("Warehouse") or {}
         return {
             "guid": i.get("Guid"), "number": i.get("AssemblyNumber"), "status": status,
             "completed": completed,
@@ -391,7 +392,8 @@ class Reports:
             "product_code": prod.get("ProductCode"), "description": prod.get("ProductDescription"),
             "qty": qty, "date": date, "due": parse_date(i.get("AssembleBy")) or date,
             "completed_date": (parse_date(i.get("CompletedDate")) or date) if completed else None,
-            "warehouse": warehouse.get("WarehouseName") or warehouse.get("WarehouseCode"),
+            "from_warehouse": source.get("WarehouseName") or source.get("WarehouseCode"),
+            "to_warehouse": destination.get("WarehouseName") or destination.get("WarehouseCode"),
             "comments": i.get("Comments"), "lines": lines, "cost": cost,
             "unit_cost": cost / qty if qty else 0, "estimated": any(l["estimated"] for l in lines),
         }

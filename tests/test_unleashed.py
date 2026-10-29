@@ -401,7 +401,7 @@ class AllocationReports:
             {"guid": f"g{n}", "number": f"ASM-{n}", "status": "Parked", "open": True, "completed": False,
              "product_code": "SWEET-CREAM", "description": "Sweet cream", "qty": need / 1000,
              "date": self.today, "due": due, "completed_date": None, "cost": 0, "unit_cost": 0,
-             "estimated": True, "warehouse": None, "comments": None,
+             "estimated": True, "from_warehouse": None, "to_warehouse": None, "comments": None,
              "lines": [dict(line, qty=need, consumed=need)]}
             for n, need, due in ((1, 204000, dt.date(2026, 10, 30)), (2, 200000, dt.date(2026, 11, 6)))]
 
@@ -555,6 +555,23 @@ class ProductionRunTests(unittest.TestCase):
                       follow_redirects=True).get_data(as_text=True)
         self.assertIn("is completed in Unleashed", done)
         self.assertEqual(new["Status"], "Completed")
+
+    def test_a_new_order_takes_from_one_warehouse_and_makes_into_another(self):
+        self.ds.warehouses.append({"Guid": "wh-kit", "WarehouseCode": "KIT",
+                                   "WarehouseName": "Gardena Kitchen", "IsDefault": False})
+        c = self._app().test_client()
+        form = c.get("/production/orders/new?product=VSC-HG").get_data(as_text=True)
+        for text in ('name="from_warehouse"', 'name="to_warehouse"', "Gardena Kitchen"):
+            self.assertIn(text, form)
+        self.assertIn("Choose the warehouses from the list", c.post("/production/orders/new", data={
+            "product": "VSC-HG", "qty": "2", "from_warehouse": "NOPE", "to_warehouse": "KIT"}).get_data(as_text=True))
+        res = c.post("/production/orders/new", data={"product": "VSC-HG", "qty": "2", "assemble_by": "2026-07-17",
+                                                     "from_warehouse": "GDN", "to_warehouse": "KIT"})
+        new = self.ds.assemblies[-1]
+        self.assertEqual((new["SourceWarehouse"], new["DestinationWarehouse"]), ("GDN", "KIT"))
+        page = c.get(res.headers["Location"]).get_data(as_text=True)
+        self.assertRegex(page, r"From warehouse</dt><dd[^>]*>Gardena Store<")
+        self.assertRegex(page, r"To warehouse</dt><dd[^>]*>Gardena Kitchen<")
 
     def test_operating_procedure_guides_and_records_each_step(self):
         app = self._app()

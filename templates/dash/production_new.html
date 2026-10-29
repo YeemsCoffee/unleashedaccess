@@ -11,7 +11,9 @@
 {% if error and error != write_problem %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card">
   <p class="muted">The order is started in Unleashed as a parked assembly: Unleashed numbers it and fills in its
-    components from the bill of materials. Your team then records what's actually used at each step and closes it out.</p>
+    components from the bill of materials. Your team then records what's actually used at each step and closes it out.
+    {% if warehouses|length > 1 %}Components are taken from the <strong>From</strong> warehouse, and what's made goes
+    into the <strong>To</strong> warehouse.{% endif %}</p>
   <div class="filters new-order">
     <label class="wide">Product
       <select name="product" required>
@@ -23,9 +25,15 @@
     <label>Assemble by
       <input type="date" name="assemble_by" value="{{ due.isoformat() }}" required></label>
     {% if warehouses|length > 1 %}
-    <label>Warehouse
-      <select name="warehouse">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
-    {% elif warehouse %}<input type="hidden" name="warehouse" value="{{ warehouse }}">{% endif %}
+    {% for name, label, hint, chosen in (('from_warehouse', 'From warehouse', 'Components are taken from here', from_wh),
+                                         ('to_warehouse', 'To warehouse', 'What is made goes here', to_wh)) %}
+    <label title="{{ hint }}">{{ label }}
+      <select name="{{ name }}">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == chosen }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    {% endfor %}
+    {% else %}
+    {% if from_wh %}<input type="hidden" name="from_warehouse" value="{{ from_wh }}">{% endif %}
+    {% if to_wh %}<input type="hidden" name="to_warehouse" value="{{ to_wh }}">{% endif %}
+    {% endif %}
     <label class="grow">Comments (optional)
       <input name="comments" value="{{ comments }}" maxlength="500"></label>
   </div>

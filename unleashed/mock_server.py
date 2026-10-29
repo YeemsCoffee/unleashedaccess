@@ -191,8 +191,14 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         if not code:
             return jsonify({"description": "Product is required"}), 400
         qty = float(body.get("Quantity") or 0)
+        codes = {w["WarehouseCode"] for w in ds.warehouses}
+        source, destination = ((body.get(f) or {}).get("WarehouseCode")
+                               for f in ("SourceWarehouse", "DestinationWarehouse"))
+        for wh in (source, destination):
+            if wh and wh not in codes:
+                return jsonify({"description": f"Warehouse {wh} not found"}), 400
         a = ds.create_assembly(code, qty, assemble_by=_body_date(body.get("AssembleBy")),
-                               comments=body.get("Comments"))
+                               comments=body.get("Comments"), source=source, destination=destination)
         if a is None:
             return jsonify({"description": f"Product {code} is not an assembled product"}), 400
         return jsonify(_assembly(ds, a)), 201
@@ -309,6 +315,11 @@ def _match(value, arg, exact=False):
 def _warehouse(w):
     return {"Guid": w["Guid"], "WarehouseCode": w["WarehouseCode"],
             "WarehouseName": w["WarehouseName"], "IsDefault": w["IsDefault"]}
+
+
+def _warehouse_ref(ds, code):
+    w = next((w for w in ds.warehouses if w["WarehouseCode"] == code), None)
+    return {"WarehouseCode": w["WarehouseCode"], "WarehouseName": w["WarehouseName"]} if w else WAREHOUSE_REF
 
 
 def _product_ref(ds, code):
@@ -428,8 +439,10 @@ def _assembly(ds, a):
         "Guid": a["Guid"], "AssemblyNumber": a["AssemblyNumber"],
         "Product": _product_ref(ds, a["ProductCode"]), "Quantity": a["Quantity"],
         "AssemblyDate": _ms(a["AssemblyDate"]), "AssembleBy": _ms(a["AssembleBy"]),
-        "AssemblyStatus": a["Status"], "SourceWarehouse": WAREHOUSE_REF,
-        "DestinationWarehouse": WAREHOUSE_REF, "Comments": a.get("Comments"),
+        "AssemblyStatus": a["Status"],
+        "SourceWarehouse": _warehouse_ref(ds, a.get("SourceWarehouse")),
+        "DestinationWarehouse": _warehouse_ref(ds, a.get("DestinationWarehouse")),
+        "Comments": a.get("Comments"),
         "AssemblyLines": lines, "LastModifiedOn": _ms(_modified(a, "AssemblyDate")),
     }
 
