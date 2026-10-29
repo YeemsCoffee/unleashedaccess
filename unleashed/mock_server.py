@@ -205,7 +205,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
 
     @app.put("/Assemblies/<guid>")
     def update_assembly(guid):
-        """Change a parked assembly's quantity and its lines' quantities."""
+        """Change a parked assembly's quantity, its lines' quantities, and the batches of
+        what it makes (PendingBatchNumbers, created when it's completed)."""
         a = next((a for a in ds.assemblies if a["Guid"] == guid), None)
         if a is None:
             return jsonify({"description": "Assembly not found"}), 404
@@ -214,6 +215,19 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         body = request.get_json(silent=True) or {}
         if _ms_date_in(body):
             return _bad_date(body)
+        pending = None
+        if "PendingBatchNumbers" in body:
+            if a["ProductCode"] not in BATCH_TRACKED:
+                return jsonify({"description": f"Product {a['ProductCode']} is not batch tracked, so "
+                                               "PendingBatchNumbers can't be included"}), 400
+            pending = []
+            for b in body["PendingBatchNumbers"] or []:
+                number = (b.get("Number") or "").strip()
+                if not number or len(number) > 50 or b.get("Quantity") is None:
+                    return jsonify({"description": "Each batch needs a Number (50 characters at most) "
+                                                   "and a Quantity"}), 400
+                pending.append({"Number": number, "Quantity": float(b["Quantity"]),
+                                "ExpiryDate": _body_date(b.get("ExpiryDate"))})
         if body.get("Quantity") is not None:
             a["Quantity"] = float(body["Quantity"])
         for given in body.get("AssemblyLines") or []:
@@ -226,9 +240,13 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                 if given.get(field) is not None:
                     line[field] = float(given[field])
         if "Comments" in body:
+            if len(body["Comments"] or "") > 1024:
+                return jsonify({"description": "Comments must be 1024 characters or fewer"}), 400
             a["Comments"] = body["Comments"]
         if body.get("AssemblyDate"):
             a["AssemblyDate"] = _body_date(body["AssemblyDate"])
+        if pending is not None:
+            a["Batches"] = pending
         a["Modified"] = dt.date.today()
         return jsonify(_assembly(ds, a))
 
@@ -239,9 +257,9 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             return jsonify({"description": "Assembly not found"}), 404
         if a["Status"] != "Parked":
             return jsonify({"description": f"Assembly {a['AssemblyNumber']} is {a['Status']}"}), 400
-        if a["ProductCode"] in BATCH_TRACKED:
-            # Unleashed's API can't take batch numbers for an assembled product, so (it's
-            # assumed here) it can't complete one that needs them either.
+        if a["ProductCode"] in BATCH_TRACKED and abs(
+                sum(b["Quantity"] for b in a.get("Batches") or []) - a["Quantity"]) > 1e-9:
+            # Assumed: what's made must all be in batches to complete it.
             return jsonify({"description": f"Batch numbers are required for {a['ProductCode']}"}), 400
         short = ds.complete(a)
         if short:
@@ -452,6 +470,10 @@ def _assembly(ds, a):
         "SourceWarehouse": _warehouse_ref(ds, a.get("SourceWarehouse")),
         "DestinationWarehouse": _warehouse_ref(ds, a.get("DestinationWarehouse")),
         "Comments": a.get("Comments"),
+        # The finished product's batches, entered in the web app: pending until it's completed.
+        ("BatchNumbers" if a["Status"] == "Completed" else "PendingBatchNumbers"): [
+            {"Number": b["Number"], "Quantity": b["Quantity"], "ExpiryDate": _ms(b["ExpiryDate"])}
+            for b in a.get("Batches") or []],
         "AssemblyLines": lines, "LastModifiedOn": _ms(_modified(a, "AssemblyDate")),
     }
 

@@ -12,10 +12,10 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
                    request, session, url_for)
 
 from accounts import ROLES, AccountError, check_new_password, temporary_password
-from production_runs import FIELD_TYPES, SENT, ProductionRuns, RunError, parse_batches
+from production_runs import FIELD_TYPES, SENT, ProductionRuns, RunError, check_batches, parse_batches
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
-from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, sent_summary
+from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
 
@@ -755,7 +755,10 @@ def production_order(number):
         abort(404)
     runs = current_app.extensions["production_runs"]
     run = runs.view(order) if order["open"] or runs.run(order["guid"]) else None
-    return _render_production("production_order", o=order, run=run, close_problem=_write_problem())
+    recorded = (run["sent"] or {}).get("batches") if run else None
+    batch_check = check_batches(recorded, order["batches"]) if recorded else None
+    return _render_production("production_order", o=order, run=run, batch_check=batch_check,
+                              close_problem=_write_problem())
 
 
 @bp.post("/production/orders/<number>/steps/<int:index>")
@@ -790,8 +793,8 @@ def production_step(number, index):
 @bp.route("/production/orders/<number>/close", methods=["GET", "POST"])
 def production_close(number):
     """Confirm, then send the recorded totals to Unleashed and complete the assembly. A
-    batch-tracked product's batches are recorded here, and its order is left parked for
-    them to be entered and the order completed in Unleashed (its API can't take them)."""
+    batch-tracked product's batches made go with them; if Unleashed doesn't keep them as
+    sent, the order is left parked for them to be checked and it completed in Unleashed."""
     order = _open_order(number)
     back = redirect(url_for("dash.production_order", number=number))
     if order is None:
@@ -841,8 +844,7 @@ def production_close(number):
     quantities = {t["product_code"]: t["recorded"] for t in run["totals"]}
     ext = _ext()
     try:
-        done = close_out(ext["client"], order["guid"], quantities, made, on_date,
-                         complete=not batch_tracked, batches=batches)
+        done = close_out(ext["client"], order["guid"], quantities, made, on_date, batches=batches)
     except (CloseOutError, UnleashedError) as e:
         runs.close_failed(order["guid"], str(e))
         flash(f"Not completed: {e}", "warn")
@@ -853,22 +855,22 @@ def production_close(number):
                           "Check the order in Unleashed before trying again.")
         flash("Not completed: something unexpected went wrong. The order page says what.", "warn")
         return back
-    if batch_tracked:
-        runs.closed(order["guid"], dict(sent_summary(done), planned=order["qty"], batches=batches),
-                    _person(), status=SENT)
-        ext["store"].upsert_documents("Assemblies", [done])
-        ext["store_client"].clear_cache()
-        flash(f"Sent what was used and made to {order['number']} in Unleashed. It's still parked: enter its "
-              "batches there and complete it (they're listed below and in its comments).", "ok")
-        return back
-    runs.closed(order["guid"], dict(sent_summary(done), planned=order["qty"]), _person())
-    ext["store"].upsert_documents("Assemblies", [done])  # shows as completed straight away
+    sent = dict(sent_summary(done), planned=order["qty"], **({"batches": batches} if batches else {}))
+    ext["store"].upsert_documents("Assemblies", [done])  # shows straight away
     ext["store_client"].clear_cache()
+    if not is_completed(done):  # Unleashed took the quantities but not the batches as sent
+        runs.closed(order["guid"], sent, _person(), status=SENT)
+        flash(f"Sent what was used and made to {order['number']}, but Unleashed didn't keep the batches as "
+              "entered, so it's still parked. Check its batches in Unleashed against the ones below, "
+              "then complete it there.", "warn")
+        return back
+    runs.closed(order["guid"], sent, _person())
     _sync_soon()  # stock on hand
     made_now = done.get("Quantity") or made
     flash(f"{order['number']} is completed in Unleashed: made {qty(made_now)} of {qty(order['qty'])} "
-          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}. Each "
-          "material's yield is on the order.", "ok")
+          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}"
+          + (f", in {len(batches)} batch{'es' if len(batches) > 1 else ''}" if batches else "")
+          + ". Each material's yield is on the order.", "ok")
     return back
 
 

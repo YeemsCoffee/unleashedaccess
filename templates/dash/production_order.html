@@ -21,6 +21,13 @@
     <div><dt>Bill of materials</dt><dd>{% if o.bom %}<a href="{{ url_for('dash.production_bom', number=o.bom.number) }}">{{ o.bom.number }}</a>{% else %}None found{% endif %}</dd></div>
   </dl>
   {% if o.comments %}<p class="instructions">{{ o.comments }}</p>{% endif %}
+  {% if o.batches and not batch_check %}
+  <h3 class="run-totals">Batches made{{ ' (created when it\'s completed)' if o.batches_pending }}</h3>
+  <div class="table-wrap"><table class="batch-table">
+    <thead><tr><th>Batch number</th><th class="num">Quantity</th><th>Expiry date</th></tr></thead>
+    <tbody>{% for b in o.batches %}<tr><td>{{ b.number }}</td><td class="num">{{ b.qty|qty }}</td><td>{{ b.expiry|d }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
   {% if o.open %}
   <p class="recon {{ 'recon-warn' if o.short else 'recon-ok' }}">
     {% if o.short %}! Not enough stock for every component once orders due before this one take theirs (see Short
@@ -46,16 +53,26 @@
   {% if run.status == 'closing' %}<p class="recon recon-warn">! This order is being completed.</p>{% endif %}
   {% if run.status == 'closed' %}<p class="recon recon-ok">✓ Completed by {{ run.closed_by }} on {{ run.closed_at|local }}: Unleashed holds the quantities recorded here.</p>
   {% elif run.status == 'sent' %}
-  {% if o.open %}<p class="recon recon-warn">! {{ run.closed_by }} sent what was used and made to Unleashed on {{ run.closed_at|local }}.
-    To finish, open {{ o.number }} in Unleashed, enter these batches and complete it there. Core picks it up on the next sync.</p>
-  {% elif o.completed %}<p class="recon recon-ok">✓ Sent by {{ run.closed_by }} on {{ run.closed_at|local }}, and completed in Unleashed with its batches.</p>{% endif %}
-  {% if run.sent and run.sent.batches %}
+  {% if o.open %}<p class="recon recon-warn">! {{ run.closed_by }} sent what was used and made on {{ run.closed_at|local }}, but
+    Unleashed didn't keep the batches as entered, so {{ o.number }} is still parked. Check its batches in Unleashed against the
+    ones below, then complete it there. Core picks it up on the next sync.</p>
+  {% elif o.completed %}<p class="recon recon-ok">✓ Sent by {{ run.closed_by }} on {{ run.closed_at|local }}, and completed in Unleashed.</p>{% endif %}
+  {% elif not o.open and run.started %}<p class="recon recon-warn">! This order was {{ o.status|lower }} in Unleashed directly, so the quantities recorded here weren't sent.</p>{% endif %}
+  {% if batch_check %}
+  {% set matched = batch_check|selectattr('ok')|list|length == batch_check|length %}
+  <h3 class="run-totals">Batches made</h3>
+  {% if not o.batches %}<p class="muted">Not in Unleashed yet.</p>
+  {% elif matched %}<p class="recon recon-ok">✓ Unleashed has these batches{{ ', to be created when it\'s completed' if o.batches_pending }}.</p>
+  {% else %}<p class="recon recon-warn">! The batches in Unleashed don't match what was recorded here (marked ! below){{ '. Correct them in Unleashed before completing it' if o.open }}.</p>{% endif %}
   <div class="table-wrap"><table class="batch-table">
-    <thead><tr><th>Batch number</th><th class="num">Quantity</th><th>Expiry date</th></tr></thead>
-    <tbody>{% for b in run.sent.batches %}<tr><td>{{ b.number }}</td><td class="num">{{ b.qty|qty }}</td><td>{{ b.expiry|d }}</td></tr>{% endfor %}</tbody>
+    <thead><tr><th>Batch number</th><th class="num">Quantity</th><th>Expiry date</th>{% if o.batches %}<th>In Unleashed</th>{% endif %}</tr></thead>
+    <tbody>{% for b in batch_check %}
+    <tr class="{{ 'row-warn' if o.batches and not b.ok }}"><td>{{ b.number }}</td>
+      <td class="num">{{ b.recorded.qty|qty if b.recorded else '—' }}</td><td>{{ b.recorded.expiry|d if b.recorded else '—' }}</td>
+      {% if o.batches %}<td>{% if b.ok %}✓{% elif not b.unleashed %}! Missing{% else %}! {{ b.unleashed.qty|qty }}, expires {{ b.unleashed.expiry|d }}{{ ' (not recorded here)' if not b.recorded }}{% endif %}</td>{% endif %}</tr>
+    {% endfor %}</tbody>
   </table></div>
   {% endif %}
-  {% elif not o.open and run.started %}<p class="recon recon-warn">! This order was {{ o.status|lower }} in Unleashed directly, so the quantities recorded here weren't sent.</p>{% endif %}
 
   {% for s in run.steps %}
   <form method="post" action="{{ url_for('dash.production_step', number=o.number, index=s.index) }}"

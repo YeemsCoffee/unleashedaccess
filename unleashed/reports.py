@@ -390,6 +390,9 @@ class Reports:
         date = parse_date(i.get("AssemblyDate"))
         source = i.get("SourceWarehouse") or i.get("Warehouse") or {}
         destination = i.get("DestinationWarehouse") or i.get("Warehouse") or {}
+        # The finished product's batches: created ones, or on a parked assembly, ones entered
+        # to be created when it's completed.
+        made_batches, pending = _batches(i.get("BatchNumbers")), _batches(i.get("PendingBatchNumbers"))
         return {
             "guid": i.get("Guid"), "number": i.get("AssemblyNumber"), "status": status,
             "completed": completed,
@@ -399,6 +402,7 @@ class Reports:
             "completed_date": (parse_date(i.get("CompletedDate")) or date) if completed else None,
             "from_warehouse": source.get("WarehouseName") or source.get("WarehouseCode"),
             "to_warehouse": destination.get("WarehouseName") or destination.get("WarehouseCode"),
+            "batches": made_batches or pending, "batches_pending": not made_batches and bool(pending),
             "comments": i.get("Comments"), "lines": lines, "cost": cost,
             "unit_cost": cost / qty if qty else 0, "estimated": any(l["estimated"] for l in lines),
         }
@@ -579,6 +583,11 @@ def _first(*values):
     """First value that isn't None (a null BC field falls back to the plain one)."""
     return next((v for v in values if v is not None), 0)
 
+
+def _batches(items):
+    """Batches as Unleashed lists them on an assembly: [{"number", "qty", "expiry"}]."""
+    return [{"number": b.get("Number") or b.get("BatchNumber"), "qty": b.get("Quantity") or 0,
+             "expiry": parse_date(b.get("ExpiryDate"))} for b in items or []]
 
 def _field(record, names):
     """The first of `names` that `record` has a value for, or None."""

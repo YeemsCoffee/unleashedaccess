@@ -10,10 +10,10 @@ procedure doesn't change orders already being recorded. Components on the order 
 no step lists are recorded at the last step; a product without a procedure gets a
 single step with every component.
 
-A batch-tracked product's order isn't completed from here: Unleashed's API can't take
-batch numbers for an assembled product, so close-out sends the quantities, records the
-batches made (number, quantity, expiry), and leaves the order parked ("sent") for
-someone to enter the batches and complete it in Unleashed.
+A batch-tracked product's order also records the batches made (number, quantity,
+expiry), which close-out sends to Unleashed. If Unleashed doesn't keep them as sent,
+the order is left parked ("sent") for its batches to be checked and it completed in
+Unleashed.
 """
 import datetime as dt
 import json
@@ -25,7 +25,7 @@ from unleashed.store import utc_now
 DEFAULT_STEP = "Production"
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
-SENT = "sent"  # quantities in Unleashed; batches and completing are done there
+SENT = "sent"  # quantities in Unleashed; its batches are checked, and it's completed, there
 MAX_BATCHES = 50
 # Completing an order that stopped mid-way (the app restarted) can be retried after this.
 STALE_CLOSING_SECONDS = 10 * 60
@@ -251,6 +251,20 @@ class ProductionRuns:
                         " closed_at = ?, updated_at = ? WHERE assembly_guid = ?",
                         (status, json.dumps(sent), user, now, now, guid))
 
+
+def check_batches(recorded, unleashed):
+    """Batches recorded here against the ones Unleashed holds for the finished product,
+    matched by number: [{"number", "recorded", "unleashed", "ok"}], where "recorded" or
+    "unleashed" is None if only the other has the batch."""
+    theirs = {(b["number"] or "").lower(): b for b in unleashed}
+    rows = []
+    for b in recorded:
+        u = theirs.pop(b["number"].lower(), None)
+        ok = (u is not None and abs(u["qty"] - b["qty"]) <= 0.0051
+              and (u["expiry"].isoformat() if u["expiry"] else None) == b["expiry"])
+        rows.append({"number": b["number"], "recorded": b, "unleashed": u, "ok": ok})
+    rows += [{"number": u["number"], "recorded": None, "unleashed": u, "ok": False} for u in theirs.values()]
+    return rows
 
 def parse_batches(rows, made, made_on):
     """The batches made, [{"number", "qty", "expiry"}], from (number, quantity, expiry)

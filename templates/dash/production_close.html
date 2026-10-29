@@ -7,14 +7,9 @@
 </div>
 {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card">
-  {% if batch_tracked %}
-  <p class="recon recon-warn">! {{ o.description or o.product_code }} is batch-tracked, and Unleashed only takes batch
-    numbers for what's made in its web app. So this sends what your team used and how much was made to {{ o.number }}
-    and leaves it parked. Then, in Unleashed, open {{ o.number }}, enter the batches below and complete it.</p>
-  {% else %}
   <p class="recon recon-warn">! This completes {{ o.number }} in Unleashed: the components below come out of stock and
-    what you made goes in. Unleashed doesn't let a completed assembly be edited or reversed.</p>
-  {% endif %}
+    what you made goes in{{ ', in the batches below' if batch_tracked }}. Unleashed doesn't let a completed assembly be
+    edited or reversed.</p>
   <div class="filters close-fields">
     <label>Planned
       <span class="yield-out">{{ o.qty|qty }}</span></label>
@@ -22,7 +17,7 @@
       <input id="made" type="number" name="made" value="{{ made if made is not none else o.qty|plain }}" min="0" step="any" inputmode="decimal" required autofocus></label>
     <label>Product yield
       <output class="yield-out" data-yield data-flag data-num="1" data-den="{{ o.qty|plain }}">{{ 1|pct }}</output></label>
-    <label>{{ 'Made on' if batch_tracked else 'Completed on' }}
+    <label>Completed on
       <input type="date" name="date" value="{{ date or today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
   </div>
   <p class="muted">Enter what the batch actually made. <strong>Product yield</strong> is made ÷ planned. Each
@@ -46,8 +41,9 @@
     <tfoot><tr><td>Total</td><td class="num"><output data-batch-total></output></td><td></td></tr></tfoot>
   </table></div>
   <button type="button" class="btn" data-add-batch hidden>+ Add a batch</button>
-  <p class="muted">One row per batch: its number, how much is in it and when it expires. The quantities add up to how
-    much was made; with one batch you can leave its quantity empty.</p>
+  <p class="muted">{{ o.description or o.product_code }} is batch-tracked. One row per batch: its number, how much is in
+    it and when it expires. The quantities add up to how much was made; with one batch you can leave its quantity
+    empty. Unleashed creates these batches when the order is completed.</p>
   {% endif %}
 
   <h2>Components to send</h2>
@@ -63,7 +59,7 @@
   <p class="muted">Each component's total over the saved steps, wastage included, becomes its quantity used in Unleashed
     (with wastage 0). The assembly date becomes the date above.</p>
   <div class="run-actions">
-    <button class="btn btn-primary">{{ 'Send to Unleashed' if batch_tracked else 'Complete in Unleashed' }}</button>
+    <button class="btn btn-primary">Complete in Unleashed</button>
     <a class="btn" href="{{ url_for('dash.production_order', number=o.number) }}">Cancel</a>
   </div>
 </form>

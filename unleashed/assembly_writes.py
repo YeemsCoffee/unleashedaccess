@@ -10,9 +10,10 @@ assembly can't be edited or reversed in Unleashed, so the quantities are read ba
 before completing: if Unleashed didn't keep them, the order is left parked and
 nothing moves.
 
-Unleashed's API can't take batch numbers for an assembled product, so a batch-tracked
-product's order is left parked after the quantities are sent, with its batches in the
-comments, for someone to enter them and complete it in Unleashed.
+For a batch-tracked product, the batches made (number, quantity, expiry date) go in
+the same update as PendingBatchNumbers, which completing turns into batches. They're
+read back too: if Unleashed didn't keep them as sent, the order is left parked for
+them to be checked and the order completed in Unleashed.
 """
 from .client import parse_date, writable
 from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
@@ -20,8 +21,9 @@ from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
 # Unleashed may round quantities to a product's decimal places; this much difference is the
 # same quantity.
 TOLERANCE = 0.0051
-# Starts the line of an assembly's comments that lists the batches made.
-BATCH_NOTE = "Batches made (from Core):"
+# Batch and serial numbers for what's made. Sent only when given: Unleashed requires a
+# batch-tracked (or serialized) product when they're included.
+TRACKING_FIELDS = ("PendingBatchNumbers", "PendingSerialNumbers", "BatchNumbers", "SerialNumbers")
 
 
 class CloseOutError(Exception):
@@ -56,19 +58,20 @@ def create_assembly(client, product_code, qty, assemble_by, from_warehouse=None,
     return order
 
 
-def close_out(client, guid, quantities, made, on_date, complete=True, batches=None):
+def close_out(client, guid, quantities, made, on_date, batches=None):
     """Send `quantities` ({component code: total used}) and `made` (quantity produced) to the
     parked assembly `guid`, dated `on_date`, and complete it. Returns the completed assembly
     as Unleashed reports it. Raises CloseOutError (or UnleashedError) without completing.
 
-    With `complete` False the assembly is left parked once Unleashed holds the quantities,
-    and `batches` ([{"number", "qty", "expiry"}]) are listed in its comments."""
+    `batches` ([{"number", "qty", "expiry"}]) are the batches made, for a batch-tracked
+    product. If Unleashed takes the quantities but doesn't keep the batches as sent, the
+    assembly is returned still parked (see is_completed)."""
     client.clear_cache()
     current = client.get(f"Assemblies/{guid}")
     number = current.get("AssemblyNumber") or guid
     status = _status(current)
     if status in COMPLETED_ASSEMBLY_STATUSES:
-        if _matches(current, quantities, made):  # a retry after Unleashed already completed it
+        if _matches(current, quantities, made, batches):  # a retry after Unleashed completed it
             return current
         raise CloseOutError(f"{number} is already completed in Unleashed, with other quantities. "
                             "Nothing was sent.")
@@ -81,12 +84,17 @@ def close_out(client, guid, quantities, made, on_date, complete=True, batches=No
         raise CloseOutError(f"{number} in Unleashed has no line for {', '.join(missing)}, so its "
                             "quantity can't be sent. Nothing was sent.")
 
-    body = writable(current)  # a copy, its dates in a form Unleashed accepts back
+    # Every field goes back as it is (a field left blank in a PUT is cleared), dated in a
+    # form Unleashed accepts.
+    body = writable(current)
     body["Quantity"] = made
     body["AssemblyDate"] = f"{on_date.isoformat()}T00:00:00"
+    for field in TRACKING_FIELDS:
+        if not body.get(field):
+            body.pop(field, None)
     if batches:
-        kept = [l for l in (current.get("Comments") or "").splitlines() if not l.startswith(BATCH_NOTE)]
-        body["Comments"] = "\n".join(kept + [batch_note(batches)])
+        body["PendingBatchNumbers"] = [{"Number": b["number"], "Quantity": b["qty"],
+                                        "ExpiryDate": f"{b['expiry']}T00:00:00"} for b in batches]
     seen = set()
     for line in body.get("AssemblyLines") or []:
         code = (line.get("Product") or {}).get("ProductCode")
@@ -99,8 +107,8 @@ def close_out(client, guid, quantities, made, on_date, complete=True, batches=No
     if not _matches(updated, quantities, made):
         raise CloseOutError(f"Unleashed didn't keep the new quantities for {number}, so it was left "
                             "parked and not completed. Check it in Unleashed, then try again.")
-    if not complete:
-        return updated
+    if batches and not _same_batches(updated.get("PendingBatchNumbers"), batches):
+        return updated  # left parked: its batches are checked, and it's completed, in Unleashed
     client.post(f"Assemblies/{guid}/Complete", {})
     done = client.get(f"Assemblies/{guid}")
     if _status(done) not in COMPLETED_ASSEMBLY_STATUSES:
@@ -109,10 +117,8 @@ def close_out(client, guid, quantities, made, on_date, complete=True, batches=No
     return done
 
 
-def batch_note(batches):
-    """The batches made, as one line of an assembly's comments."""
-    return BATCH_NOTE + " " + "; ".join(f"{b['number']} qty {b['qty']:g}, expires {b['expiry']}"
-                                        for b in batches)
+def is_completed(assembly):
+    return _status(assembly) in COMPLETED_ASSEMBLY_STATUSES
 
 
 def sent_summary(done):
@@ -129,11 +135,24 @@ def _status(assembly):
     return (assembly.get("AssemblyStatus") or assembly.get("Status") or "").lower()
 
 
-def _matches(assembly, quantities, made):
+def _matches(assembly, quantities, made, batches=None):
     if abs((assembly.get("Quantity") or 0) - made) > TOLERANCE:
+        return False
+    if batches and not _same_batches(assembly.get("BatchNumbers"), batches):
         return False
     used = {}
     for l in assembly.get("AssemblyLines") or []:
         code = (l.get("Product") or {}).get("ProductCode")
         used[code] = used.get(code, 0) + (l.get("Quantity") or 0) + (l.get("WastageQuantity") or 0)
     return all(abs(used.get(code, 0) - qty) <= TOLERANCE for code, qty in quantities.items())
+
+
+def _same_batches(held, batches):
+    """Whether Unleashed's batches (`held`, as it lists them) are `batches`: the same
+    numbers, quantities and expiry dates."""
+    held = {(b.get("Number") or "").lower(): b for b in held or []}
+    return len(held) == len(batches) and all(
+        (h := held.get(b["number"].lower())) is not None
+        and abs((h.get("Quantity") or 0) - b["qty"]) <= TOLERANCE
+        and str(parse_date(h.get("ExpiryDate")) or "") == b["expiry"]
+        for b in batches)
