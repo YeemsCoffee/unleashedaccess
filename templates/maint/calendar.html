@@ -1,0 +1,41 @@
+{% extends "dash/base.html" %}
+{% block title %}Maintenance calendar{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ month|month_name }}</h1>
+  <div class="filters">
+    <a class="btn" href="{{ url_for('maint.calendar', month=previous.strftime('%Y-%m')) }}">← {{ previous.strftime('%b') }}</a>
+    <a class="btn" href="{{ url_for('maint.calendar') }}">This month</a>
+    <a class="btn" href="{{ url_for('maint.calendar', month=following.strftime('%Y-%m')) }}">{{ following.strftime('%b') }} →</a>
+  </div>
+</div>
+<p class="muted cal-key"><span class="cal-entry cal-due">Due</span> <span class="cal-entry cal-overdue">Overdue</span>
+  <span class="cal-entry cal-planned">Coming up on its schedule</span> <span class="cal-entry cal-completed">✓ Done</span>
+  <span class="cal-entry cal-skipped">⊘ Skipped</span></p>
+<section class="card cal-card">
+  <div class="cal-grid">
+    {% for name in ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] %}<div class="cal-head">{{ name }}</div>{% endfor %}
+    {% for week in weeks %}{% for d in week %}
+    <div class="cal-day{{ ' cal-other' if d.month != month.month }}{{ ' cal-today' if d == today }}">
+      <div class="cal-num">{{ d.day }}</div>
+      {% for e in days.get(d, []) %}
+      {% if e.task %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.task.id) }}" title="{{ e.task.name }}{{ ' · ' ~ e.task.location if e.task.location }}">{{ e.task.name }}</a>
+      {% else %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.completion.task_id) }}" title="{{ e.completion.task_name }} · {{ e.completion.completed_by }}">{{ '✓' if e.kind == 'completed' else '⊘' }} {{ e.completion.task_name }}</a>{% endif %}
+      {% endfor %}
+    </div>
+    {% endfor %}{% endfor %}
+  </div>
+</section>
+<section class="card narrow-only cal-agenda">
+  <h2>Day by day</h2>
+  {% for week in weeks %}{% for d in week if d.month == month.month and days.get(d) %}
+  <div class="cal-agenda-day{{ ' cal-today' if d == today }}">
+    <div class="cal-agenda-date">{{ d.strftime('%a') }} {{ d|d }}</div>
+    {% for e in days[d] %}
+    {% if e.task %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.task.id) }}">{{ e.task.name }}{{ ' · ' ~ e.task.location if e.task.location }}</a>
+    {% else %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.completion.task_id) }}">{{ '✓' if e.kind == 'completed' else '⊘' }} {{ e.completion.task_name }} · {{ e.completion.completed_by }}</a>{% endif %}
+    {% endfor %}
+  </div>
+  {% else %}{% endfor %}{% endfor %}
+</section>
+{% endblock %}

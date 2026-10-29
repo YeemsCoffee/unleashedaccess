@@ -130,7 +130,7 @@ class Database:
             for statement in statements:
                 if self.dialect == "postgres":
                     statement = statement.replace("INTEGER PRIMARY KEY AUTOINCREMENT",
-                                                  "BIGSERIAL PRIMARY KEY")
+                                                  "BIGSERIAL PRIMARY KEY").replace(" BLOB ", " BYTEA ")
                 conn.raw.execute(statement)
 
     def require_schema(self):

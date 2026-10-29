@@ -12,12 +12,13 @@
   <header class="dash-header">
     <div class="brand">
       <strong>Unleashed Access</strong>
-      <span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
+      {% if shows_unleashed or signed_out %}<span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
         {{ {'mock': 'Mock API (simulated data)', 'live': 'Live Unleashed API', 'viewer': 'Shared Unleashed data (view only)'}[unleashed_mode] }}
-      </span>
+      </span>{% endif %}
     </div>
     {% if not signed_out %}
     <div class="header-actions">
+      {% if shows_unleashed %}
       <span class="sync-status">
         {% if sync_last and sync_last.status == 'running' %}
           <span class="dot dot-running"></span> Syncing…
@@ -27,6 +28,7 @@
           <span class="dot dot-ok"></span> Synced {{ ago(sync_ok.finished_at) }}
         {% endif %}
       </span>
+      {% endif %}
       {% if can_sync %}
       <form method="post" action="{{ url_for('dash.sync_now') }}">
         <button class="btn btn-quiet" title="Fetch the latest changes from Unleashed">Sync now</button>

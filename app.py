@@ -5,6 +5,8 @@ import os
 from flask import Flask, redirect, request
 
 import dashboard
+import maintenance
+from access import Profiles
 from accounts import AccountError, UserStore, app_secret
 from unleashed.db import Database, database_url_from_env, is_postgres_url
 
@@ -48,6 +50,7 @@ def create_app(test_config=None):
         SESSION_COOKIE_SAMESITE="Lax",  # sign-in cookie isn't sent on other sites' form posts
         # Set SECURE_COOKIES=1 when the dashboard is served over HTTPS.
         SESSION_COOKIE_SECURE=env("SECURE_COOKIES", "") == "1",
+        MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # maintenance attachments are up to 16 MB
     )
     if test_config:
         app.config.update(test_config)
@@ -79,6 +82,8 @@ def create_app(test_config=None):
 
     users = UserStore(db)
     app.extensions["users"] = users
+    profiles = Profiles(db)
+    app.extensions["profiles"] = profiles
     cfg["ADMIN_SETUP_NOTE"] = None
     if cfg["ADMIN_EMAIL"] and cfg["ADMIN_PASSWORD"] and not viewer:
         try:
@@ -87,6 +92,8 @@ def create_app(test_config=None):
                 reset=cfg["ADMIN_RESET"])
         except AccountError as e:
             raise AccountError(f"ADMIN_EMAIL / ADMIN_PASSWORD settings: {e}") from e
+    if not viewer:
+        profiles.seed()
     try:
         has_accounts = users.count() > 0
     except Exception:  # a viewer on a database without the accounts table yet
@@ -107,4 +114,5 @@ def create_app(test_config=None):
             return None
 
     dashboard.init_app(app)
+    maintenance.init_app(app)
     return app

@@ -22,7 +22,9 @@ SYNC_NOW = {"SYNC_ON_STARTUP": "blocking", "SYNC_INTERVAL_MINUTES": 0}
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snapshots",
               "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings",
-              "prod_steps", "prod_runs", "prod_step_records", "prod_step_entries")
+              "prod_steps", "prod_runs", "prod_step_records", "prod_step_entries",
+              "access_profiles", "app_user_profiles", "maint_locations", "maint_tasks",
+              "maint_completions", "maint_attachments")
 
 
 def sqlite_database(testcase):
@@ -150,17 +152,19 @@ class DashboardPageTests(unittest.TestCase):
             return re.findall(rf'<a href="[^"]*" class="{cls}">([^<]+)</a>', html)
 
         overview = links("/")
-        self.assertIn("Transactions", overview)
-        self.assertIn("Settings", overview)  # no accounts here, so everyone manages settings
-        for page in ("Stock movement", "Adjustments", "Connection", "API log"):
-            self.assertNotIn(page, overview)
-        for path in ("/transactions", "/stock-movement", "/adjustments"):
-            self.assertEqual(links(path)[-3:], ["All transactions", "Stock movement", "Adjustments"], path)
-        self.assertEqual(links("/stock-movement", active=True), ["Transactions", "Stock movement"])
+        self.assertEqual(overview[:5], ["Finance", "Warehouse", "Production", "Maintenance", "Settings"])
+        self.assertEqual(overview[5:], ["Overview", "COGS"])  # Finance's pages
+        self.assertEqual(links("/", active=True), ["Finance", "Overview"])
+        warehouse = ["Stock on hand", "Valuation", "Purchases", "Sales", "Transactions", "Stock movement",
+                     "Adjustments"]
+        for path in ("/stock-on-hand", "/transactions", "/stock-movement", "/adjustments"):
+            self.assertEqual(links(path)[5:], warehouse, path)
+        self.assertEqual(links("/stock-movement", active=True), ["Warehouse", "Stock movement"])
         for path in ("/connection", "/api-log"):
             self.assertEqual(links(path)[-2:], ["Connection", "API log"], path)  # no Team without accounts
         self.assertEqual(links("/api-log", active=True), ["Settings", "API log"])
-        self.assertEqual(links("/purchases/PO-00000001", active=True), ["Purchases"])
+        self.assertEqual(links("/purchases/PO-00000001", active=True), ["Warehouse", "Purchases"])
+        self.assertEqual(links("/maintenance/", active=True), ["Maintenance", "Overview"])
 
     def test_csv_export(self):
         res = self.client.get("/stock-on-hand?format=csv")
@@ -806,6 +810,149 @@ class ProductionRunTests(unittest.TestCase):
         self.assertIn("can&#39;t be negative", bad.get_data(as_text=True))
 
 
+
+class MaintenanceTests(unittest.TestCase):
+    """The Maintenance tab: locations, recurring tasks, recording work, files, planning."""
+
+    def setUp(self):
+        self.app = make_app(self, UNLEASHED_MODE="mock", TODAY=TODAY)
+        self.c = self.app.test_client()
+        self.store = self.app.extensions["maintenance"]
+
+    def _location(self, name, parent=None, **extra):
+        data = {"name": name, **({"parent_id": str(parent)} if parent else {}), **extra}
+        return self.c.post("/maintenance/locations", data=data)
+
+    def _location_id(self, name):
+        return next(l["id"] for l in self.store.locations() if l["name"] == name)
+
+    def _task(self, name, every, due, **extra):
+        res = self.c.post("/maintenance/tasks/new", data={"name": name, "frequency_days": str(every),
+                                                          "next_due": due.isoformat(), **extra})
+        self.assertEqual(res.status_code, 302, res.get_data(as_text=True))
+        return int(res.headers["Location"].rsplit("/", 1)[1])
+
+    def test_locations_form_a_tree(self):
+        self._location("Gardena")
+        self._location("Kitchen", self._location_id("Gardena"))
+        self._location("Espresso machine", self._location_id("Kitchen"), description="La Marzocco")
+        self._location("Kitchen")  # the same name is fine somewhere else
+        self.assertIn("already a location called kitchen under Gardena",
+                      self._location("kitchen", self._location_id("Gardena")).get_data(as_text=True))
+        espresso = next(l for l in self.store.locations() if l["name"] == "Espresso machine")
+        self.assertEqual((espresso["path"], espresso["depth"]), ("Gardena › Kitchen › Espresso machine", 2))
+        gardena = self._location_id("Gardena")
+        moved = self._location("Gardena", espresso["id"], id=str(gardena))
+        self.assertIn("can&#39;t go under itself", moved.get_data(as_text=True))
+        self.assertEqual(self.store.under(gardena), {gardena, self._location_id("Espresso machine"),
+                                                     next(l["id"] for l in self.store.locations()
+                                                          if l["path"] == "Gardena › Kitchen")})
+        page = self.c.get("/maintenance/locations").get_data(as_text=True)
+        self.assertIn("La Marzocco", page)
+        self.c.post(f"/maintenance/locations/{gardena}/delete")
+        self.assertIn(gardena, {l["id"] for l in self.store.locations()})  # has locations under it
+        self.c.post(f"/maintenance/locations/{espresso['id']}/delete")
+        self.assertNotIn(espresso["id"], {l["id"] for l in self.store.locations()})
+
+    def test_tasks_come_due_and_move_on_when_done(self):
+        self._location("Gardena")
+        self._location("Kitchen", self._location_id("Gardena"))
+        kitchen = next(l["id"] for l in self.store.locations() if l["name"] == "Kitchen")
+        for data, message in (({"name": "", "frequency_days": "7"}, "Give the task a name"),
+                              ({"name": "X", "frequency_days": "0"}, "How often must be at least 1"),
+                              ({"name": "X", "frequency_days": "7", "next_due": ""}, "Enter the date it")):
+            html = self.c.post("/maintenance/tasks/new", data=data).get_data(as_text=True)
+            self.assertIn(message, html.replace("&#39;", "'"))
+        descale = self._task("Descale espresso machine", 30, TODAY - dt.timedelta(days=65),
+                             location_id=str(kitchen), part_name="Descaler", lead_time_days="10")
+        grinder = self._task("Clean grinder burrs", 7, TODAY + dt.timedelta(days=2), location_id=str(kitchen))
+        self._task("Check fire extinguishers", 365, TODAY + dt.timedelta(days=100))
+
+        tasks = {t["name"]: t for t in self.store.tasks(TODAY)}
+        self.assertEqual((tasks["Descale espresso machine"]["status"], tasks["Descale espresso machine"]["due_label"]),
+                         ("overdue", "65 days overdue"))
+        self.assertTrue(tasks["Clean grinder burrs"]["due_soon"])
+        self.assertEqual(tasks["Descale espresso machine"]["order_by"], TODAY - dt.timedelta(days=75))
+        overview = self.c.get("/maintenance/").get_data(as_text=True)
+        for text in ("Descale espresso machine", "Parts to order", "Due in 2 days"):
+            self.assertIn(text, overview)
+        # A location's tasks include those below it; filters narrow them.
+        gardena = self._location_id("Gardena")
+        self.assertEqual(len(self.store.tasks(TODAY, gardena)), 2)
+        here = self.c.get(f"/maintenance/tasks?location={gardena}&status=overdue").get_data(as_text=True)
+        self.assertIn("Descale espresso machine", here)
+        self.assertNotIn("Clean grinder burrs", here)
+        csv = self.c.get("/maintenance/tasks?format=csv").get_data(as_text=True)
+        self.assertTrue(csv.startswith("Task,Location,Status"))
+        self.assertIn("Gardena › Kitchen", csv)
+
+        # Done 65 days late: it keeps its 30-day schedule, next due after today.
+        done = self.c.post(f"/maintenance/tasks/{descale}/complete", data={
+            "status": "completed", "duration_minutes": "45", "labor_hours": "0.75", "parts_used": "1 descaler",
+            "notes": "Scale was heavy"}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("next due Aug 9, 2026", done)  # due May 11, then 30-day steps: Jun 10, Jul 10, Aug 9
+        self.assertEqual(self.store.task(descale, TODAY)["status"], "pending")
+        self.assertIn("Scale was heavy", done)
+        self.assertIn("✓ Completed", done)
+        # Skipping needs a reason, and also moves it on.
+        self.assertIn("Say why it was skipped", self.c.post(
+            f"/maintenance/tasks/{grinder}/complete", data={"status": "skipped"}, follow_redirects=True
+        ).get_data(as_text=True).replace("&#39;", "'"))
+        self.c.post(f"/maintenance/tasks/{grinder}/complete", data={"status": "skipped", "notes": "Closed"})
+        self.assertEqual(self.store.task(grinder, TODAY)["next_due"], TODAY + dt.timedelta(days=9))
+        # Work is stamped with the real clock; the test's "today" is fixed earlier.
+        history = self.c.get("/maintenance/history?start=2026-01-01&end=2030-12-31").get_data(as_text=True)
+        self.assertIn("Skipped", history)
+        self.assertIn("Scale was heavy", history)
+        self.assertTrue(self.c.get("/maintenance/history?start=2026-01-01&end=2030-12-31&format=csv").get_data(as_text=True)
+                        .startswith("Task,Location,Status,Was due"))
+
+        # Editing: in progress, a new due date.
+        self.c.post(f"/maintenance/tasks/{grinder}/edit", data={
+            "name": "Clean grinder burrs", "frequency_days": "7", "next_due": (TODAY + dt.timedelta(days=1)).isoformat(),
+            "location_id": str(kitchen), "in_progress": "1"})
+        self.assertEqual(self.store.task(grinder, TODAY)["status"], "in_progress")
+        # Without accounts everyone manages everything, so the task can be deleted.
+        self.c.post(f"/maintenance/tasks/{grinder}/delete")
+        self.assertIsNone(self.store.task(grinder, TODAY))
+        self.assertEqual(self.store.completions(task_id=grinder), [])
+        self.assertIn("has tasks", self.c.post(f"/maintenance/locations/{kitchen}/delete",
+                                               follow_redirects=True).get_data(as_text=True))
+
+    def test_files_are_kept_with_their_task(self):
+        import io
+        task = self._task("Service boiler", 180, TODAY)
+        pdf = b"%PDF-1.4 boiler SOP" + bytes(range(256))
+        self.c.post(f"/maintenance/tasks/{task}/attachments",
+                    data={"file": (io.BytesIO(pdf), "Boiler SOP.pdf")}, content_type="multipart/form-data")
+        refused = self.c.post(f"/maintenance/tasks/{task}/attachments", follow_redirects=True,
+                              data={"file": (io.BytesIO(b"MZ"), "tool.exe")}, content_type="multipart/form-data")
+        self.assertIn("Attach a PDF", refused.get_data(as_text=True))
+        files = self.store.task(task, TODAY)["attachments"]
+        self.assertEqual([(f["filename"], f["size"]) for f in files], [("Boiler SOP.pdf", len(pdf))])
+        got = self.c.get(f"/maintenance/attachments/{files[0]['id']}")
+        self.assertEqual(got.data, pdf)
+        self.assertEqual(got.mimetype, "application/pdf")
+        self.assertIn('attachment; filename="Boiler SOP.pdf"', got.headers["Content-Disposition"])
+        self.c.post(f"/maintenance/attachments/{files[0]['id']}/delete")
+        self.assertEqual(self.store.task(task, TODAY)["attachments"], [])
+
+    def test_calendar_shows_due_dates_the_schedule_and_work_done(self):
+        weekly = self._task("Clean grinder burrs", 7, TODAY + dt.timedelta(days=1))
+        self._task("Descale espresso machine", 30, TODAY - dt.timedelta(days=3))
+        self.c.post(f"/maintenance/tasks/{weekly}/complete", data={"status": "completed"})  # now due Jul 23
+        days = self.store.calendar(TODAY.replace(day=1), TODAY, lambda ts: dt.date.fromisoformat(ts[:10]),
+                                   "2026-07-01 00:00:00", "2026-08-01 00:00:00")
+        kinds = {(d.day, e["kind"]) for d, entries in days.items() for e in entries}
+        self.assertIn((12, "overdue"), kinds)  # the descale, due Jul 12
+        self.assertIn((23, "due"), kinds)
+        self.assertIn((30, "planned"), kinds)  # the grinder a week after
+        page = self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True)
+        for text in ("July 2026", "cal-overdue", "cal-planned", "Clean grinder burrs"):
+            self.assertIn(text, page)
+        self.assertIn("cal-planned", self.c.get("/maintenance/calendar?month=2026-08").get_data(as_text=True))
+
+
 class RefusingTransport(WsgiTransport):
     """Mock transport that answers 403 for some endpoints, like an API user without access."""
 
@@ -1185,9 +1332,15 @@ class TeamAccountTests(unittest.TestCase):
         self._choose_password(c, "first-temp-pass", "owner-own-password")
         return c
 
-    def _add(self, admin, name, email, role="member"):
+    def _access(self, profile):
+        """The Team page's Access value for a profile name, or "admin"."""
+        if profile == "admin":
+            return "admin"
+        return str(next(p["id"] for p in self.app.extensions["profiles"].all() if p["name"] == profile))
+
+    def _add(self, admin, name, email, profile="Standard"):
         import re
-        html = admin.post("/team/add", data={"name": name, "email": email, "role": role}
+        html = admin.post("/team/add", data={"name": name, "email": email, "access": self._access(profile)}
                           ).get_data(as_text=True)
         match = re.search(r'class="temp-password mono">([^<]+)<', html)
         self.assertIsNotNone(match, html)
@@ -1235,7 +1388,8 @@ class TeamAccountTests(unittest.TestCase):
         self.assertEqual(bea.post("/connection", data={"action": "check"}).status_code, 403)
         self.assertEqual(bea.post("/team/add", data={"name": "x", "email": "x@y.z"}).status_code, 403)
         self.assertIn("already an account", admin.post(
-            "/team/add", data={"name": "Again", "email": "BEA@yeems.test"}).get_data(as_text=True))
+            "/team/add", data={"name": "Again", "email": "BEA@yeems.test", "access": self._access("Standard")}
+        ).get_data(as_text=True))
 
     def test_members_record_production_steps_but_only_admins_set_them_up(self):
         admin = self._admin_client()
@@ -1298,11 +1452,129 @@ class TeamAccountTests(unittest.TestCase):
         self.assertIn("can&#39;t deactivate your own account",
                       admin.post(f"/team/{me}", data={"action": "deactivate"}).get_data(as_text=True))
         self.assertIn("Ask another admin",
-                      admin.post(f"/team/{me}", data={"action": "role", "role": "member"}).get_data(as_text=True))
+                      admin.post(f"/team/{me}", data={"action": "access", "access": self._access("Standard")}
+                                 ).get_data(as_text=True))
         from accounts import AccountError
         with self.assertRaises(AccountError):
             self.app.extensions["users"].set_role(me, "member")
         self.assertEqual(admin.get("/").status_code, 200)
+
+    def test_existing_members_keep_their_tabs_when_profiles_arrive(self):
+        admin = self._admin_client()
+        self._add(admin, "Barista Bea", "bea@yeems.test")
+        db = self.app.extensions["db"]
+        db.execute("DELETE FROM app_user_profiles")  # as it was before profiles existed
+        db.execute("DELETE FROM access_profiles")
+        restarted = self._app()
+        profiles = restarted.extensions["profiles"]
+        self.assertEqual([p["name"] for p in profiles.all()], ["Maintenance technician", "Standard"])
+        bea = restarted.extensions["users"].by_email("bea@yeems.test")
+        self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production"})
+        owner = restarted.extensions["users"].by_email("owner@yeems.test")
+        self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance"})
+
+    def test_profiles_decide_which_tabs_each_person_opens(self):
+        admin = self._admin_client()
+        page = admin.get("/settings/profiles").get_data(as_text=True)
+        for text in ("Standard", "Maintenance technician", "Add a profile"):
+            self.assertIn(text, page)
+        admin.post("/settings/profiles", data={"name": "  Shift   lead ", "areas": ["warehouse", "maintenance"]})
+        self.assertIn("already a profile called Shift lead",
+                      admin.post("/settings/profiles", data={"name": "shift LEAD"}).get_data(as_text=True))
+        temp = self._add(admin, "Mechanic Mo", "mo@yeems.test", profile="Maintenance technician")
+        mo = self.app.test_client()
+        self._sign_in(mo, "mo@yeems.test", temp)
+        self._choose_password(mo, temp, "mo-own-password1")
+
+        # Maintenance only: the home page opens Maintenance, and nothing from Unleashed shows.
+        self.assertEqual(mo.get("/").headers["Location"], "/maintenance/")
+        home = mo.get("/maintenance/").get_data(as_text=True)
+        self.assertIn(">Maintenance<", home)
+        for text in (">Finance<", ">Warehouse<", ">Production<", ">Settings<", "Sync now", "Synced"):
+            self.assertNotIn(text, home)
+        for path in ("/cogs", "/stock-on-hand", "/transactions", "/production", "/production/orders/new",
+                     "/purchases/PO-00000001"):
+            res = mo.get(path)
+            self.assertEqual(res.status_code, 403, path)
+            self.assertIn("No access to", res.get_data(as_text=True))
+        self.assertEqual(mo.post("/production/orders/ASM-1/steps/0").status_code, 403)
+        self.assertEqual(mo.get("/settings/profiles").status_code, 403)
+
+        # The admin gives Mo the Shift lead profile: Warehouse and Maintenance.
+        mo_id = self.app.extensions["users"].by_email("mo@yeems.test")["id"]
+        changed = admin.post(f"/team/{mo_id}", data={"action": "access", "access": self._access("Shift lead")})
+        self.assertIn("Mechanic Mo now has Shift lead access", changed.get_data(as_text=True))
+        self.assertEqual(mo.get("/").headers["Location"], "/stock-on-hand")
+        self.assertEqual(mo.get("/stock-on-hand").status_code, 200)
+        self.assertEqual(mo.get("/cogs").status_code, 403)
+        self.assertIn("Synced", mo.get("/stock-on-hand").get_data(as_text=True))
+
+        # A profile that opens nothing; and profiles in use can't be deleted.
+        admin.post("/settings/profiles", data={"name": "Nothing yet"})
+        admin.post(f"/team/{mo_id}", data={"action": "access", "access": self._access("Nothing yet")})
+        self.assertIn("doesn&#39;t open any tabs yet", mo.get("/", follow_redirects=True).get_data(as_text=True))
+        shift_lead = int(self._access("Shift lead"))
+        nothing = int(self._access("Nothing yet"))
+        self.assertIn("is given to 1 person", admin.post(f"/settings/profiles/{nothing}/delete",
+                                                         follow_redirects=True).get_data(as_text=True))
+        admin.post(f"/settings/profiles/{shift_lead}/delete")
+        self.assertNotIn("Shift lead", [p["name"] for p in self.app.extensions["profiles"].all()])
+        # Admin access, then back: the last admin rule still holds.
+        admin.post(f"/team/{mo_id}", data={"action": "access", "access": "admin"})
+        self.assertIn(">Settings<", mo.get("/connection").get_data(as_text=True))
+
+    def test_every_page_belongs_to_a_tab_or_is_general(self):
+        import dashboard
+        settings = {"dash.connection", "dash.api_log", "dash.team", "dash.team_add", "dash.team_update",
+                    "dash.profiles", "dash.profiles_save", "dash.profiles_delete"}
+        for rule in self.app.url_map.iter_rules():
+            if rule.endpoint.split(".")[0] not in ("dash", "maint"):
+                continue
+            self.assertTrue(dashboard.area_of(rule.endpoint) or rule.endpoint in dashboard._GENERAL_ENDPOINTS
+                            or rule.endpoint in settings, f"{rule.endpoint} isn't in a tab")
+
+    def test_maintenance_people_tasks_and_deleting(self):
+        admin = self._admin_client()
+        temp = self._add(admin, "Mechanic Mo", "mo@yeems.test", profile="Maintenance technician")
+        self._add(admin, "Barista Bea", "bea@yeems.test")  # Standard: no Maintenance
+        mo = self.app.test_client()
+        self._sign_in(mo, "mo@yeems.test", temp)
+        self._choose_password(mo, temp, "mo-own-password1")
+        users = self.app.extensions["users"]
+        mo_id, bea_id = users.by_email("mo@yeems.test")["id"], users.by_email("bea@yeems.test")["id"]
+
+        form = mo.get("/maintenance/tasks/new").get_data(as_text=True)
+        self.assertIn(">Mechanic Mo<", form)
+        self.assertNotIn(">Barista Bea<", form)  # can't open Maintenance, so can't be assigned
+        refused = mo.post("/maintenance/tasks/new", data={"name": "Filter", "frequency_days": "30",
+                                                          "next_due": "2026-10-01", "assigned_to": str(bea_id)})
+        self.assertIn("someone who can open Maintenance", refused.get_data(as_text=True))
+        res = mo.post("/maintenance/tasks/new", data={"name": "Replace water filter", "frequency_days": "30",
+                                                      "next_due": "2026-01-01", "assigned_to": str(mo_id)})
+        task_id = int(res.headers["Location"].rsplit("/", 1)[1])
+        mine = mo.get("/maintenance/").get_data(as_text=True)
+        self.assertIn("Assigned to you", mine)
+        self.assertIn("Replace water filter", mine)
+        workload = mo.get("/maintenance/workload").get_data(as_text=True)
+        self.assertIn("Mechanic Mo", workload)
+        self.assertNotIn("Barista Bea", workload)
+        self.assertEqual(self.app.test_client().get("/maintenance/").status_code, 302)  # signed out
+        bea = self.app.test_client()
+        bea_temp = admin.post(f"/team/{bea_id}", data={"action": "reset"}).get_data(as_text=True)
+        import re
+        bea_temp = re.search(r'class="temp-password mono">([^<]+)<', bea_temp).group(1)
+        self._sign_in(bea, "bea@yeems.test", bea_temp)
+        self._choose_password(bea, bea_temp, "bea-own-password1")
+        self.assertEqual(bea.get(f"/maintenance/tasks/{task_id}").status_code, 403)
+
+        # Recording work names the person; only admins delete.
+        mo.post(f"/maintenance/tasks/{task_id}/complete", data={"status": "completed", "notes": "Done"})
+        self.assertIn("Mechanic Mo", mo.get("/maintenance/history?start=2026-01-01").get_data(as_text=True))
+        self.assertIn("Only admins can delete", mo.post(f"/maintenance/tasks/{task_id}/delete",
+                                                        follow_redirects=True).get_data(as_text=True))
+        self.assertIsNotNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
+        admin.post(f"/maintenance/tasks/{task_id}/delete")
+        self.assertIsNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
 
     def test_admin_reset_restores_access(self):
         self._admin_client()

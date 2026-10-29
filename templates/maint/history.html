@@ -1,0 +1,34 @@
+{% extends "dash/base.html" %}
+{% block title %}Maintenance history{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>History</h1>
+  <form method="get" class="filters">
+    <label>From <input type="date" name="start" value="{{ start.isoformat() }}"></label>
+    <label>To <input type="date" name="end" value="{{ end.isoformat() }}"></label>
+    {% if everyone %}<label>Done by <select name="person"><option value="">Anyone</option>
+      {% for p in everyone %}<option {{ 'selected' if p == person }}>{{ p }}</option>{% endfor %}</select></label>{% endif %}
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">CSV</a>
+  </form>
+</div>
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Completed</div><div class="tile-value">{{ done }}</div></div>
+  <div class="tile card"><div class="tile-label">Skipped</div><div class="tile-value">{{ rows|length - done }}</div></div>
+  <div class="tile card"><div class="tile-label">Labor hours</div><div class="tile-value">{{ hours|qty }}</div></div>
+</section>
+<section class="card">
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Done</th><th>Task</th><th class="wide-only">Location</th><th>By</th><th class="wide-only">Was due</th><th class="num wide-only">Minutes</th><th class="num wide-only">Labor h</th><th>Notes</th></tr></thead>
+    <tbody>{% for c in rows %}
+    <tr><td class="nowrap">{{ c.completed_at|local }}{% if c.status == 'skipped' %}<div><span class="pill pill-overdue">Skipped</span></div>{% endif %}</td>
+      <td><a href="{{ url_for('maint.task', task_id=c.task_id) }}">{{ c.task_name }}</a></td>
+      <td class="wide-only">{{ c.location or '—' }}</td><td>{{ c.completed_by }}</td>
+      <td class="wide-only nowrap">{{ c.scheduled_date|d }}</td>
+      <td class="num wide-only">{{ c.duration_minutes if c.duration_minutes is not none else '' }}</td>
+      <td class="num wide-only">{{ c.labor_hours|qty if c.labor_hours is not none else '' }}</td>
+      <td>{{ c.notes or '' }}{% if c.parts_used %}<div class="muted small">Parts: {{ c.parts_used }}</div>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted">Nothing recorded in these dates.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

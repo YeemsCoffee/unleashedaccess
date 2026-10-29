@@ -131,3 +131,75 @@ CREATE TABLE IF NOT EXISTS prod_step_entries (
     entries       TEXT NOT NULL,
     PRIMARY KEY (assembly_guid, step_index)
 );
+
+-- Access profiles (access.py): the tabs each kind of account opens. Admins open everything.
+-- areas: JSON list of finance | warehouse | production | maintenance.
+CREATE TABLE IF NOT EXISTS access_profiles (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    areas      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- The profile each (non-admin) account has.
+CREATE TABLE IF NOT EXISTS app_user_profiles (
+    user_id    INTEGER PRIMARY KEY,
+    profile_id INTEGER NOT NULL
+);
+
+-- Maintenance (maintenance.py). Dates are the business's calendar dates (YYYY-MM-DD);
+-- times are UTC.
+-- Functional locations: a tree (parent_id) organising the equipment and its tasks.
+CREATE TABLE IF NOT EXISTS maint_locations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    description TEXT,
+    parent_id   INTEGER,
+    created_at  TEXT NOT NULL
+);
+
+-- Recurring maintenance tasks: due every frequency_days, next on next_due.
+CREATE TABLE IF NOT EXISTS maint_tasks (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    name               TEXT NOT NULL,
+    location_id        INTEGER,
+    frequency_days     INTEGER NOT NULL,
+    next_due           TEXT NOT NULL,
+    assigned_to        INTEGER,            -- app_users.id
+    in_progress        INTEGER NOT NULL,
+    part_name          TEXT,
+    vendor             TEXT,
+    vendor_part_number TEXT,
+    lead_time_days     INTEGER NOT NULL,
+    instructions       TEXT,
+    last_completed     TEXT,
+    created_by         TEXT,
+    created_at         TEXT NOT NULL
+);
+
+-- Each time a task was done (or skipped), which moved it on to its next due date.
+CREATE TABLE IF NOT EXISTS maint_completions (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id          INTEGER NOT NULL,
+    status           TEXT NOT NULL,        -- completed | skipped
+    scheduled_date   TEXT NOT NULL,
+    completed_at     TEXT NOT NULL,
+    completed_by     TEXT NOT NULL,
+    completed_by_id  INTEGER,
+    notes            TEXT,
+    duration_minutes INTEGER,
+    labor_hours      REAL,
+    parts_used       TEXT
+);
+
+-- Files kept with a task (SOPs, job aids, photos), stored here so every server has them.
+CREATE TABLE IF NOT EXISTS maint_attachments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id      INTEGER NOT NULL,
+    filename     TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    data         BLOB NOT NULL,
+    uploaded_by  TEXT,
+    uploaded_at  TEXT NOT NULL
+)

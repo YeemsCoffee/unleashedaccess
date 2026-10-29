@@ -1,0 +1,27 @@
+{% macro task_pill(t) -%}
+{%- if t.status == 'overdue' %}<span class="pill pill-short">Overdue</span>
+{%- elif t.status == 'in_progress' %}<span class="pill pill-receipted">In progress</span>
+{%- else %}<span class="pill">Pending</span>{% endif -%}
+{%- endmacro %}
+
+{% macro due(t) -%}
+<span class="nowrap">{{ t.next_due|d }}</span><br><span class="{{ 'due-late' if t.status == 'overdue' else 'muted' }} small">{{ t.due_label }}</span>
+{%- endmacro %}
+
+{% macro task_table(tasks, show_location=true, empty='No tasks.') %}
+<div class="table-wrap"><table class="maint-tasks maint-wrap">
+  <thead><tr><th>Task</th>{% if show_location %}<th class="wide-only">Location</th>{% endif %}<th>Next due</th><th class="wide-only">Every</th><th>Assigned to</th><th class="wide-only">Status</th></tr></thead>
+  <tbody>{% for t in tasks %}
+  <tr class="{{ 'row-warn' if t.status == 'overdue' }}">
+    <td><a href="{{ url_for('maint.task', task_id=t.id) }}">{{ t.name }}</a>
+      {% if t.status == 'in_progress' %}<span class="narrow-only"> {{ task_pill(t) }}</span>{% endif %}
+      {% if t.part_name %}<div class="muted small">Part: {{ t.part_name }}{% if t.order_by %} · order by {{ t.order_by|d }}{% endif %}</div>{% endif %}</td>
+    {% if show_location %}<td class="wide-only">{{ t.location or '—' }}</td>{% endif %}
+    <td>{{ due(t) }}</td>
+    <td class="wide-only nowrap">{{ t.frequency_days }} day{{ 's' if t.frequency_days != 1 }}</td>
+    <td>{{ t.assignee_name or '—' }}</td>
+    <td class="wide-only">{{ task_pill(t) }}</td>
+  </tr>
+  {% else %}<tr><td colspan="6" class="muted">{{ empty }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endmacro %}

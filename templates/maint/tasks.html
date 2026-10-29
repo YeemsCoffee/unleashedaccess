@@ -1,0 +1,38 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import task_table %}
+{% block title %}Maintenance tasks{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ location.path if location else 'All tasks' }}</h1>
+  <form method="get" class="filters">
+    {% if location %}<input type="hidden" name="location" value="{{ location.id }}">{% endif %}
+    <label>Show <select name="status"><option value="">Every task</option>
+      {% for key, label in statuses.items() %}<option value="{{ key }}" {{ 'selected' if key == status }}>{{ label }}</option>{% endfor %}</select></label>
+    {% if people %}<label>Assigned to <select name="person"><option value="">Anyone</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == person }}>{{ p.name }}</option>{% endfor %}</select></label>{% endif %}
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">CSV</a>
+  </form>
+</div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.task_new', location=location.id if location else None) }}">+ New task{{ ' here' if location }}</a></div>
+
+<div class="maint-layout">
+<section class="card loc-tree-card">
+  <div class="card-head"><h2>Locations</h2><a href="{{ url_for('maint.locations') }}">Edit →</a></div>
+  <ul class="loc-tree">
+    <li><a href="{{ url_for('maint.tasks', status=status or None, person=person) }}" class="{{ 'active' if not location }}">All tasks <span class="muted">({{ total }})</span></a></li>
+    {% for l in locations %}
+    <li style="--depth: {{ l.depth }}"><a href="{{ url_for('maint.tasks', location=l.id, status=status or None, person=person) }}" class="{{ 'active' if location and location.id == l.id }}">{{ l.name }} <span class="muted">({{ counts[l.id] }})</span></a></li>
+    {% endfor %}
+  </ul>
+  {% if not locations %}<p class="muted">No locations yet. <a href="{{ url_for('maint.locations') }}">Add the first one</a> to organise tasks by where they're done.</p>{% endif %}
+  {% if unplaced %}<p class="muted small">{{ unplaced }} task{{ 's' if unplaced != 1 }} without a location.</p>{% endif %}
+</section>
+
+<section class="card">
+  {% if location and location.description %}<p class="instructions">{{ location.description }}</p>{% endif %}
+  {{ task_table(tasks, show_location=true, empty="No tasks match. Add one with New task.") }}
+  <p class="muted small">{{ tasks|length }} task{{ 's' if tasks|length != 1 }}{{ ' here and in the locations under it' if location }}.</p>
+</section>
+</div>
+{% endblock %}

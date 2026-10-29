@@ -44,28 +44,76 @@ app's tables in it.
 
 ## Pages
 
-| Page | What it shows |
-|------|---------------|
-| Overview | Running month-to-date COGS, sales, gross margin, inventory value, open purchase orders, latest transactions |
-| COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
-| Stock on hand | Stock On Hand enquiry, now or as at any date, filterable by product group |
-| Valuation | Stock valuation by product group |
-| Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
-| Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
-| Production | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
+The tabs are Finance, Warehouse, Production and Maintenance, plus Settings for
+admins. Which tabs each person opens depends on their access profile (below).
+
+| Tab → page | What it shows |
+|------------|---------------|
+| Finance → Overview | Running month-to-date COGS, sales, gross margin, inventory value, open purchase orders, latest transactions |
+| Finance → COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
+| Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date, filterable by product group |
+| Warehouse → Valuation | Stock valuation by product group |
+| Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
+| Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
+| Warehouse → Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |
+| Warehouse → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
+| Warehouse → Adjustments | Stock adjustment enquiry |
+| Production → Overview | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
 | Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then complete them in Unleashed, with yield |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
-| Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |
-| Transactions → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
-| Transactions → Adjustments | Stock adjustment enquiry |
+| Maintenance → Overview | Overdue tasks, tasks due in the next 7 days, what's assigned to you, parts to order |
+| Maintenance → Tasks | Tasks by functional location (a location includes the ones under it), filtered by status or person; each task's details, recording work, files and history |
+| Maintenance → Locations | The functional location tree: add, rename, move, delete |
+| Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, and work done |
+| Maintenance → Workload | Tasks, overdue and due soon for each person |
+| Maintenance → History | Work recorded (completed or skipped) over any dates, by person |
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
-| Settings → Team | Team accounts: add people, reset passwords, change roles, deactivate |
+| Settings → Team | Team accounts: add people, give each an access profile (or Admin), reset passwords, deactivate |
+| Settings → Access profiles | The kinds of account and the tabs each opens |
 | Settings → API log | Every API call made: endpoint, query, status, timing, item count |
 
 **Settings** is only shown to admins (with team accounts on). Every report has
 **Export CSV**.
+
+## Access profiles
+
+With team accounts on, every person is either an **Admin**, who opens every tab
+and Settings, or has an **access profile**: a kind of account and the tabs it
+opens (Finance, Warehouse, Production, Maintenance). Admins create and change
+profiles under Settings → Access profiles and give each person one on the Team
+page. A page in a tab someone's profile doesn't open isn't shown to them; the home
+page opens the first tab they have. Someone with no Finance, Warehouse or
+Production doesn't see the Unleashed sync status either.
+
+The first time this version runs it creates two profiles: **Standard** (Finance,
+Warehouse, Production: what every member could see before) for everyone already
+on the team, and **Maintenance technician** (Maintenance only). Without team
+accounts (a shared password, or none) everyone opens every tab.
+
+## Maintenance
+
+The maintenance scheduler, brought into Core and kept in its database
+(`maint_locations`, `maint_tasks`, `maint_completions`, `maint_attachments`):
+
+- **Functional locations** form a tree (a store, its kitchen, the espresso machine
+  in it). A location's tasks include the ones in the locations under it.
+- **Tasks** repeat every so many days and are next due on a date, in the
+  business's time zone (`TIMEZONE`). A task is overdue once that date has passed;
+  one being worked on can be marked in progress. Each can be assigned to someone
+  who can open Maintenance, and can have a part with its vendor, part number and
+  lead time: the part shows under **Parts to order** from the date it should be
+  ordered (due date less the lead time), a week ahead.
+- **Recording work** (completed, or skipped with a reason) keeps who did it, when,
+  how long, labor hours, parts used and notes, and moves the task on by whole
+  intervals from the date it was due to the first one after today, so it keeps its
+  schedule however late it was done.
+- **Files** (PDF, Word, Excel, pictures, text; up to 16 MB) are stored with their
+  task in the database, so every server has them.
+- Anyone who can open Maintenance adds and changes tasks and locations, records
+  work and attaches files. Deleting a task (with its history and files) or a
+  location is for admins.
 
 ## COGS (running, month to date)
 
@@ -89,7 +137,7 @@ materials** (recipes), organised like an ERP's production module:
 | Production order | Production orders | Assemblies: Parked = open, Completed = made |
 | Recipe / bill of materials | Bills of materials | Bills of materials, costed at today's average costs |
 | Material availability check (MRP) | Material requirements | Open assemblies' components against stock on hand, sales allocations and open purchase orders |
-| Goods issue / goods receipt | Transactions (type Production) | Completed assemblies: components out, product in |
+| Goods issue / goods receipt | Warehouse → Transactions (type Production) | Completed assemblies: components out, product in |
 | Order costing and variances | Production order detail, Component usage | Components used against the recipe × the order quantity |
 
 - **Components used** = each assembly line's quantity plus its wastage.
@@ -436,7 +484,10 @@ unleashedaccess/
 ├── app.py              # Flask app factory
 ├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
 ├── accounts.py         # team accounts
+├── access.py           # access profiles: the tabs each kind of account opens
 ├── production_runs.py  # operating procedures and what's recorded at each step
+├── maintenance.py      # the Maintenance tab's pages
+├── maintenance_store.py # maintenance locations, tasks, schedules, work recorded, files
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── sync_once.py        # run one sync and exit (scheduled jobs)
@@ -445,7 +496,8 @@ unleashedaccess/
 ├── gunicorn.conf.py    # port (PORT, default 8000), workers, threads
 ├── Dockerfile          # container image for ECS/Fargate, App Runner, EB Docker
 ├── .ebextensions/      # Elastic Beanstalk settings (/healthz health check, TIMEZONE)
-├── schema.sql          # data copy, sync history, sync lock and API log tables
+├── .platform/          # Elastic Beanstalk nginx: uploads up to 20 MB (maintenance files)
+├── schema.sql          # data copy, sync history and lock, API log, accounts, profiles, production and maintenance tables
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
@@ -458,6 +510,7 @@ unleashedaccess/
 │   ├── mock_data.py    # simulated dataset + inventory engine
 │   └── charts.py       # server-side SVG charts
 ├── templates/dash/     # page templates
+├── templates/maint/    # Maintenance page templates
 ├── static/             # dash.css, dash.js
 └── tests/test_unleashed.py
 ```

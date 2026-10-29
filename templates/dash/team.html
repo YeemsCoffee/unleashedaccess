@@ -25,10 +25,11 @@
   <form method="post" action="{{ url_for('dash.team_add') }}" class="filters">
     <label>Name <input name="name" value="{{ form.name if form }}" required></label>
     <label>Email <input type="email" name="email" value="{{ form.email if form }}" required></label>
-    <label>Role
-      <select name="role">
-        <option value="member">Member: views the dashboard</option>
-        <option value="admin" {{ 'selected' if form and form.role == 'admin' }}>Admin: also manages the team and connection</option>
+    <label>Access
+      <select name="access" required>
+        <option value="">Choose…</option>
+        {% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if form and form.access == p.id|string }}>{{ p.name }}: {% for a in p.areas %}{{ area_labels[a] }}{{ ', ' if not loop.last }}{% else %}no tabs{% endfor %}</option>{% endfor %}
+        <option value="admin" {{ 'selected' if form and form.access == 'admin' }}>Admin: everything, and Settings</option>
       </select>
     </label>
     <button class="btn btn-primary">Add</button>
@@ -38,13 +39,25 @@
 <section class="card">
   <h2>People</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Email</th><th>Access</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
     <tbody>
     {% for m in members %}
     <tr class="{{ 'row-sub' if not m.active }}">
       <td>{{ m.name }}{{ ' (you)' if current_user and current_user.id == m.id }}</td>
       <td>{{ m.email }}</td>
-      <td>{{ m.role|capitalize }}</td>
+      <td>{% set mine = profile_of.get(m.id) %}
+        {% if current_user and current_user.id == m.id %}{{ 'Admin' if m.role == 'admin' else (mine.name if mine else 'No profile') }}
+        {% else %}
+        <form method="post" action="{{ url_for('dash.team_update', user_id=m.id) }}" class="access-form">
+          <input type="hidden" name="action" value="access">
+          <select name="access" aria-label="Access for {{ m.name }}">
+            {% if m.role != 'admin' and not mine %}<option value="">No profile: no tabs</option>{% endif %}
+            {% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if m.role != 'admin' and mine and mine.id == p.id }}>{{ p.name }}</option>{% endfor %}
+            <option value="admin" {{ 'selected' if m.role == 'admin' }}>Admin</option>
+          </select>
+          <button class="btn btn-quiet">Save</button>
+        </form>
+        {% endif %}</td>
       <td>{% if not m.active %}Deactivated{% elif m.must_change_password %}Hasn't chosen a password yet{% else %}Active{% endif %}</td>
       <td>{{ m.last_sign_in_at|local if m.last_sign_in_at else 'Never' }}</td>
       <td class="row-actions">
@@ -52,10 +65,6 @@
           <button class="btn btn-quiet" name="action" value="reset">Reset password</button>
         </form>
         {% if not (current_user and current_user.id == m.id) %}
-        <form method="post" action="{{ url_for('dash.team_update', user_id=m.id) }}">
-          <input type="hidden" name="action" value="role">
-          <button class="btn btn-quiet" name="role" value="{{ 'member' if m.role == 'admin' else 'admin' }}">{{ 'Make member' if m.role == 'admin' else 'Make admin' }}</button>
-        </form>
         <form method="post" action="{{ url_for('dash.team_update', user_id=m.id) }}">
           <button class="btn btn-quiet" name="action" value="{{ 'deactivate' if m.active else 'activate' }}">{{ 'Deactivate' if m.active else 'Reactivate' }}</button>
         </form>
@@ -65,7 +74,9 @@
     {% endfor %}
     </tbody>
   </table></div>
-  <p class="muted">Deactivating someone or resetting their password signs them out immediately.</p>
+  <p class="muted">Access is an <a href="{{ url_for('dash.profiles') }}">access profile</a>, which says which tabs
+    they open, or Admin, which opens everything and Settings. Deactivating someone or resetting their password signs
+    them out immediately.</p>
 </section>
 {% endif %}
 {% endblock %}

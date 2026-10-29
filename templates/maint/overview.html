@@ -1,0 +1,52 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import task_table %}
+{% block title %}Maintenance{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Maintenance</h1></div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.task_new') }}">+ New task</a></div>
+
+<section class="tiles">
+  <div class="tile card"><div class="tile-label">Tasks</div><div class="tile-value">{{ tasks|length }}</div>
+    <div class="tile-sub"><a href="{{ url_for('maint.tasks') }}">All tasks →</a></div></div>
+  <div class="tile card"><div class="tile-label">Overdue</div><div class="tile-value{{ ' value-bad' if overdue }}">{{ overdue|length }}</div>
+    <div class="tile-sub">past their due date</div></div>
+  <div class="tile card"><div class="tile-label">Due soon</div><div class="tile-value">{{ due_soon|length }}</div>
+    <div class="tile-sub">in the next {{ due_soon_days }} days</div></div>
+  <div class="tile card"><div class="tile-label">Completed this month</div><div class="tile-value">{{ completed }}</div>
+    <div class="tile-sub"><a href="{{ url_for('maint.history') }}">History →</a></div></div>
+</section>
+
+{% if current_user %}
+<section class="card">
+  <h2>Assigned to you</h2>
+  {{ task_table(mine, empty="Nothing of yours is overdue, in progress or due in the next " ~ due_soon_days ~ " days.") }}
+</section>
+{% endif %}
+
+<div class="two-col">
+<section class="card">
+  <div class="card-head"><h2>Overdue</h2>{% if overdue %}<a href="{{ url_for('maint.tasks', status='overdue') }}">All overdue →</a>{% endif %}</div>
+  {{ task_table(overdue[:12], show_location=false, empty="Nothing is overdue.") }}
+</section>
+<section class="card">
+  <div class="card-head"><h2>Due in the next {{ due_soon_days }} days</h2><a href="{{ url_for('maint.calendar') }}">Calendar →</a></div>
+  {{ task_table(due_soon[:12], show_location=false, empty="Nothing is due in the next " ~ due_soon_days ~ " days.") }}
+</section>
+</div>
+
+{% if parts %}
+<section class="card">
+  <h2>Parts to order</h2>
+  <p class="muted">Tasks whose part has a lead time, and whose order-by date (due date less the lead time) is within
+    the next {{ due_soon_days }} days or has passed.</p>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Task</th><th>Part</th><th class="wide-only">Vendor</th><th>Order by</th><th>Task due</th></tr></thead>
+    <tbody>{% for t in parts %}
+    <tr class="{{ 'row-warn' if t.order_by < today }}"><td><a href="{{ url_for('maint.task', task_id=t.id) }}">{{ t.name }}</a></td>
+      <td>{{ t.part_name }}{% if t.vendor_part_number %}<div class="muted small">{{ t.vendor_part_number }}</div>{% endif %}</td>
+      <td class="wide-only">{{ t.vendor or '—' }}</td><td class="nowrap">{{ t.order_by|d }}</td><td class="nowrap">{{ t.next_due|d }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

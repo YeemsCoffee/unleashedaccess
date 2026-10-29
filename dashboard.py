@@ -11,7 +11,8 @@ from functools import wraps
 from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, render_template,
                    request, session, url_for)
 
-from accounts import ROLES, AccountError, check_new_password, temporary_password
+from access import AREA_KEYS, AREAS, UNLEASHED_AREAS
+from accounts import AccountError, check_new_password, temporary_password
 from production_runs import FIELD_TYPES, SENT, ProductionRuns, RunError, check_batches, parse_batches
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
@@ -122,50 +123,87 @@ def _ctx():
     last, ok = _sync_status()
     mode = current_app.config["AUTH_MODE"]
     user = current_user()
+    shows_unleashed = bool(user_areas() & set(UNLEASHED_AREAS))
     return {"unleashed_mode": ext["mode"], "money_short": charts.money_short,
-            "sync_last": last, "sync_ok": ok, "ago": ago,
-            "can_sync": ext["syncer"] is not None, "source_error": ext["source_error"],
+            "sync_last": last, "sync_ok": ok, "ago": ago, "shows_unleashed": shows_unleashed,
+            "can_sync": ext["syncer"] is not None and shows_unleashed,
+            "source_error": ext["source_error"] if shows_unleashed else None,
             "login_enabled": mode != "open", "auth_mode": mode,
             "signed_in": user is not None if mode == "accounts" else bool(session.get("signed_in")),
             "current_user": user, "is_admin": is_admin(), **_nav()}
 
 
-# The tabs and the pages under each. A tab with several pages opens the first and lists
-# them in a second row while one is open. Settings is only shown to admins.
+# The tabs, each an area an account's profile may open (access.py), and the pages under
+# each. A tab with several pages opens the first and lists them in a second row while one
+# is open. Settings is only shown to admins.
 _TABS = [
-    ("Overview", [("dash.overview", "Overview")]),
-    ("COGS", [("dash.cogs_page", "COGS")]),
-    ("Stock on hand", [("dash.stock_on_hand", "Stock on hand")]),
-    ("Valuation", [("dash.stock_valuation", "Valuation")]),
-    ("Purchases", [("dash.purchases", "Purchases")]),
-    ("Sales", [("dash.sales", "Sales")]),
-    ("Production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
+    ("finance", [("dash.overview", "Overview"), ("dash.cogs_page", "COGS")]),
+    ("warehouse", [("dash.stock_on_hand", "Stock on hand"), ("dash.stock_valuation", "Valuation"),
+                   ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
+                   ("dash.transactions", "Transactions"), ("dash.stock_movement", "Stock movement"),
+                   ("dash.adjustments", "Adjustments")]),
+    ("production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
                     ("dash.production_boms", "Bills of materials"),
                     ("dash.production_usage", "Component usage")]),
-    ("Transactions", [("dash.transactions", "All transactions"),
-                      ("dash.stock_movement", "Stock movement"), ("dash.adjustments", "Adjustments")]),
+    ("maintenance", [("maint.overview", "Overview"), ("maint.tasks", "Tasks"),
+                     ("maint.locations", "Locations"), ("maint.calendar", "Calendar"),
+                     ("maint.workload", "Workload"), ("maint.history", "History")]),
 ]
+_AREA_LABELS = dict(AREAS)
 _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "Team"),
-                              ("dash.api_log", "API log")])
-# Pages shown under another page's tab.
+                              ("dash.profiles", "Access profiles"), ("dash.api_log", "API log")])
+# Pages (and form posts) that belong to another page's tab.
 _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
             "dash.production_close": "dash.production_orders",
             "dash.production_new": "dash.production_orders",
+            "dash.production_step": "dash.production_orders",
             "dash.production_bom": "dash.production_boms",
             "dash.production_procedure": "dash.production_boms",
-            "dash.team_add": "dash.team", "dash.team_update": "dash.team"}
+            "dash.team_add": "dash.team", "dash.team_update": "dash.team",
+            "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
+            "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
+            "maint.task_complete": "maint.tasks", "maint.task_delete": "maint.tasks",
+            "maint.attachment_add": "maint.tasks", "maint.attachment": "maint.tasks",
+            "maint.attachment_delete": "maint.tasks",
+            "maint.location_save": "maint.locations", "maint.location_delete": "maint.locations"}
+_AREA_OF_PAGE = {ep: area for area, pages in _TABS for ep, _ in pages}
+# Pages anyone signed in can open; Settings pages check for admins themselves.
+_GENERAL_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz", "dash.account", "dash.sync_now",
+                      "dash.no_access"}
+
+
+def area_of(endpoint):
+    """The tab (area) a page belongs to, or None for general and Settings pages."""
+    return _AREA_OF_PAGE.get(_PAGE_OF.get(endpoint, endpoint))
+
+
+def user_areas():
+    """The tabs the signed-in person opens. Without team accounts, everyone opens all."""
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return set(AREA_KEYS)
+    if "user_areas" not in g:
+        user = current_user()
+        g.user_areas = current_app.extensions["profiles"].areas_of(user) if user else set()
+    return g.user_areas
+
+
+def _first_page():
+    """The first page the signed-in person can open, or None."""
+    areas = user_areas()
+    return next((url_for(pages[0][0]) for area, pages in _TABS if area in areas), None)
 
 
 def _nav():
     """The header's tabs, and the open tab's pages when it has several."""
     page = _PAGE_OF.get(request.endpoint, request.endpoint)
-    tabs = list(_TABS)
+    areas = user_areas()
+    tabs = [(_AREA_LABELS[area], pages) for area, pages in _TABS if area in areas]
     if is_admin():
         accounts = current_app.config["AUTH_MODE"] == "accounts"
         label, pages = _SETTINGS_TAB
-        tabs.append((label, [p for p in pages if accounts or p[0] != "dash.team"]))
+        tabs.append((label, [p for p in pages if accounts or p[0] not in ("dash.team", "dash.profiles")]))
     nav, subnav = [], None
     for label, pages in tabs:
         active = any(ep == page for ep, _ in pages)
@@ -180,7 +218,8 @@ def _nav():
 # Pages that work before the first sync has finished.
 _OPEN_ENDPOINTS = {"dash.connection", "dash.api_log", "dash.sync_now", "dash.login",
                    "dash.logout", "dash.healthz", "dash.account", "dash.team",
-                   "dash.team_add", "dash.team_update"}
+                   "dash.team_add", "dash.team_update", "dash.profiles", "dash.profiles_save",
+                   "dash.profiles_delete", "dash.no_access"}
 # Pages that work without signing in.
 _PUBLIC_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz"}
 
@@ -253,6 +292,22 @@ def _require_login():
     if user["must_change_password"] and request.endpoint != "dash.account":
         return redirect(url_for("dash.account"))
     return None
+
+
+def require_access():
+    """A page in a tab the signed-in person's profile doesn't open isn't shown. The home
+    page sends them to the first tab they do open."""
+    area = area_of(request.endpoint)
+    if area is None or area in user_areas():
+        return None
+    if request.endpoint == "dash.overview":
+        return redirect(_first_page() or url_for("dash.no_access"))
+    return render_template("dash/error.html", heading=f"No access to {_AREA_LABELS[area]}",
+                           error=f"Your account doesn't open {_AREA_LABELS[area]}. Ask an admin if you "
+                           "need it.", status=403), 403
+
+
+bp.before_request(require_access)
 
 
 @bp.before_request
@@ -335,13 +390,43 @@ def account():
     return render_template("dash/account.html", user=user, error=error)
 
 
+@bp.get("/no-access")
+def no_access():
+    first = _first_page()
+    if first:
+        return redirect(first)
+    return render_template("dash/error.html", heading="No tabs yet",
+                           error="Your account doesn't open any tabs yet. Ask an admin to give you an "
+                           "access profile.", status=403), 403
+
+
+def _team_page(**context):
+    profiles = current_app.extensions["profiles"]
+    return render_template("dash/team.html", accounts=True, members=current_app.extensions["users"].all(),
+                           profiles=profiles.all(), profile_of=profiles.of_users(),
+                           area_labels=_AREA_LABELS, **context)
+
+
+def _access_choice(form):
+    """("admin", None) or ("member", profile id) from the Team page's Access choice."""
+    choice = form.get("access", "")
+    if choice == "admin":
+        return "admin", None
+    try:
+        profile_id = int(choice)
+    except ValueError:
+        raise AccountError("Choose what they can open: an access profile, or Admin.") from None
+    if current_app.extensions["profiles"].get(profile_id) is None:
+        raise AccountError("That access profile doesn't exist any more.")
+    return "member", profile_id
+
+
 @bp.get("/team")
 @admin_only
 def team():
     if current_app.config["AUTH_MODE"] != "accounts":
         return render_template("dash/team.html", accounts=False)
-    return render_template("dash/team.html", accounts=True,
-                           members=current_app.extensions["users"].all(), roles=ROLES)
+    return _team_page()
 
 
 @bp.post("/team/add")
@@ -351,14 +436,15 @@ def team_add():
     form = request.form
     password = temporary_password()
     try:
-        added = users.create(form.get("email"), form.get("name"), password,
-                             role=form.get("role", "member"), must_change=True)
+        role, profile_id = _access_choice(form)
+        added = users.create(form.get("email"), form.get("name"), password, role=role, must_change=True)
+        if profile_id is not None:
+            current_app.extensions["profiles"].assign(added["id"], profile_id)
         notice = {"ok": True, "person": added, "password": password,
                   "message": f"Added {added['name']}."}
     except AccountError as e:
         notice = {"ok": False, "message": str(e)}
-    return render_template("dash/team.html", accounts=True, members=users.all(), roles=ROLES,
-                           notice=notice, form=form if not notice["ok"] else None)
+    return _team_page(notice=notice, form=form if not notice["ok"] else None)
 
 
 @bp.post("/team/<int:user_id>")
@@ -380,18 +466,57 @@ def team_update(user_id):
                 raise AccountError("You can't deactivate your own account.")
             users.set_active(user_id, action == "activate")
             notice["message"] = f"{person['name']} is now {'active' if action == 'activate' else 'deactivated and signed out'}."
-        elif action == "role":
-            role = request.form.get("role")
+        elif action == "access":
+            role, profile_id = _access_choice(request.form)
             if me and me["id"] == user_id and role != "admin":
-                raise AccountError("Ask another admin to change your own role.")
+                raise AccountError("Ask another admin to change your own access.")
             users.set_role(user_id, role)
-            notice["message"] = f"{person['name']} is now {'an admin' if role == 'admin' else 'a member'}."
+            if profile_id is not None:
+                current_app.extensions["profiles"].assign(user_id, profile_id)
+            name = "Admin" if role == "admin" else current_app.extensions["profiles"].get(profile_id)["name"]
+            notice["message"] = f"{person['name']} now has {name} access."
         else:
             abort(400)
     except AccountError as e:
         notice = {"ok": False, "message": str(e)}
-    return render_template("dash/team.html", accounts=True, members=users.all(), roles=ROLES,
-                           notice=notice)
+    return _team_page(notice=notice)
+
+
+@bp.get("/settings/profiles")
+@admin_only
+def profiles():
+    if current_app.config["AUTH_MODE"] != "accounts":
+        return redirect(url_for("dash.team"))
+    return _profiles_page()
+
+
+def _profiles_page(notice=None, form=None):
+    return render_template("dash/profiles.html", profiles=current_app.extensions["profiles"].all(),
+                           areas=AREAS, notice=notice, form=form)
+
+
+@bp.post("/settings/profiles")
+@admin_only
+def profiles_save():
+    form = request.form
+    profile_id = form.get("id", type=int)
+    try:
+        current_app.extensions["profiles"].save(profile_id, form.get("name"), form.getlist("areas"))
+        flash(f"Saved {' '.join(form.get('name', '').split())}.", "ok")
+    except AccountError as e:
+        return _profiles_page(notice={"ok": False, "message": str(e)}, form=form if profile_id is None else None)
+    return redirect(url_for("dash.profiles"))
+
+
+@bp.post("/settings/profiles/<int:profile_id>/delete")
+@admin_only
+def profiles_delete(profile_id):
+    try:
+        current_app.extensions["profiles"].delete(profile_id)
+        flash("Deleted the profile.", "ok")
+    except AccountError as e:
+        flash(str(e), "warn")
+    return redirect(url_for("dash.profiles"))
 
 
 @bp.errorhandler(UnleashedError)
@@ -1152,7 +1277,7 @@ def init_app(app):
         "mode": mode, "client": client, "live_client": live_client, "db": db,
         "store": store, "syncer": syncer, "scheduler": scheduler,
         "reports": reports, "production": Production(reports), "store_client": store_client,
-        "base_url": cfg["UNLEASHED_BASE_URL"], "display_tz": display_tz,
+        "base_url": cfg["UNLEASHED_BASE_URL"], "display_tz": display_tz, "today_fn": today_fn,
         "has_credentials": bool(cfg["UNLEASHED_API_ID"] and cfg["UNLEASHED_API_KEY"]),
         "source_error": source_error,
     }

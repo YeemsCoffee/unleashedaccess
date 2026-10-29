@@ -1,0 +1,63 @@
+{% extends "dash/base.html" %}
+{% block title %}Access profiles{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Access profiles</h1></div>
+{% if notice and not notice.ok %}<p class="recon recon-warn">! {{ notice.message }}</p>{% endif %}
+<p class="muted">A profile is a kind of account and the tabs it opens. Give each person a profile on the
+  <a href="{{ url_for('dash.team') }}">Team</a> page. Admins open every tab, and Settings, whatever their profile.</p>
+
+<section class="card">
+  <h2>Profiles</h2>
+  <div class="table-wrap"><table class="profiles-table">
+    <thead><tr><th>Profile</th>{% for key, label in areas %}<th class="center">{{ label }}</th>{% endfor %}<th class="num">People</th><th></th></tr></thead>
+    <tbody>
+    {% for p in profiles %}
+    <tr>
+      <td><input form="profile-{{ p.id }}" class="text-input" name="name" value="{{ p.name }}" maxlength="60" required aria-label="Profile name"></td>
+      {% for key, label in areas %}
+      <td class="center"><input form="profile-{{ p.id }}" type="checkbox" name="areas" value="{{ key }}" {{ 'checked' if key in p.areas }} aria-label="{{ p.name }} opens {{ label }}"></td>
+      {% endfor %}
+      <td class="num">{{ p.people }}</td>
+      <td class="row-actions">
+        <form method="post" action="{{ url_for('dash.profiles_save') }}" id="profile-{{ p.id }}">
+          <input type="hidden" name="id" value="{{ p.id }}">
+          <button class="btn btn-quiet">Save</button>
+        </form>
+        {% if not p.people %}
+        <form method="post" action="{{ url_for('dash.profiles_delete', profile_id=p.id) }}">
+          <button class="btn btn-quiet">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ areas|length + 3 }}" class="muted">No profiles yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted">A profile given to someone can't be deleted until they have another one.</p>
+</section>
+
+<section class="card">
+  <h2>Add a profile</h2>
+  <form method="post" action="{{ url_for('dash.profiles_save') }}" class="filters">
+    <label>Name <input name="name" value="{{ form.name if form }}" maxlength="60" required placeholder="e.g. Shift lead"></label>
+    <div class="checks">
+      {% for key, label in areas %}
+      <label><input type="checkbox" name="areas" value="{{ key }}" {{ 'checked' if form and key in form.getlist('areas') }}> {{ label }}</label>
+      {% endfor %}
+    </div>
+    <button class="btn btn-primary">Add profile</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>What each tab holds</h2>
+  <dl class="facts">
+    <div><dt>Finance</dt><dd>Overview, COGS</dd></div>
+    <div><dt>Warehouse</dt><dd>Stock on hand, valuation, purchases, sales, transactions, stock movement, adjustments</dd></div>
+    <div><dt>Production</dt><dd>Production orders, material requirements, bills of materials, component usage</dd></div>
+    <div><dt>Maintenance</dt><dd>Maintenance tasks, locations, calendar, workload, history</dd></div>
+  </dl>
+</section>
+{% endblock %}

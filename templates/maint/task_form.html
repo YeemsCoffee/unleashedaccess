@@ -1,0 +1,43 @@
+{% extends "dash/base.html" %}
+{% block title %}{{ 'Edit ' ~ task.name if task else 'New maintenance task' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ 'Edit ' ~ task.name if task else 'New maintenance task' }}</h1>
+  <a href="{{ url_for('maint.task', task_id=task.id) if task else url_for('maint.tasks') }}">← {{ 'Back to the task' if task else 'Tasks' }}</a>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form">
+  <div class="filters new-order">
+    <label class="wide">Task <input name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
+    <label>Location
+      <select name="location_id">
+        <option value="">None</option>
+        {% for l in locations %}<option value="{{ l.id }}" {{ 'selected' if form.location_id|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.name }}</option>{% endfor %}
+      </select></label>
+    <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" required placeholder="90"></label>
+    <label>Next due <input type="date" name="next_due" value="{{ form.next_due or today.isoformat() }}" required></label>
+    {% if people %}
+    <label>Assigned to
+      <select name="assigned_to">
+        <option value="">No one</option>
+        {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
+        {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
+      </select></label>
+    {% endif %}
+  </div>
+  <h2>Part</h2>
+  <div class="filters new-order">
+    <label class="wide">Part <input name="part_name" value="{{ form.part_name or '' }}" maxlength="150" placeholder="Optional, e.g. Water filter cartridge"></label>
+    <label>Vendor <input name="vendor" value="{{ form.vendor or '' }}" maxlength="100" placeholder="Optional"></label>
+    <label>Vendor part number <input name="vendor_part_number" value="{{ form.vendor_part_number or '' }}" maxlength="100" placeholder="Optional"></label>
+    <label>Lead time (days) <input type="number" name="lead_time_days" value="{{ form.lead_time_days or '' }}" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+  </div>
+  <p class="muted small">With a lead time, the part is listed under Parts to order on the Maintenance overview that many days before the task is due.</p>
+  <label class="block">Instructions <textarea name="instructions" rows="4" maxlength="5000" placeholder="Optional: how it's done, safety notes">{{ form.instructions or '' }}</textarea></label>
+  {% if task %}<label class="check-field"><input type="checkbox" name="in_progress" value="1" {{ 'checked' if form.in_progress }}> In progress</label>{% endif %}
+  <div class="run-actions">
+    <button class="btn btn-primary">{{ 'Save' if task else 'Add task' }}</button>
+    <a class="btn" href="{{ url_for('maint.task', task_id=task.id) if task else url_for('maint.tasks') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

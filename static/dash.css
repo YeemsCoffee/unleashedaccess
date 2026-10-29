@@ -294,3 +294,62 @@ td.wrap { white-space: normal; min-width: 280px; }
   .batch-table th, .batch-table td { padding-left: 3px; padding-right: 3px; }
   .batch-table input.text-input, .batch-table input.qty-input { width: 100%; box-sizing: border-box; padding: 6px 5px; }
 }
+.access-form { display: flex; gap: 6px; align-items: center; }
+.access-form select { font: inherit; font-size: 14px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); }
+.profiles-table td.center, .profiles-table th.center { text-align: center; }
+.profiles-table .text-input { width: 200px; }
+
+/* Maintenance */
+.small { font-size: 12px; }
+.due-late { color: var(--bad-ink); font-weight: 600; }
+.value-bad { color: var(--bad-ink); }
+.maint-layout { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 16px; align-items: start; }
+@media (max-width: 800px) { .maint-layout { grid-template-columns: 1fr; } }
+.loc-tree { list-style: none; margin: 0; padding: 0; }
+.loc-tree li { padding-left: calc(var(--depth, 0) * 16px); }
+.loc-tree a { display: block; padding: 5px 8px; border-radius: 8px; text-decoration: none; }
+.loc-tree a.active { background: var(--series-1-soft); color: var(--text-primary); font-weight: 600; }
+.loc-indent { display: inline-block; width: calc(var(--depth, 0) * 18px); }
+.loc-indent-text { padding-left: calc(var(--depth, 0) * 18px); }
+.maint-form .block { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+.maint-form textarea, .maint-form .text-input.wide { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface-1); color: var(--text-primary); width: 100%; box-sizing: border-box; resize: vertical; }
+.maint-form .check-field { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.upload-form { margin-top: 12px; align-items: center; }
+.history-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.history-item:last-child { border-bottom: 0; }
+.history-head { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.bar-col { width: 30%; }
+.bar { height: 8px; border-radius: 999px; background: var(--surface-0); overflow: hidden; }
+.bar-fill { height: 100%; background: var(--series-1); border-radius: 999px; }
+.cal-card { padding: 8px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-head { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 4px 0; }
+.cal-day { min-height: 92px; border: 1px solid var(--line); border-radius: 8px; padding: 4px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cal-other { opacity: 0.45; }
+.cal-today { border-color: var(--series-1); box-shadow: inset 0 0 0 1px var(--series-1); }
+.cal-num { font-size: 12px; color: var(--text-secondary); }
+.cal-entry { display: block; font-size: 11px; line-height: 1.3; padding: 2px 5px; border-radius: 6px; text-decoration: none;
+  color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-key .cal-entry { display: inline-block; margin-right: 6px; }
+.cal-due { background: var(--series-1-soft); }
+.cal-overdue { background: var(--bad-bg); color: var(--bad-ink); font-weight: 600; }
+.cal-planned { border: 1px dashed var(--line); color: var(--text-secondary); }
+.cal-completed { background: var(--good-bg); color: var(--good-ink); }
+.cal-skipped { background: var(--warn-bg); color: var(--warn-ink); }
+@media (max-width: 600px) { .cal-day { min-height: 64px; padding: 2px; } .cal-entry { font-size: 10px; padding: 1px 3px; } }
+.narrow-only { display: none; }
+@media (max-width: 600px) {
+  .narrow-only { display: inline; }
+  section.narrow-only { display: block; }
+}
+.cal-agenda-day { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.cal-agenda-day:last-child { border-bottom: 0; }
+.cal-agenda-day.cal-today { box-shadow: none; border-color: var(--line); }
+.cal-agenda-date { font-size: 13px; font-weight: 600; }
+.cal-agenda .cal-entry { white-space: normal; font-size: 13px; padding: 4px 8px; }
+@media (max-width: 700px) {
+  .maint-wrap td { white-space: normal; }
+  .maint-wrap th { white-space: normal; }
+}
