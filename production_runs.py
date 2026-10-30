@@ -24,6 +24,8 @@ from unleashed.store import utc_now
 
 DEFAULT_STEP = "Production"
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
+# The most steps a procedure, and fields a step, can have.
+MAX_STEPS, MAX_FIELDS = 50, 30
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
 SENT = "sent"  # quantities in Unleashed; its batches are checked, and it's completed, there
 MAX_BATCHES = 50

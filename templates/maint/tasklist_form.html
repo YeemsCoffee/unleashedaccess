@@ -1,25 +1,29 @@
 {% extends "dash/base.html" %}
 {% block title %}{{ found.name if found else 'New task list' }}{% endblock %}
 {% block content %}
+{% macro op_row(i, n, op, placeholder) %}
+    <li><input class="text-input wide" name="op-text-{{ i }}" value="{{ op.text }}" maxlength="300" placeholder="{{ placeholder }}" aria-label="Step {{ n }}">
+      <input class="qty-input" type="number" name="op-minutes-{{ i }}" value="{{ op.minutes if op.minutes is not none else '' }}" min="0" step="1" placeholder="min" aria-label="Minutes for step {{ n }}"></li>
+{%- endmacro %}
 <div class="page-head">
   <h1>{{ found.name if found else 'New task list' }}</h1>
   <a href="{{ url_for('maint.tasklists') }}">← Task lists</a>
 </div>
 {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card maint-form">
-  <input type="hidden" name="rows" value="{{ operations|length }}">
+  <input type="hidden" name="rows" value="{{ operations|length }}" data-op-count data-max="{{ max_operations }}">
   <div class="filters new-order">
     <label class="wide">Name <input name="name" value="{{ values.name }}" maxlength="100" required placeholder="e.g. Grinder burr clean"></label>
   </div>
   <label class="block">Description <textarea name="description" rows="2" maxlength="2000" placeholder="Optional: when it's used, safety">{{ values.description }}</textarea></label>
   <h2>Steps</h2>
-  <ol class="ops">
-    {% for op in operations %}
-    <li><input class="text-input wide" name="op-text-{{ loop.index0 }}" value="{{ op.text }}" maxlength="300" placeholder="{{ 'e.g. Unplug the grinder and remove the hopper' if loop.first else 'Another step (optional)' }}" aria-label="Step {{ loop.index }}">
-      <input class="qty-input" type="number" name="op-minutes-{{ loop.index0 }}" value="{{ op.minutes if op.minutes is not none else '' }}" min="0" step="1" placeholder="min" aria-label="Minutes for step {{ loop.index }}"></li>
+  <ol class="ops" data-ops>
+    {% for op in operations %}{{ op_row(loop.index0, loop.index, op, 'e.g. Unplug the grinder and remove the hopper' if loop.first else 'Another step (optional)') }}
     {% endfor %}
   </ol>
-  <p class="muted small">Empty steps are left out. Need more? Save, and more empty rows appear.</p>
+  <template id="op-template">{{ op_row('__I__', '__N__', {'text': '', 'minutes': none}, 'Another step (optional)') }}</template>
+  <div><button type="button" class="btn" data-add-op hidden>+ Add a step</button></div>
+  <p class="muted small">Empty steps are left out.</p>
   <div class="run-actions">
     <button class="btn btn-primary">{{ 'Save' if found else 'Add task list' }}</button>
     <a class="btn" href="{{ url_for('maint.tasklists') }}">Cancel</a>

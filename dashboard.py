@@ -13,7 +13,8 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
 
 from access import AREA_KEYS, AREAS, UNLEASHED_AREAS
 from accounts import AccountError, check_new_password, temporary_password
-from production_runs import FIELD_TYPES, SENT, ProductionRuns, RunError, check_batches, parse_batches
+from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_STEPS, SENT, ProductionRuns, RunError, check_batches,
+                             parse_batches)
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
@@ -1075,12 +1076,12 @@ def production_procedure(number):
     if request.method == "POST":
         form = request.form
         steps = []
-        for i in range(min(form.get("rows", 0, type=int), 50)):
+        for i in range(min(form.get("rows", 0, type=int), MAX_STEPS)):
             fields = [{"id": form.get(f"f-{i}-{j}-id"), "label": form.get(f"f-{i}-{j}-label", ""),
                        "type": form.get(f"f-{i}-{j}-type"), "unit": form.get(f"f-{i}-{j}-unit"),
                        "min": form.get(f"f-{i}-{j}-min"), "max": form.get(f"f-{i}-{j}-max"),
                        "required": form.get(f"f-{i}-{j}-required")}
-                      for j in range(min(form.get(f"fields-{i}", 0, type=int), 30))]
+                      for j in range(min(form.get(f"fields-{i}", 0, type=int), MAX_FIELDS))]
             steps.append((form.get(f"pos-{i}", i + 1, type=float), i, {
                 "name": form.get(f"name-{i}", ""), "instructions": form.get(f"instructions-{i}", ""),
                 "components": form.getlist(f"components-{i}"), "fields": fields}))
@@ -1091,10 +1092,12 @@ def production_procedure(number):
     procedure = runs.procedure_for(bom["product_code"])
     blank_field = {"id": "", "label": "", "type": "number", "unit": "", "min": None, "max": None,
                    "required": False}
+    blank_step = {"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3}
     steps = [dict(s, fields=s["fields"] + [blank_field] * 2) for s in procedure["steps"]]
-    steps += [{"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3}] * 2
+    steps += [blank_step] * 2
     return _render_production("production_procedure", b=bom, notes=procedure["notes"], steps=steps,
-                              field_types=FIELD_TYPES)
+                              field_types=FIELD_TYPES, blank_step=blank_step, blank_field=blank_field,
+                              max_steps=MAX_STEPS, max_fields=MAX_FIELDS)
 
 
 @bp.get("/production/requirements")

@@ -7,7 +7,7 @@ from dashboard import _csv, _csv_url, _wants_csv, is_admin
 from maintenance import (_download, _form_options, _me, _people, _return_to, _store, _today, _upload, bp,
                          can_manage)
 from maintenance_assets import EQUIPMENT_STATUSES
-from maintenance_common import PRIORITIES, MaintenanceError, date, fmt_number, number
+from maintenance_common import MAX_OPERATIONS, PRIORITIES, MaintenanceError, date, fmt_number, number
 from maintenance_work import COST_KINDS, ORDER_STATUSES, REQUEST_STATUSES
 
 
@@ -210,16 +210,16 @@ def tasklists():
 
 def _tasklist_form(found=None, form=None, error=None):
     if form is not None and hasattr(form, "getlist"):  # typed rows, to show again
-        count = int(form.get("rows") or 0)
+        count = form.get("rows", 0, type=int)
         operations = [{"text": form.get(f"op-text-{i}", ""), "minutes": form.get(f"op-minutes-{i}", "")}
-                      for i in range(count)]
+                      for i in range(min(count, MAX_OPERATIONS))]
         values = {"name": form.get("name", ""), "description": form.get("description", "")}
     else:
         operations = list((found or {}).get("operations", []))
         values = {"name": (found or {}).get("name", ""), "description": (found or {}).get("description") or ""}
     operations += [{"text": "", "minutes": ""}] * 3
     return render_template("maint/tasklist_form.html", found=found, values=values, operations=operations,
-                           error=error), 400 if error else 200
+                           max_operations=MAX_OPERATIONS, error=error), 400 if error else 200
 
 
 @bp.route("/tasklists/new", methods=["GET", "POST"])

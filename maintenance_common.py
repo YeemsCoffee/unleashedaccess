@@ -3,6 +3,7 @@ import re
 
 DUE_SOON_DAYS = 7
 MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_OPERATIONS = 100  # steps in a task list
 # What can be attached, and the type each is served as.
 FILE_TYPES = {
     "pdf": "application/pdf", "txt": "text/plain", "png": "image/png", "jpg": "image/jpeg",

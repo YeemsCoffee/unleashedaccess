@@ -757,6 +757,26 @@ class ProductionRunTests(unittest.TestCase):
         usage_csv = c.get("/production/usage" + span + "&format=csv").get_data(as_text=True)
         self.assertIn("Recipe for what was made,Yield (recipe / used)", usage_csv)
 
+    def test_steps_and_fields_can_be_added_while_writing_the_procedure(self):
+        app = self._app()
+        c = app.test_client()
+        page = c.get("/production/boms/BOM-CB/procedure").get_data(as_text=True)
+        # The buttons copy these templates, numbered after the last step or field.
+        for text in ("+ Add a step", "+ Add a field", 'id="proc-step-template"', 'name="name-__I__"',
+                     'name="pos-__I__" value="__N__"', 'id="proc-field-template"', 'name="f-__I__-__J__-label"',
+                     'name="rows" value="2"', 'data-max-steps="50"'):
+            self.assertIn(text, page)
+        # Two empty steps were on the page; the third was added, and a fourth field on the first.
+        c.post("/production/boms/BOM-CB/procedure", data={
+            "rows": 3, "name-0": "Steep", "fields-0": 4, "f-0-3-label": "Fridge temperature",
+            "f-0-3-type": "number", "f-0-3-max": "5", "name-1": "",
+            "pos-2": "3", "name-2": "Bottle", "fields-2": 3, "f-2-0-label": "Lot code", "f-2-0-type": "text"})
+        steep, bottle = app.extensions["production_runs"].procedure_for("CB-CONC-GAL")["steps"]
+        self.assertEqual((steep["name"], [f["label"] for f in steep["fields"]]), ("Steep", ["Fridge temperature"]))
+        self.assertEqual((bottle["name"], [f["label"] for f in bottle["fields"]]), ("Bottle", ["Lot code"]))
+        # Saved steps come back with two empty steps after them, and the next added is numbered after those.
+        self.assertIn('name="rows" value="4"', c.get("/production/boms/BOM-CB/procedure").get_data(as_text=True))
+
     def test_steps_with_nothing_to_record_do_not_hold_up_completing(self):
         c = self._app().test_client()
         c.post("/production/boms/BOM-CB/procedure", data={
@@ -1169,6 +1189,18 @@ class MaintenancePlantTests(unittest.TestCase):
                                                             follow_redirects=True).get_data(as_text=True))
         history = self.store.work_done()
         self.assertEqual((history[0]["cost"], history[0]["labor_hours"]), (12.5, 0.25))
+
+    def test_steps_can_be_added_to_a_task_list_without_saving_first(self):
+        page = self.c.get("/maintenance/tasklists/new").get_data(as_text=True)
+        for text in ("+ Add a step", 'id="op-template"', 'name="op-text-__I__"', 'aria-label="Step __N__"',
+                     'name="rows" value="3"', 'data-max="100"'):
+            self.assertIn(text, page)
+        # A fourth step, added on the page; the count sent is capped however large it is.
+        res = self.c.post("/maintenance/tasklists/new", data={
+            "name": "Descale", "rows": "4", "op-text-0": "Drain", "op-text-3": "Refill", "op-minutes-3": "5"})
+        self.assertEqual([o["text"] for o in self.store.tasklist(self._new_id(res))["operations"]], ["Drain", "Refill"])
+        res = self.c.post("/maintenance/tasklists/new", data={"name": "Huge", "rows": "1000000000", "op-text-0": "One"})
+        self.assertEqual(len(self.store.tasklist(self._new_id(res))["operations"]), 1)
 
     def test_requests_become_work_orders_with_costs(self):
         gar, kit, esp = self._store_tree()

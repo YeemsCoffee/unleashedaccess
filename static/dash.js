@@ -105,6 +105,80 @@
   sum();
 })();
 
+/* Rows added without saving first, from the page's <template>s: steps on a maintenance
+   task list, and steps and their fields on an operating procedure. In a template, __I__
+   becomes the new row's number (from 0), __N__ its position (from 1) and __J__ a field's
+   number; the hidden count beside them says how many rows the form sends. */
+function fromTemplate(id, values) {
+  "use strict";
+  var html = document.getElementById(id).innerHTML;
+  Object.keys(values).forEach(function (k) { html = html.split(k).join(values[k]); });
+  var holder = document.createElement("template");
+  holder.innerHTML = html.trim();
+  return holder.content.firstElementChild;
+}
+
+(function () {
+  "use strict";
+  var count = document.querySelector("[data-op-count]");
+  if (!count) return;
+  var list = document.querySelector("[data-ops]"), add = document.querySelector("[data-add-op]");
+  var max = +count.dataset.max;
+  add.hidden = false;
+  add.disabled = +count.value >= max;
+  add.addEventListener("click", function () {
+    var i = +count.value;
+    if (i >= max) return;
+    var row = fromTemplate("op-template", { __I__: i, __N__: i + 1 });
+    list.appendChild(row);
+    count.value = i + 1;
+    add.disabled = i + 1 >= max;
+    row.querySelector("input").focus();
+  });
+})();
+
+(function () {
+  "use strict";
+  var count = document.querySelector("[data-step-count]");
+  if (!count) return;
+  var form = count.form, steps = form.querySelector("[data-steps]");
+  var addStep = form.querySelector("[data-add-step]");
+  var maxSteps = +count.dataset.maxSteps, maxFields = +count.dataset.maxFields;
+
+  function refresh() {
+    addStep.disabled = +count.value >= maxSteps;
+    form.querySelectorAll("[data-step]").forEach(function (step) {
+      var button = step.querySelector("[data-add-field]");
+      button.hidden = false;
+      button.disabled = +step.querySelector("[data-field-count]").value >= maxFields;
+    });
+  }
+
+  addStep.hidden = false;
+  addStep.addEventListener("click", function () {
+    var i = +count.value;
+    if (i >= maxSteps) return;
+    var step = fromTemplate("proc-step-template", { __I__: i, __N__: i + 1 });
+    steps.appendChild(step);
+    count.value = i + 1;
+    refresh();
+    step.querySelector('[name="name-' + i + '"]').focus();
+  });
+  form.addEventListener("click", function (e) {
+    var button = e.target.closest("[data-add-field]");
+    if (!button) return;
+    var step = button.closest("[data-step]"), fields = step.querySelector("[data-field-count]");
+    var j = +fields.value;
+    if (j >= maxFields) return;
+    var row = fromTemplate("proc-field-template", { __I__: step.dataset.step, __J__: j });
+    step.querySelector("[data-fields]").appendChild(row);
+    fields.value = j + 1;
+    refresh();
+    row.querySelector('[name$="-label"]').focus();
+  });
+  refresh();
+})();
+
 /* Maintenance calendar: click a day to add a task due then; drag a task's due date to
    another day to move it. Pointer events, so a mouse and a finger both work. */
 (function () {

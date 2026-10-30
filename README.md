@@ -224,8 +224,10 @@ closing the order out replaces Unleashed's figures with those.
    steps; one ticked nowhere is recorded at the last step), and fields the tech
    fills in: a **number** with a unit and an acceptable range (a weight, a
    temperature), **text** (a lot code), or **yes / no** (a check). Fields can
-   be required. A step's number sets its order. Without a procedure, an order
-   is recorded in a single step with every component.
+   be required. A step's number sets its order. **+ Add a step** and **+ Add a
+   field** add more as you write; empty ones are left out when you save.
+   Without a procedure, an order is recorded in a single step with every
+   component.
 2. **Record** (anyone, e.g. production techs): open a parked order under
    Production orders. The procedure is there: notes, then each step's
    instructions. At each step, enter how much of each component was used,

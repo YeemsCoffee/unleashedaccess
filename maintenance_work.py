@@ -9,8 +9,8 @@ it opens the request again. Cost lines can change until the order is completed.
 import datetime as dt
 import json
 
-from maintenance_common import (PRIORITIES, PRIORITY_FOR_CRITICALITY, MaintenanceError, date, long_text,
-                                number, text, whole)
+from maintenance_common import (MAX_OPERATIONS, PRIORITIES, PRIORITY_FOR_CRITICALITY, MaintenanceError, date,
+                                long_text, number, text, whole)
 from unleashed.store import utc_now
 
 REQUEST_STATUSES = {"open": "Open", "ordered": "Work order made", "closed": "Closed", "rejected": "Rejected"}
@@ -40,7 +40,7 @@ class Work:
         if same:
             raise MaintenanceError(f"There's already a task list called {same[0]['name']}.")
         operations = []
-        for i in range(whole(form.get("rows"), "Rows") or 0):
+        for i in range(min(whole(form.get("rows"), "Rows") or 0, MAX_OPERATIONS)):
             step = text(form, f"op-text-{i}", 300)
             if step:
                 operations.append({"text": step, "minutes": whole(form.get(f"op-minutes-{i}"), f"Minutes for “{step}”",
