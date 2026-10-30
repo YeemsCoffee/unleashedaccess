@@ -1,25 +1,35 @@
 {% extends "dash/base.html" %}
-{% from "maint/_macros.html" import task_pill %}
+{% from "maint/_macros.html" import task_pill, every %}
 {% block title %}{{ task.name }}{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1>{{ task.name }} {{ task_pill(task) }}</h1>
   <a href="{{ url_for('maint.tasks', location=task.location_id) }}">← {{ task.location or 'All tasks' }}</a>
 </div>
+{% if task.in_template %}<p class="recon recon-warn">! This task is in a template: it never comes due. Copy the template to use it.</p>{% endif %}
 
 <section class="card">
   <dl class="facts">
-    <div><dt>Next due</dt><dd>{{ task.next_due|d }} <span class="{{ 'due-late' if task.status == 'overdue' else 'muted' }} small">{{ task.due_label }}</span></dd></div>
-    <div><dt>Every</dt><dd>{{ task.frequency_days }} day{{ 's' if task.frequency_days != 1 }}</dd></div>
-    <div><dt>Location</dt><dd>{{ task.location or '—' }}</dd></div>
+    <div><dt>Next due</dt><dd>{{ task.next_due|d if task.next_due else '—' }} <span class="{{ 'due-late' if task.status == 'overdue' else 'muted' }} small">{{ task.due_label }}</span></dd></div>
+    <div><dt>Every</dt><dd>{{ every(task) }}{{ ', whichever comes first' if task.frequency_days and task.usage }}</dd></div>
+    <div><dt>Location</dt><dd>{% if task.location_id %}<a href="{{ url_for('maint.location', location_id=task.location_id) }}">{{ task.location }}</a>{% else %}—{% endif %}</dd></div>
+    {% if task.equipment_id %}<div><dt>Equipment</dt><dd><a href="{{ url_for('maint.equipment', equipment_id=task.equipment_id) }}">{{ task.equipment_name }}</a>{{ ' (in storage)' if task.equipment_status == 'storage' }}</dd></div>{% endif %}
     <div><dt>Assigned to</dt><dd>{{ task.assignee_name or 'No one' }}</dd></div>
     <div><dt>Last done</dt><dd>{{ task.last_completed|local if task.last_completed else 'Not yet' }}</dd></div>
     <div><dt>Times done</dt><dd>{{ task.times_done }}</dd></div>
+    {% if task.tasklist %}<div><dt>Task list</dt><dd><a href="{{ url_for('maint.tasklist', tasklist_id=task.tasklist.id) }}">{{ task.tasklist.name }}</a></dd></div>{% endif %}
     {% if task.part_name %}<div><dt>Part</dt><dd>{{ task.part_name }}{% if task.vendor_part_number %} ({{ task.vendor_part_number }}){% endif %}</dd></div>{% endif %}
     {% if task.vendor %}<div><dt>Vendor</dt><dd>{{ task.vendor }}</dd></div>{% endif %}
     {% if task.lead_time_days %}<div><dt>Lead time</dt><dd>{{ task.lead_time_days }} day{{ 's' if task.lead_time_days != 1 }}</dd></div>{% endif %}
     {% if task.order_by %}<div><dt>Order the part by</dt><dd class="{{ 'due-late' if task.order_by < today }}">{{ task.order_by|d }}</dd></div>{% endif %}
   </dl>
+  {% if task.usage %}{% set u = task.usage %}
+  <div class="usage-box">
+    <strong>{{ u.counter }}:</strong> {{ u.current|n }} {{ u.unit }}{% if u.read_on %} (read {{ u.read_on|d }}){% endif %}.
+    Due at {{ u.due_at|n }} {{ u.unit }}{% if u.reached %}: <span class="due-late">reached</span>{% else %}, {{ u.left|n }} to go{% endif %}.
+    {% if u.rate %}About {{ u.rate|round(1)|n }} {{ u.unit }} a day{% if u.projected and not u.reached %}, so around {{ u.projected|d }}{% endif %}.{% else %}Record readings on its equipment to estimate when.{% endif %}
+  </div>
+  {% endif %}
   {% if task.instructions %}<div class="proc-notes"><h3>Instructions</h3><p class="instructions">{{ task.instructions }}</p></div>{% endif %}
   <div class="run-actions">
     <a class="btn" href="{{ url_for('maint.task_edit', task_id=task.id) }}">Edit task</a>
@@ -32,26 +42,40 @@
   </div>
 </section>
 
+{% if not task.in_template %}
 <section class="card" id="record">
   <h2>Record work</h2>
   <form method="post" action="{{ url_for('maint.task_complete', task_id=task.id) }}" class="maint-form">
+    {% if task.tasklist %}
+    <div class="checklist">
+      <div class="muted small">{{ task.tasklist.name }}{% if task.tasklist.minutes %}: about {{ task.tasklist.minutes }} minutes{% endif %}</div>
+      {% for op in task.tasklist.operations %}
+      <label class="check-field"><input type="checkbox" name="op-{{ loop.index0 }}" value="1"> <span>{{ loop.index }}. {{ op.text }}{% if op.minutes %} <span class="muted small nowrap">({{ op.minutes }} min)</span>{% endif %}</span></label>
+      {% endfor %}
+    </div>
+    {% endif %}
     <div class="filters">
       <label>Outcome
         <select name="status">
           <option value="completed">Completed</option>
           <option value="skipped">Skipped (say why in the notes)</option>
         </select></label>
+      {% if task.usage %}<label>{{ task.usage.counter }} now <input class="qty-input" type="number" name="reading" min="0" step="any" inputmode="decimal" placeholder="{{ task.usage.current|n }}"></label>{% endif %}
       <label>Duration (minutes) <input class="qty-input" type="number" name="duration_minutes" min="0" step="1" inputmode="numeric"></label>
       <label>Labor hours <input class="qty-input" type="number" name="labor_hours" min="0" step="0.25" inputmode="decimal"></label>
+      <label>Parts cost ($) <input class="qty-input" type="number" name="parts_cost" min="0" step="0.01" inputmode="decimal"></label>
     </div>
     <label class="block">Parts used <input class="text-input wide" name="parts_used" maxlength="2000" placeholder="Optional"></label>
     <label class="block">Notes <textarea name="notes" rows="3" maxlength="5000" placeholder="What was done, anything noticed"></textarea></label>
     <div class="run-actions">
       <button class="btn btn-primary">Record</button>
-      <span class="muted">It was due {{ task.next_due|d }}. Recording it moves it on every {{ task.frequency_days }} day{{ 's' if task.frequency_days != 1 }} from then, to the first date after today.</span>
+      <span class="muted">{% if task.frequency_days and task.usage %}Recording it starts both its clocks again: due in {{ task.frequency_days }} days or {{ task.usage.interval|n }} {{ task.usage.unit }}.
+        {% elif task.usage %}Recording it counts the next {{ task.usage.interval|n }} {{ task.usage.unit }} from the reading.
+        {% else %}It was due {{ task.next_due|d }}. Recording it moves it on every {{ task.frequency_days }} day{{ 's' if task.frequency_days != 1 }} from then, to the first date after today.{% endif %}</span>
     </div>
   </form>
 </section>
+{% endif %}
 
 <section class="card" id="files">
   <h2>Files</h2>
@@ -68,10 +92,10 @@
   </table></div>
   {% else %}<p class="muted">No files yet: attach SOPs, job aids, manuals or photos.</p>{% endif %}
   <form method="post" action="{{ url_for('maint.attachment_add', task_id=task.id) }}" enctype="multipart/form-data" class="filters upload-form">
-    <input type="file" name="file" required accept="{% for t in types.split(', ') %}.{{ t }}{{ ',' if not loop.last }}{% endfor %}">
+    <input type="file" name="file" required accept="{{ file_types }}">
     <button class="btn">Attach</button>
   </form>
-  <p class="muted small">PDF, Word, Excel, pictures (PNG, JPG, GIF) or text, up to 16 MB.</p>
+  <p class="muted small">PDF, Word, Excel, pictures (PNG, JPG, GIF, HEIC) or text, up to 16 MB.</p>
 </section>
 
 <section class="card">
@@ -80,9 +104,14 @@
   <div class="history-item">
     <div class="history-head"><strong>{{ '✓ Completed' if c.status == 'completed' else '⊘ Skipped' }}</strong>
       <span class="muted">{{ c.completed_at|local }} · {{ c.completed_by }} · was due {{ c.scheduled_date|d }}</span></div>
-    {% if c.duration_minutes or c.labor_hours or c.parts_used %}
-    <div class="muted small">{% if c.duration_minutes %}{{ c.duration_minutes }} min{% endif %}{% if c.labor_hours %}{{ ' · ' if c.duration_minutes }}{{ c.labor_hours|qty }} labor h{% endif %}{% if c.parts_used %}{{ ' · ' if c.duration_minutes or c.labor_hours }}Parts: {{ c.parts_used }}{% endif %}</div>
-    {% endif %}
+    {% set bits = [] %}
+    {% if c.duration_minutes %}{% set _ = bits.append(c.duration_minutes ~ ' min') %}{% endif %}
+    {% if c.labor_hours %}{% set _ = bits.append(c.labor_hours|qty ~ ' labor h') %}{% endif %}
+    {% if c.parts_cost %}{% set _ = bits.append(c.parts_cost|money ~ ' parts') %}{% endif %}
+    {% if c.reading is not none and task.usage %}{% set _ = bits.append('at ' ~ c.reading|n ~ ' ' ~ task.usage.unit) %}{% endif %}
+    {% if c.steps %}{% set _ = bits.append((c.steps|selectattr('done')|list|length) ~ ' of ' ~ c.steps|length ~ ' steps') %}{% endif %}
+    {% if c.parts_used %}{% set _ = bits.append('Parts: ' ~ c.parts_used) %}{% endif %}
+    {% if bits %}<div class="muted small">{{ bits|join(' · ') }}</div>{% endif %}
     {% if c.notes %}<p class="instructions">{{ c.notes }}</p>{% endif %}
   </div>
   {% else %}<p class="muted">Not done yet.</p>{% endfor %}

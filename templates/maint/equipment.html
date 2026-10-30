@@ -1,0 +1,121 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import task_table, location_options, crit, priority, state, files %}
+{% block title %}{{ item.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ item.name }} <span class="pill st-{{ item.status }}">{{ item.status_label }}</span></h1>
+  <a href="{{ url_for('maint.equipment_list') }}">← Equipment</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Number</dt><dd>{{ item.number }}{{ ' · tag ' ~ item.tag if item.tag }}</dd></div>
+    <div><dt>Installed at</dt><dd>{% if item.location_id %}<a href="{{ url_for('maint.location', location_id=item.location_id) }}">{{ item.location }}</a>{% else %}{{ item.status_label }}{% endif %}</dd></div>
+    {% if item.category %}<div><dt>Category</dt><dd>{{ item.category }}</dd></div>{% endif %}
+    <div><dt>Make and model</dt><dd>{{ [item.manufacturer, item.model]|select|join(' ') or '—' }}</dd></div>
+    <div><dt>Serial number</dt><dd>{{ item.serial_number or '—' }}</dd></div>
+    <div><dt>Criticality</dt><dd>{% if item.criticality_used %}{{ crit(item.criticality_used) }} {{ criticalities[item.criticality_used].split(': ')[1] }}{% if not item.criticality %} <span class="muted small">from its location</span>{% endif %}{% else %}—{% endif %}</dd></div>
+    {% if item.cost_center %}<div><dt>Cost center</dt><dd>{{ item.cost_center }}</dd></div>{% endif %}
+    <div><dt>Purchased</dt><dd>{{ item.purchase_date|d if item.purchase_date else '—' }}{% if item.purchase_cost %} · {{ item.purchase_cost|money }}{% endif %}</dd></div>
+    <div><dt>Warranty</dt><dd>{% if item.warranty_until %}<span class="{{ 'due-late' if item.warranty_until < today }}">{{ 'Ended ' if item.warranty_until < today else 'Until ' }}{{ item.warranty_until|d }}</span>{% else %}—{% endif %}</dd></div>
+    <div><dt>Maintenance cost</dt><dd>{{ cost|money }} <span class="muted small">{{ hours|qty }} labor h, all time</span></dd></div>
+  </dl>
+  {% if item.notes %}<p class="instructions">{{ item.notes }}</p>{% endif %}
+  <div class="run-actions">
+    <a class="btn" href="{{ url_for('maint.equipment_edit', equipment_id=item.id) }}">Edit</a>
+    {% if item.status != 'retired' %}
+    <a class="btn" href="{{ url_for('maint.task_new', equipment=item.id) }}">+ Task</a>
+    <a class="btn" href="{{ url_for('maint.request_new', equipment=item.id) }}">Report a problem</a>
+    <a class="btn" href="{{ url_for('maint.order_new', equipment=item.id) }}">+ Work order</a>
+    {% endif %}
+    <a class="btn btn-quiet" href="{{ url_for('maint.history', equipment=item.id, start='2000-01-01') }}">History →</a>
+    {% if can_delete %}
+    <form method="post" action="{{ url_for('maint.equipment_delete', equipment_id=item.id) }}"
+          onsubmit='return confirm({{ ("Delete " ~ item.name ~ "? Only equipment never used in tasks, requests or work orders can be deleted.")|tojson }})'><button class="btn btn-quiet">Delete</button></form>
+    {% endif %}
+  </div>
+</section>
+
+{% if item.status != 'retired' %}
+<section class="card">
+  <h2>Move it</h2>
+  <form method="post" action="{{ url_for('maint.equipment_move', equipment_id=item.id) }}" class="filters">
+    <label>To
+      <select name="action" data-move-action>
+        <option value="install">Install at…</option>
+        {% if item.status != 'storage' %}<option value="storage">Storage</option>{% endif %}
+        <option value="retire">Retire it</option>
+      </select></label>
+    <label>Location <select name="location_id"><option value="">Choose…</option>{{ location_options(locations, '') }}</select></label>
+    <label>On <input type="date" name="on_date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}"></label>
+    <label>Note <input name="note" maxlength="500" placeholder="Optional, e.g. swapped for repair"></label>
+    <button class="btn">Move</button>
+  </form>
+  <p class="muted small">Its tasks move with it. The location is only needed to install it.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Where it's been</h2>
+  <ul class="plain-list">{% for m in item.moves %}
+    <li><span class="nowrap">{{ m.on_date|d }}</span> · {{ {'installed': 'Installed at', 'dismantled': 'Taken out of', 'retired': 'Retired'}[m.action] }} {{ m.location or '' }}{% if m.note %} <span class="muted">({{ m.note }})</span>{% endif %} <span class="muted small">{{ m.by_name or '' }}</span></li>
+  {% else %}<li class="muted">Not installed anywhere yet.</li>{% endfor %}</ul>
+</section>
+
+<section class="card" id="counters">
+  <h2>Counters</h2>
+  <p class="muted">Readings that go up as it's used (shots, hours, gallons). Tasks can be due by them: every 10,000 shots, say.</p>
+  {% for c in item.counters %}
+  <div class="counter">
+    <div class="counter-head"><strong>{{ c.name }}</strong>
+      <span>{% if c.value is defined %}{{ c.value|n }} {{ c.unit or '' }} <span class="muted small">on {{ c.read_on|d }}{% if c.rate %} · about {{ c.rate|round(1)|n }} a day{% endif %}</span>{% else %}<span class="muted">No readings yet</span>{% endif %}</span></div>
+    {% if item.status != 'retired' %}
+    <form method="post" action="{{ url_for('maint.reading_add', counter_id=c.id) }}" class="filters">
+      <label>Reading <input class="qty-input" type="number" name="value" min="0" step="any" inputmode="decimal" required></label>
+      <label>On <input type="date" name="read_on" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}"></label>
+      <button class="btn">Record</button>
+    </form>
+    {% endif %}
+    {% if c.readings %}<div class="muted small">Lately: {% for r in c.readings %}{{ r.value|n }} ({{ r.read_on|d }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+    {% if can_delete %}<form method="post" action="{{ url_for('maint.counter_delete', counter_id=c.id) }}" onsubmit='return confirm({{ ("Delete the " ~ c.name ~ " counter and its readings?")|tojson }})'><button class="btn btn-quiet small">Delete counter</button></form>{% endif %}
+  </div>
+  {% endfor %}
+  {% if item.status != 'retired' %}
+  <form method="post" action="{{ url_for('maint.counter_add', equipment_id=item.id) }}" class="filters add-counter">
+    <label>New counter <input name="name" maxlength="60" required placeholder="e.g. Shots"></label>
+    <label>Unit <input name="unit" maxlength="20" placeholder="e.g. shots"></label>
+    <label>Reading now <input class="qty-input" type="number" name="value" min="0" step="any" inputmode="decimal"></label>
+    <button class="btn">Add counter</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Tasks</h2>{% if item.status != 'retired' %}<a href="{{ url_for('maint.task_new', equipment=item.id) }}">+ Task</a>{% endif %}</div>
+  {{ task_table(tasks, show_location=false, empty="No tasks on this equipment.") }}
+</section>
+
+{% if requests or orders %}
+<div class="two-col">
+<section class="card">
+  <h2>Requests</h2>
+  <ul class="plain-list">{% for r in requests %}<li><a href="{{ url_for('maint.request', request_id=r.id) }}">{{ r.number }} {{ r.title }}</a> {{ state(r.status, r.status_label) }}</li>{% else %}<li class="muted">None.</li>{% endfor %}</ul>
+</section>
+<section class="card">
+  <h2>Work orders</h2>
+  <ul class="plain-list">{% for o in orders %}<li><a href="{{ url_for('maint.order', order_id=o.id) }}">{{ o.number }} {{ o.title }}</a> {{ state(o.status, o.status_label) }}{% if o.cost %} · {{ o.cost|money }}{% endif %}</li>{% else %}<li class="muted">None.</li>{% endfor %}</ul>
+</section>
+</div>
+{% endif %}
+
+{% if done %}
+<section class="card">
+  <div class="card-head"><h2>Done to it</h2><a href="{{ url_for('maint.history', equipment=item.id, start='2000-01-01') }}">History →</a></div>
+  <ul class="plain-list">{% for r in done %}<li>{{ r.at|local }} · <a href="{{ url_for('maint.order', order_id=r.id) if r.kind == 'order' else url_for('maint.task', task_id=r.id) }}">{{ r.title }}</a>{{ ' (skipped)' if r.status == 'skipped' }} · {{ r.by }}{% if r.cost %} · {{ r.cost|money }}{% endif %}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="card" id="files">
+  <h2>Files</h2>
+  {{ files(item.files, url_for('maint.file_add', object_type='equipment', object_id=item.id)) }}
+</section>
+{% endblock %}

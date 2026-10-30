@@ -1,0 +1,33 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import location_options, equipment_options %}
+{% block title %}{{ 'Edit ' ~ found.number if found else 'New work order' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ 'Edit ' ~ found.number if found else 'New work order' }}</h1>
+  <a href="{{ url_for('maint.order', order_id=found.id) if found else url_for('maint.orders') }}">← {{ 'Back' if found else 'Work orders' }}</a>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+{% if from_request %}<p class="muted">For request <a href="{{ url_for('maint.request', request_id=from_request.id) }}">{{ from_request.number }}</a>, reported by {{ from_request.reported_by or 'someone' }}. Completing the work order closes it.</p>{% endif %}
+<form method="post" class="card maint-form">
+  {% if from_request %}<input type="hidden" name="request" value="{{ from_request.id }}">{% endif %}
+  <div class="filters new-order">
+    <label class="wide">Title <input name="title" value="{{ form.title or '' }}" maxlength="150" required placeholder="e.g. Replace grinder 2 motor"></label>
+    <label>Equipment <select name="equipment_id"><option value="">None</option>{{ equipment_options(equipment, form.equipment_id or '') }}</select></label>
+    <label>Or where <select name="location_id"><option value="">Choose…</option>{{ location_options(locations, form.location_id or '') }}</select></label>
+  </div>
+  <div class="filters new-order">
+    {% if people %}<label>Assigned to <select name="assigned_to"><option value="">No one yet</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
+      {% if found and found.assigned_to and found.assigned_to not in people|map(attribute='id')|list %}<option value="{{ found.assigned_to }}" selected>{{ found.assignee_name }}</option>{% endif %}
+    </select></label>{% endif %}
+    <label>Priority <select name="priority"><option value="">From criticality</option>
+      {% for k, label in priorities.items() %}<option value="{{ k }}" {{ 'selected' if form.priority|string == k|string }}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Needed by <input type="date" name="due_date" value="{{ form.due_date or '' }}"></label>
+  </div>
+  <label class="block">What to do <textarea name="description" rows="4" maxlength="5000">{{ form.description or '' }}</textarea></label>
+  <div class="run-actions">
+    <button class="btn btn-primary">{{ 'Save' if found else 'Make work order' }}</button>
+    <a class="btn" href="{{ url_for('maint.order', order_id=found.id) if found else url_for('maint.orders') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

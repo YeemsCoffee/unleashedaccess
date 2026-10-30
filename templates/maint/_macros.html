@@ -5,7 +5,12 @@
 {%- endmacro %}
 
 {% macro due(t) -%}
-<span class="nowrap">{{ t.next_due|d }}</span><br><span class="{{ 'due-late' if t.status == 'overdue' else 'muted' }} small">{{ t.due_label }}</span>
+<span class="nowrap">{{ t.next_due|d if t.next_due else '—' }}</span><br><span class="{{ 'due-late' if t.status == 'overdue' else 'muted' }} small">{{ t.due_label }}</span>
+{%- endmacro %}
+
+{% macro every(t) -%}
+{%- if t.frequency_days %}{{ t.frequency_days }} day{{ 's' if t.frequency_days != 1 }}{% endif -%}
+{%- if t.usage %}{{ ' or ' if t.frequency_days }}{{ t.usage.interval|n }} {{ t.usage.unit }}{% endif -%}
 {%- endmacro %}
 
 {% macro task_table(tasks, show_location=true, empty='No tasks.') %}
@@ -15,13 +20,50 @@
   <tr class="{{ 'row-warn' if t.status == 'overdue' }}">
     <td><a href="{{ url_for('maint.task', task_id=t.id) }}">{{ t.name }}</a>
       {% if t.status == 'in_progress' %}<span class="narrow-only"> {{ task_pill(t) }}</span>{% endif %}
+      {% if t.equipment_name %}<div class="muted small">{{ t.equipment_name }}</div>{% endif %}
       {% if t.part_name %}<div class="muted small">Part: {{ t.part_name }}{% if t.order_by %} · order by {{ t.order_by|d }}{% endif %}</div>{% endif %}</td>
     {% if show_location %}<td class="wide-only">{{ t.location or '—' }}</td>{% endif %}
     <td>{{ due(t) }}</td>
-    <td class="wide-only nowrap">{{ t.frequency_days }} day{{ 's' if t.frequency_days != 1 }}</td>
+    <td class="wide-only nowrap">{{ every(t) }}</td>
     <td>{{ t.assignee_name or '—' }}</td>
     <td class="wide-only">{{ task_pill(t) }}</td>
   </tr>
   {% else %}<tr><td colspan="6" class="muted">{{ empty }}</td></tr>{% endfor %}</tbody>
 </table></div>
+{% endmacro %}
+
+{% macro priority(level, label) -%}<span class="pill prio-{{ level }}">{{ label }}</span>{%- endmacro %}
+
+{% macro state(status, label) -%}<span class="pill st-{{ status }}">{{ label }}</span>{%- endmacro %}
+
+{% macro crit(c) -%}{% if c %}<span class="crit crit-{{ c }}" title="Criticality {{ criticalities[c] }}">{{ c }}</span>{% endif %}{%- endmacro %}
+
+{% macro location_options(locations, selected, blocked=(), real_only=false) -%}
+{% for l in locations if l.id not in blocked and not (real_only and l.in_template) %}<option value="{{ l.id }}" {{ 'selected' if selected|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.label }}</option>{% endfor %}
+{%- endmacro %}
+
+{% macro equipment_options(equipment, selected) -%}
+{% for e in equipment %}<option value="{{ e.id }}" {{ 'selected' if selected|string == e.id|string }}>{{ e.name }}{{ ' · ' ~ e.location if e.location else ' (' ~ e.status_label|lower ~ ')' }}</option>{% endfor %}
+{%- endmacro %}
+
+{% macro files(list, add_url, can_add=true, can_remove=true, hint='Manuals, photos, invoices: PDF, Word, Excel, pictures or text, up to 16 MB.') %}
+{% if list %}
+<div class="table-wrap"><table>
+  <thead><tr><th>File</th><th class="num">Size</th><th class="wide-only">Added</th><th></th></tr></thead>
+  <tbody>{% for f in list %}
+  <tr><td><a href="{{ url_for('maint.file', file_id=f.id) }}">{{ f.filename }}</a></td>
+    <td class="num nowrap">{{ (f.size / 1024)|round(0)|int if f.size >= 1024 else 1 }} KB</td>
+    <td class="wide-only">{{ f.uploaded_by or '' }} · {{ f.uploaded_at|local }}</td>
+    <td class="row-actions">{% if can_remove %}<form method="post" action="{{ url_for('maint.file_delete', file_id=f.id) }}"
+        onsubmit='return confirm({{ ("Remove " ~ f.filename ~ "?")|tojson }})'><button class="btn btn-quiet">Remove</button></form>{% endif %}</td></tr>
+  {% endfor %}</tbody>
+</table></div>
+{% else %}<p class="muted">No files yet.</p>{% endif %}
+{% if can_add %}
+<form method="post" action="{{ add_url }}" enctype="multipart/form-data" class="filters upload-form">
+  <input type="file" name="file" required accept="{{ file_types }}">
+  <button class="btn">Attach</button>
+</form>
+<p class="muted small">{{ hint }}</p>
+{% endif %}
 {% endmacro %}

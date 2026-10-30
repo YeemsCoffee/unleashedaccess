@@ -1,0 +1,32 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import priority, state %}
+{% block title %}Requests{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Requests</h1>
+  <form method="get" class="filters">
+    <label>Show <select name="status">
+      <option value="active" {{ 'selected' if status == 'active' }}>Open or being fixed</option>
+      {% for k, label in statuses.items() %}<option value="{{ k }}" {{ 'selected' if k == status }}>{{ label }}</option>{% endfor %}
+      <option value="all" {{ 'selected' if status == 'all' }}>All</option></select></label>
+    <label class="check-field"><input type="checkbox" name="mine" value="1" {{ 'checked' if mine }}> Mine</label>
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">CSV</a>
+  </form>
+</div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.request_new') }}">Report a problem</a></div>
+<p class="muted">Problems reported (SAP's notifications), such as a machine down.{% if can_manage %} Make a work order to fix one, or close it.{% endif %}</p>
+<section class="card">
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Request</th><th class="wide-only">Where</th><th class="wide-only">Reported</th><th>Priority</th><th>Status</th></tr></thead>
+    <tbody>{% for r in rows %}
+    <tr class="{{ 'row-warn' if r.breakdown and r.status in ('open', 'ordered') }}"><td><a href="{{ url_for('maint.request', request_id=r.id) }}">{{ r.title }}</a>
+        <div class="muted small">{{ r.number }}{{ ' · machine down' if r.breakdown }}<span class="narrow-only"> · {{ r.equipment_name or r.location or '—' }}</span></div></td>
+      <td class="wide-only">{{ r.equipment_name or r.location or '—' }}</td>
+      <td class="wide-only">{{ r.reported_at|local }}<div class="muted small">{{ r.reported_by or '' }}</div></td>
+      <td>{{ priority(r.priority, r.priority_label) }}</td>
+      <td>{{ state(r.status, r.status_label) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No requests here.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

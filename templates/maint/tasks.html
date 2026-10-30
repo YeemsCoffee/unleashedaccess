@@ -6,6 +6,7 @@
   <h1>{{ location.path if location else 'All tasks' }}</h1>
   <form method="get" class="filters">
     {% if location %}<input type="hidden" name="location" value="{{ location.id }}">{% endif %}
+    <label>Find <input name="q" value="{{ q }}" placeholder="Task, code, equipment, part"></label>
     <label>Show <select name="status"><option value="">Every task</option>
       {% for key, label in statuses.items() %}<option value="{{ key }}" {{ 'selected' if key == status }}>{{ label }}</option>{% endfor %}</select></label>
     {% if people %}<label>Assigned to <select name="person"><option value="">Anyone</option>
@@ -14,7 +15,14 @@
     <a class="btn" href="{{ csv_url }}">CSV</a>
   </form>
 </div>
-<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.task_new', location=location.id if location else None) }}">+ New task{{ ' here' if location }}</a></div>
+<div class="page-actions action-row">
+  <a class="btn btn-primary" href="{{ url_for('maint.task_new', location=location.id if location else None) }}">+ New task{{ ' here' if location }}</a>
+  {% if location %}<a class="btn" href="{{ url_for('maint.location', location_id=location.id) }}">About {{ location.name }} →</a>{% endif %}
+</div>
+{% if location and location.in_template %}
+<p class="recon recon-warn">! {{ location.path }} is part of a template: its tasks never come due. Copy the template
+  (on its location page) to set up a real place with them.</p>
+{% endif %}
 
 <div class="maint-layout">
 <section class="card loc-tree-card">
@@ -22,7 +30,7 @@
   <ul class="loc-tree">
     <li><a href="{{ url_for('maint.tasks', status=status or None, person=person) }}" class="{{ 'active' if not location }}">All tasks <span class="muted">({{ total }})</span></a></li>
     {% for l in locations %}
-    <li style="--depth: {{ l.depth }}"><a href="{{ url_for('maint.tasks', location=l.id, status=status or None, person=person) }}" class="{{ 'active' if location and location.id == l.id }}">{{ l.name }} <span class="muted">({{ counts[l.id] }})</span></a></li>
+    <li style="--depth: {{ l.depth }}"><a href="{{ url_for('maint.tasks', location=l.id, status=status or None, person=person) }}" class="{{ 'active' if location and location.id == l.id }}{{ ' loc-template' if l.in_template }}">{% if l.code %}<span class="loc-code">{{ l.code }}</span> {% endif %}{{ l.name }} <span class="muted">({{ counts[l.id] }})</span></a></li>
     {% endfor %}
   </ul>
   {% if not locations %}<p class="muted">No locations yet. <a href="{{ url_for('maint.locations') }}">Add the first one</a> to organise tasks by where they're done.</p>{% endif %}

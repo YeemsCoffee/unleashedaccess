@@ -1,0 +1,17 @@
+{% extends "dash/base.html" %}
+{% block title %}Task lists{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Task lists</h1></div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.tasklist_new') }}">+ Task list</a></div>
+<p class="muted">The steps for doing a job (SAP's task lists), written once and used by any number of tasks: one
+  "Grinder burr clean" for every grinder. Whoever records a task ticks off its steps.</p>
+<section class="card">
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Task list</th><th class="num">Steps</th><th class="num">Minutes</th><th class="num">Used by</th></tr></thead>
+    <tbody>{% for t in rows %}
+    <tr><td><a href="{{ url_for('maint.tasklist', tasklist_id=t.id) }}">{{ t.name }}</a>{% if t.description %}<div class="muted small">{{ t.description }}</div>{% endif %}</td>
+      <td class="num">{{ t.operations|length }}</td><td class="num">{{ t.minutes or '' }}</td><td class="num">{{ t.uses }} task{{ 's' if t.uses != 1 }}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">No task lists yet.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

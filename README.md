@@ -63,12 +63,15 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
-| Maintenance → Overview | Overdue tasks, tasks due in the next 7 days, what's assigned to you, parts to order |
-| Maintenance → Tasks | Tasks by functional location (a location includes the ones under it), filtered by status or person; each task's details, recording work, files and history |
-| Maintenance → Locations | The functional location tree: add, rename, move, delete |
-| Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, and work done. Click a day to add a task due then; drag a task's due date to another day to move it (with a mouse or a finger) |
-| Maintenance → Workload | Tasks, overdue and due soon for each person |
-| Maintenance → History | Work recorded (completed or skipped) over any dates, by person |
+| Maintenance → Overview | Machines down, new requests, open work orders, overdue tasks, tasks due in the next 7 days, what's assigned to you, parts to order; Workload (tasks and work orders for each person) |
+| Maintenance → Requests | Problems reported (a machine down, a leak), with priority and status; each request's details, files, and the work order made from it |
+| Maintenance → Work orders | Work to do, by priority: assigned, started, completed with findings or cancelled; labor, parts and service costs; files |
+| Maintenance → Tasks | Tasks by functional location (a location includes the ones under it) or equipment, filtered by status or person, or found by name; each task's details, checklist, recording work, files and history |
+| Maintenance → Task lists | Reusable lists of steps with minutes, ticked off when a task that uses one is recorded |
+| Maintenance → Equipment | Machines with make, model, serial number and warranty, where each is installed, its moves, counters and readings, tasks, files and maintenance cost |
+| Maintenance → Locations | The functional location tree with codes: find, add, change, copy (templates), delete; each location's master data, what's under it, equipment, open work, tasks and work done |
+| Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, open work orders, and work done. Click a day to add a task due then; drag a task's due date to another day to move it (with a mouse or a finger) |
+| Maintenance → History | Tasks and work orders done over any dates, at a location or on equipment, by person; labor hours and cost by cost center and by equipment |
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
 | Settings → Team | Team accounts: add people, give each an access profile (or Admin), reset passwords, deactivate |
 | Settings → Access profiles | The kinds of account and the tabs each opens |
@@ -87,6 +90,11 @@ page. A page in a tab someone's profile doesn't open isn't shown to them; the ho
 page opens the first tab they have. Someone with no Finance, Warehouse or
 Production doesn't see the Unleashed sync status either.
 
+**Maintenance requests** is a narrower choice than Maintenance: it opens only the
+Requests page, so baristas and store staff can report a problem (with a photo) and
+follow what happens to it, without seeing or changing the rest. Maintenance
+includes it.
+
 The first time this version runs it creates two profiles: **Standard** (Finance,
 Warehouse, Production: what every member could see before) for everyone already
 on the team, and **Maintenance technician** (Maintenance only). Without team
@@ -94,26 +102,65 @@ accounts (a shared password, or none) everyone opens every tab.
 
 ## Maintenance
 
-The maintenance scheduler, brought into Core and kept in its database
-(`maint_locations`, `maint_tasks`, `maint_completions`, `maint_attachments`):
+The maintenance scheduler, brought into Core and kept in its database (the
+`maint_*` tables). It follows SAP Plant Maintenance's model, kept simple:
 
-- **Functional locations** form a tree (a store, its kitchen, the espresso machine
-  in it). A location's tasks include the ones in the locations under it.
-- **Tasks** repeat every so many days and are next due on a date, in the
-  business's time zone (`TIMEZONE`). A task is overdue once that date has passed;
-  one being worked on can be marked in progress. Each can be assigned to someone
-  who can open Maintenance, and can have a part with its vendor, part number and
-  lead time: the part shows under **Parts to order** from the date it should be
-  ordered (due date less the lead time), a week ahead.
+- **Functional locations** form a tree (a store, its kitchen, the espresso
+  station in it), each with a **code** that nests: `GAR`, `GAR-KIT`,
+  `GAR-KIT-ESP`. A child's code starts with its parent's; changing a code renames
+  the codes under it. Find one by code or name. A location's tasks include the
+  ones in the locations under it.
+- **Master data** on each location: site, cost center, work center (who looks
+  after it) and criticality (**A** stops the business, **B** slows it down, **C**
+  can wait). Left blank, each comes from the location above, so setting the cost
+  center on a store covers everything in it; the page says where a value came
+  from.
+- **Templates** are reference structures (a standard store: bar, kitchen,
+  espresso station, with their tasks). Their tasks never come due. **Copy this
+  structure** on any location copies it and everything under it to a new place,
+  renaming the codes (`TPL-KIT` becomes `TOR-KIT`), optionally with its tasks.
+- **Equipment** is separate from where it is: a machine has its own number
+  (`EQ-00001`), make, model, serial number, tag, purchase date and cost, and
+  warranty. It's installed at a location, taken to storage or retired, and every
+  move is kept with its date and note. Its tasks go with it when it moves. It takes
+  its cost center and criticality from where it's installed, unless it has its own.
+- **Counters** on equipment (shots, hours, gallons) take readings that only go up;
+  the usage rate per day comes from the last 180 days of readings.
+- **Tasks** repeat every so many days, or every so much use (every 10,000 shots),
+  or both, whichever comes first. A usage task's due date is estimated from the
+  usage rate. Dates are in the business's time zone (`TIMEZONE`). A task is
+  overdue once its date has passed; one being worked on can be marked in progress.
+  Each can be assigned to someone who can open Maintenance, use a **task list**,
+  and have a part with its vendor, part number and lead time: the part shows under
+  **Parts to order** from the date it should be ordered (due date less the lead
+  time), a week ahead.
+- **Task lists** are the steps for a kind of job (a burr clean: unplug, remove the
+  burrs, vacuum, reassemble), each with minutes, kept apart from the tasks that
+  use them so one list serves many machines. Recording the work ticks them off.
 - **Recording work** (completed, or skipped with a reason) keeps who did it, when,
-  how long, labor hours, parts used and notes, and moves the task on by whole
-  intervals from the date it was due to the first one after today, so it keeps its
-  schedule however late it was done.
-- **Files** (PDF, Word, Excel, pictures, text; up to 16 MB) are stored with their
-  task in the database, so every server has them.
-- Anyone who can open Maintenance adds and changes tasks and locations, records
-  work and attaches files. Deleting a task (with its history and files) or a
-  location is for admins.
+  how long, labor hours, parts used and their cost, the steps done, the counter
+  reading and notes. A time-based task moves on by whole intervals from the date
+  it was due to the first one after today, so it keeps its schedule however late
+  it was done; a usage-based one counts its next interval from the reading.
+- **Requests** (SAP's notifications) are problems reported: what's wrong, which
+  equipment or where, whether the machine is down, details and a photo. Priority is
+  very high for a machine down, otherwise from the criticality of the equipment or
+  place. A request becomes a **work order**, or is closed or rejected with a
+  reason.
+- **Work orders** (`WO-00001`) are assigned, needed by a date, started and
+  completed with findings (which closes their request) or cancelled (which opens
+  it again). Labor (hours × rate), parts, services and other costs are added as
+  lines while the work order is open.
+- **History** shows tasks and work orders done at a location (and under it) or on
+  a piece of equipment, with labor hours and cost by cost center and by
+  equipment. Each location and piece of equipment shows its own.
+- **Files** (PDF, Word, Excel, pictures, text; up to 16 MB) go with tasks,
+  equipment, requests and work orders, stored in the database so every server has
+  them.
+- Anyone who can open Maintenance does all of this. Deleting a task (with its
+  history and files), a location, a piece of equipment or a counter is for admins.
+  Someone with only Maintenance requests reports problems and adds files to their
+  own requests.
 
 ## COGS (running, month to date)
 
@@ -486,8 +533,12 @@ unleashedaccess/
 ├── accounts.py         # team accounts
 ├── access.py           # access profiles: the tabs each kind of account opens
 ├── production_runs.py  # operating procedures and what's recorded at each step
-├── maintenance.py      # the Maintenance tab's pages
-├── maintenance_store.py # maintenance locations, tasks, schedules, work recorded, files
+├── maintenance.py      # the Maintenance tab: overview, tasks, locations, calendar, history
+├── maintenance_views.py # Maintenance pages: equipment, counters, files, task lists, requests, work orders
+├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
+├── maintenance_assets.py # equipment, its moves, counters and readings, files
+├── maintenance_work.py # task lists, requests, work orders and their costs
+├── maintenance_common.py # maintenance form parsing, codes, priorities, file types
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader
 ├── sync_once.py        # run one sync and exit (scheduled jobs)

@@ -1,31 +1,84 @@
 {% extends "dash/base.html" %}
-{% from "maint/_macros.html" import task_table %}
+{% from "maint/_macros.html" import task_table, priority, state %}
 {% block title %}Maintenance{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Maintenance</h1></div>
-<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.task_new') }}">+ New task</a></div>
+<div class="page-head"><h1>Maintenance</h1><a href="{{ url_for('maint.workload') }}">Workload →</a></div>
+<div class="page-actions action-row">
+  <a class="btn btn-primary" href="{{ url_for('maint.request_new') }}">Report a problem</a>
+  <a class="btn" href="{{ url_for('maint.order_new') }}">+ Work order</a>
+  <a class="btn" href="{{ url_for('maint.task_new') }}">+ Task</a>
+</div>
 
 <section class="tiles">
-  <div class="tile card"><div class="tile-label">Tasks</div><div class="tile-value">{{ tasks|length }}</div>
-    <div class="tile-sub"><a href="{{ url_for('maint.tasks') }}">All tasks →</a></div></div>
-  <div class="tile card"><div class="tile-label">Overdue</div><div class="tile-value{{ ' value-bad' if overdue }}">{{ overdue|length }}</div>
-    <div class="tile-sub">past their due date</div></div>
-  <div class="tile card"><div class="tile-label">Due soon</div><div class="tile-value">{{ due_soon|length }}</div>
+  <div class="tile card"><div class="tile-label">Open requests</div><div class="tile-value">{{ new_requests|length }}</div>
+    <div class="tile-sub">{% if down %}<span class="due-late">{{ down|length }} machine{{ 's' if down|length != 1 }} down</span>{% else %}no machines down{% endif %} · <a href="{{ url_for('maint.requests') }}">Requests →</a></div></div>
+  <div class="tile card"><div class="tile-label">Open work orders</div><div class="tile-value">{{ orders|length }}</div>
+    {% set late = orders|selectattr('late')|list %}
+    <div class="tile-sub">{% if late %}<span class="due-late">{{ late|length }} late</span> · {% endif %}<a href="{{ url_for('maint.orders') }}">Work orders →</a></div></div>
+  <div class="tile card"><div class="tile-label">Tasks overdue</div><div class="tile-value{{ ' value-bad' if overdue }}">{{ overdue|length }}</div>
+    <div class="tile-sub">of {{ tasks|length }} tasks</div></div>
+  <div class="tile card"><div class="tile-label">Tasks due soon</div><div class="tile-value">{{ due_soon|length }}</div>
     <div class="tile-sub">in the next {{ due_soon_days }} days</div></div>
-  <div class="tile card"><div class="tile-label">Completed this month</div><div class="tile-value">{{ completed }}</div>
+  <div class="tile card"><div class="tile-label">Tasks done this month</div><div class="tile-value">{{ completed }}</div>
     <div class="tile-sub"><a href="{{ url_for('maint.history') }}">History →</a></div></div>
 </section>
+
+{% if down %}
+<section class="card card-alert">
+  <h2>Machines down</h2>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Request</th><th>Where</th><th>Reported</th><th>Status</th></tr></thead>
+    <tbody>{% for r in down %}
+    <tr><td><a href="{{ url_for('maint.request', request_id=r.id) }}">{{ r.number }} {{ r.title }}</a></td>
+      <td>{{ r.equipment_name or r.location or '—' }}</td><td class="nowrap">{{ r.reported_at|local }}</td>
+      <td>{% if r.order_id %}<a href="{{ url_for('maint.order', order_id=r.order_id) }}">{{ r.order_number }}</a>{% else %}{{ state(r.status, r.status_label) }}{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
 
 {% if current_user %}
 <section class="card">
   <h2>Assigned to you</h2>
-  {{ task_table(mine, empty="Nothing of yours is overdue, in progress or due in the next " ~ due_soon_days ~ " days.") }}
+  {% if my_orders %}
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Work order</th><th>Where</th><th>Needed by</th><th>Priority</th></tr></thead>
+    <tbody>{% for o in my_orders %}
+    <tr class="{{ 'row-warn' if o.late }}"><td><a href="{{ url_for('maint.order', order_id=o.id) }}">{{ o.number }} {{ o.title }}</a></td>
+      <td>{{ o.equipment_name or o.location or '—' }}</td><td class="nowrap">{{ o.due|d if o.due else '—' }}</td><td>{{ priority(o.priority, o.priority_label) }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+  {{ task_table(mine, empty="No tasks of yours are overdue, in progress or due in the next " ~ due_soon_days ~ " days.") }}
 </section>
 {% endif %}
 
 <div class="two-col">
 <section class="card">
-  <div class="card-head"><h2>Overdue</h2>{% if overdue %}<a href="{{ url_for('maint.tasks', status='overdue') }}">All overdue →</a>{% endif %}</div>
+  <div class="card-head"><h2>New requests</h2><a href="{{ url_for('maint.requests') }}">All →</a></div>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Request</th><th>Where</th><th>Priority</th></tr></thead>
+    <tbody>{% for r in new_requests[:8] %}
+    <tr><td><a href="{{ url_for('maint.request', request_id=r.id) }}">{{ r.title }}</a><div class="muted small">{{ r.number }} · {{ r.reported_by or '' }}</div></td>
+      <td>{{ r.equipment_name or r.location or '—' }}</td><td>{{ priority(r.priority, r.priority_label) }}</td></tr>
+    {% else %}<tr><td colspan="3" class="muted">No requests waiting.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<section class="card">
+  <div class="card-head"><h2>Work orders</h2><a href="{{ url_for('maint.orders') }}">All →</a></div>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Work order</th><th>Assigned to</th><th>Needed by</th></tr></thead>
+    <tbody>{% for o in orders[:8] %}
+    <tr class="{{ 'row-warn' if o.late }}"><td><a href="{{ url_for('maint.order', order_id=o.id) }}">{{ o.title }}</a><div class="muted small">{{ o.number }} · {{ o.status_label }}</div></td>
+      <td>{{ o.assignee_name or '—' }}</td><td class="nowrap">{{ o.due|d if o.due else '—' }}</td></tr>
+    {% else %}<tr><td colspan="3" class="muted">No open work orders.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+</div>
+
+<div class="two-col">
+<section class="card">
+  <div class="card-head"><h2>Overdue tasks</h2>{% if overdue %}<a href="{{ url_for('maint.tasks', status='overdue') }}">All overdue →</a>{% endif %}</div>
   {{ task_table(overdue[:12], show_location=false, empty="Nothing is overdue.") }}
 </section>
 <section class="card">

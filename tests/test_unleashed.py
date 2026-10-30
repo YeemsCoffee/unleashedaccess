@@ -24,7 +24,9 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "ul_sync_runs", "ul_sync_state", "ul_sync_lock", "app_users", "app_settings",
               "prod_steps", "prod_runs", "prod_step_records", "prod_step_entries",
               "access_profiles", "app_user_profiles", "maint_locations", "maint_tasks",
-              "maint_completions", "maint_attachments")
+              "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
+              "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
+              "maint_order_costs", "maint_files")
 
 
 def sqlite_database(testcase):
@@ -883,7 +885,7 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn("Descale espresso machine", here)
         self.assertNotIn("Clean grinder burrs", here)
         csv = self.c.get("/maintenance/tasks?format=csv").get_data(as_text=True)
-        self.assertTrue(csv.startswith("Task,Location,Status"))
+        self.assertTrue(csv.startswith("Task,Location,Location code,Equipment,Status"))
         self.assertIn("Gardena › Kitchen", csv)
 
         # Done 65 days late: it keeps its 30-day schedule, next due after today.
@@ -905,7 +907,7 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn("Skipped", history)
         self.assertIn("Scale was heavy", history)
         self.assertTrue(self.c.get("/maintenance/history?start=2026-01-01&end=2030-12-31&format=csv").get_data(as_text=True)
-                        .startswith("Task,Location,Status,Was due"))
+                        .startswith("Done at,Work,Type,Status,Location"))
 
         # Editing: in progress, a new due date.
         self.c.post(f"/maintenance/tasks/{grinder}/edit", data={
@@ -990,6 +992,253 @@ class MaintenanceTests(unittest.TestCase):
         past = self.c.post(f"/maintenance/tasks/{weekly}/reschedule", data={"from": "2026-07-18", "to": "2026-07-10"})
         self.assertIn("That date has passed, so it's overdue.", past.get_json()["message"])
         self.assertEqual(self.store.task(weekly, TODAY)["status"], "overdue")
+
+
+
+class MaintenancePlantTests(unittest.TestCase):
+    """SAP-style maintenance: location codes and master data, templates, equipment and its
+    counters, usage-based tasks, task lists, requests and work orders with their costs."""
+
+    def setUp(self):
+        self.app = make_app(self, UNLEASHED_MODE="mock", TODAY=TODAY)
+        self.c = self.app.test_client()
+        self.store = self.app.extensions["maintenance"]
+
+    def _post(self, path, **data):
+        res = self.c.post(path, data=data)
+        self.assertIn(res.status_code, (302, 303), res.get_data(as_text=True)[:3000])
+        return res
+
+    def _new_id(self, res):
+        return int(res.headers["Location"].rstrip("/").rsplit("/", 1)[1].split("#")[0])
+
+    def _location(self, name, parent=None, **fields):
+        res = self._post("/maintenance/locations", name=name, parent_id=str(parent or ""), **fields)
+        return self._new_id(res)
+
+    def _store_tree(self):
+        """Gardena (GAR, site, cost center 4100, A) › Kitchen (GAR-KIT) › Espresso (GAR-KIT-ESP)."""
+        gar = self._location("Gardena", code="gar", site="Gardena store", cost_center="4100", criticality="A")
+        kit = self._location("Kitchen", gar, code="GAR-KIT", work_center="Maintenance team")
+        esp = self._location("Espresso station", kit, code="GAR-KIT-ESP", criticality="B")
+        return gar, kit, esp
+
+    def test_location_codes_nest_and_master_data_comes_from_above(self):
+        gar, kit, esp = self._store_tree()
+        loc = self.store.location(esp)
+        self.assertEqual((loc["label"], loc["path"]), ("GAR-KIT-ESP · Espresso station", "Gardena › Kitchen › Espresso station"))
+        self.assertEqual((loc["eff_site"], loc["from_site"]), ("Gardena store", "Gardena"))
+        self.assertEqual((loc["eff_cost_center"], loc["eff_work_center"]), ("4100", "Maintenance team"))
+        self.assertEqual((loc["eff_criticality"], loc["from_criticality"]), ("B", None))  # its own
+        bad = self.c.post("/maintenance/locations", data={"name": "Bar", "parent_id": str(gar), "code": "BAR"})
+        self.assertIn("Codes under GAR · Gardena start with GAR-.", bad.get_data(as_text=True))
+        taken = self.c.post("/maintenance/locations", data={"name": "Other", "code": "gar-kit"})
+        self.assertIn("already has the code GAR-KIT", taken.get_data(as_text=True))
+        self.assertIn("Codes use letters", self.c.post("/maintenance/locations", data={"name": "X", "code": "A B!"}
+                                                      ).get_data(as_text=True))
+        # Renaming a code renames the codes under it.
+        self._post("/maintenance/locations", id=str(gar), name="Gardena", code="GDN", site="Gardena store",
+                   cost_center="4100", criticality="A")
+        self.assertEqual([l["code"] for l in self.store.locations()], ["GDN", "GDN-KIT", "GDN-KIT-ESP"])
+        page = self.c.get(f"/maintenance/locations/{esp}").get_data(as_text=True)
+        for text in ("GDN-KIT-ESP", "from Gardena", "Copy this structure", "Maintenance team"):
+            self.assertIn(text, page)
+        self.assertEqual([l["code"] for l in self.store.search_locations("kit")], ["GDN-KIT", "GDN-KIT-ESP"])
+
+    def test_a_template_is_copied_to_set_up_a_new_store(self):
+        tpl = self._location("Store template", code="TPL", is_template="1", cost_center="4000")
+        bar = self._location("Bar", tpl, code="TPL-BAR")
+        self._post("/maintenance/tasks/new", name="Clean ice machine", frequency_days="30",
+                   next_due="2026-07-01", location_id=str(bar))
+        self.assertEqual(self.store.tasks(TODAY), [])  # a template's tasks never come due
+        self.assertEqual(len(self.store.tasks(TODAY, bar)), 1)  # but show when looking inside it
+        self.assertIn("never come due", self.c.get(f"/maintenance/tasks?location={bar}").get_data(as_text=True))
+        res = self._post(f"/maintenance/locations/{tpl}/copy", name="Torrance", code="TOR", with_tasks="1",
+                         first_due="2026-07-20")
+        tor = self._new_id(res)
+        copied = {l["code"]: l for l in self.store.locations() if not l["in_template"]}
+        self.assertEqual(sorted(copied), ["TOR", "TOR-BAR"])
+        self.assertEqual(copied["TOR-BAR"]["eff_cost_center"], "4000")
+        live = self.store.tasks(TODAY)
+        self.assertEqual([(t["name"], t["location"], t["next_due"]) for t in live],
+                         [("Clean ice machine", "Torrance › Bar", dt.date(2026, 7, 20))])
+        clash = self.c.post(f"/maintenance/locations/{tpl}/copy", data={"name": "Again", "code": "TOR"}, follow_redirects=True)
+        self.assertIn("already has the code TOR", clash.get_data(as_text=True))
+        self.assertEqual(len([l for l in self.store.locations() if l["name"] == "Again"]), 0)  # nothing half made
+        self.assertIn("is a template", self.c.post("/maintenance/equipment/new", data={
+            "name": "Ice machine", "location_id": str(bar)}).get_data(as_text=True))
+        self.assertIsNotNone(tor)
+
+    def test_new_columns_are_added_to_an_earlier_database(self):
+        from maintenance_store import migrate
+        db = self.app.extensions["db"]
+        db.execute("ALTER TABLE maint_tasks DROP COLUMN counter_id")
+        db.execute("ALTER TABLE maint_locations DROP COLUMN code")
+        migrate(db)
+        migrate(db)  # and again: nothing to do
+        db.execute("UPDATE maint_tasks SET counter_id = NULL")
+        db.execute("UPDATE maint_locations SET code = NULL")
+
+    def test_equipment_moves_and_its_tasks_follow(self):
+        gar, kit, esp = self._store_tree()
+        bar = self._location("Bar", gar, code="GAR-BAR")
+        res = self._post("/maintenance/equipment/new", name="Grinder 1", category="Grinder", manufacturer="Mahlkönig",
+                         model="E80", serial_number="SN-123", location_id=str(esp), installed_on="2026-01-10",
+                         warranty_until="2027-01-10", purchase_cost="2400")
+        grinder = self._new_id(res)
+        item = self.store.equipment(grinder)
+        self.assertEqual((item["number"], item["status"], item["location"]), ("EQ-00001", "installed", "GAR-KIT-ESP · Espresso station"))
+        self.assertEqual(item["criticality_used"], "B")  # from where it is
+        self._post("/maintenance/tasks/new", name="Clean burrs", frequency_days="7", next_due="2026-07-16",
+                   equipment_id=str(grinder), location_id=str(bar))  # the equipment decides where
+        self.assertEqual(self.store.tasks(TODAY, equipment_id=grinder)[0]["location"], "Gardena › Kitchen › Espresso station")
+        self._post(f"/maintenance/equipment/{grinder}/move", action="install", location_id=str(bar), on_date="2026-07-01",
+                   note="Swapped with grinder 2")
+        self.assertEqual(self.store.tasks(TODAY, bar)[0]["name"], "Clean burrs")
+        self.assertEqual([m["action"] for m in self.store.equipment(grinder)["moves"]], ["installed", "dismantled", "installed"])
+        self.assertIn("Swapped with grinder 2", self.c.get(f"/maintenance/equipment/{grinder}").get_data(as_text=True))
+        refused = self.c.post(f"/maintenance/equipment/{grinder}/move", data={"action": "retire"}, follow_redirects=True)
+        self.assertIn("has 1 task", refused.get_data(as_text=True))
+        self._post(f"/maintenance/equipment/{grinder}/move", action="storage")
+        self.assertEqual(self.store.equipment(grinder)["status"], "storage")
+        self.assertIsNone(self.store.tasks(TODAY, equipment_id=grinder)[0]["location"])
+        listing = self.c.get("/maintenance/equipment?q=e80").get_data(as_text=True)
+        self.assertIn("Grinder 1", listing)
+        self.assertTrue(self.c.get("/maintenance/equipment?format=csv").get_data(as_text=True).startswith("Number,Asset tag,Name"))
+        self.assertIn("has tasks", self.c.post(f"/maintenance/equipment/{grinder}/delete", follow_redirects=True
+                                               ).get_data(as_text=True))
+
+    def test_usage_based_tasks_come_due_by_their_counter(self):
+        gar, kit, esp = self._store_tree()
+        machine = self._new_id(self._post("/maintenance/equipment/new", name="Espresso machine", location_id=str(esp)))
+        self._post(f"/maintenance/equipment/{machine}/counters", name="Shots", unit="shots", value="10000")
+        counter = self.store.equipment(machine)["counters"][0]["id"]
+        self.assertIn("Say how much use", self.c.post("/maintenance/tasks/new", data={
+            "name": "Gaskets", "equipment_id": str(machine), "counter_id": str(counter)}).get_data(as_text=True))
+        task = self._new_id(self._post("/maintenance/tasks/new", name="Replace group gaskets", equipment_id=str(machine),
+                                       counter_id=str(counter), usage_interval="5000"))
+        t = self.store.task(task, TODAY)
+        self.assertEqual((t["usage"]["due_at"], t["usage"]["left"], t["next_due"]), (15000, 5000, None))
+        self.assertEqual(t["due_label"], "At 15,000 shots (now 10,000)")  # no rate yet
+        # Readings: 300 shots a day.
+        db = self.app.extensions["db"]
+        db.execute("UPDATE maint_readings SET read_on = ? WHERE counter_id = ?", ((TODAY - dt.timedelta(days=10)).isoformat(), counter))
+        self._post(f"/maintenance/counters/{counter}/readings", value="13000", read_on=TODAY.isoformat())
+        lower = self.c.post(f"/maintenance/counters/{counter}/readings", data={"value": "12000"}, follow_redirects=True)
+        self.assertIn("lower than the reading before it (13,000 shots)", lower.get_data(as_text=True))
+        t = self.store.task(task, TODAY)
+        self.assertEqual((t["usage"]["rate"], t["next_due"]), (300, TODAY + dt.timedelta(days=7)))
+        self.assertEqual(t["due_label"], "In 2,000 shots (about Jul 22)")
+        self.assertFalse(t["due_soon"])  # a week away: just past "the next 7 days"
+        self._post(f"/maintenance/counters/{counter}/readings", value="15200", read_on=TODAY.isoformat())
+        t = self.store.task(task, TODAY)
+        self.assertEqual((t["status"], t["due_label"]), ("overdue", "Due: 15,200 of 15,000 shots"))
+        # Recording it with the reading counts the next 5,000 from there.
+        done = self.c.post(f"/maintenance/tasks/{task}/complete", data={"status": "completed", "reading": "15300"},
+                           follow_redirects=True).get_data(as_text=True)
+        self.assertIn("next due at 20,300 shots", done)
+        self.assertEqual(self.store.task(task, TODAY)["usage"]["due_at"], 20300)
+        # Every 90 days or 20,000 shots, whichever first: done now, both clocks start again.
+        both = self._new_id(self._post("/maintenance/tasks/new", name="Service", equipment_id=str(machine),
+                                       counter_id=str(counter), usage_interval="20000", frequency_days="90",
+                                       next_due="2026-07-01"))
+        self.assertEqual(self.store.task(both, TODAY)["status"], "overdue")  # by date
+        self._post(f"/maintenance/tasks/{both}/complete", status="completed")
+        t = self.store.task(both, TODAY)
+        self.assertEqual((t["time_due"], t["usage"]["due_at"]), (TODAY + dt.timedelta(days=90), 35300))
+        self.assertFalse(t["movable"] and t["usage"]["projected"] and t["usage"]["projected"] < t["time_due"])
+
+    def test_task_lists_are_ticked_off_when_work_is_recorded(self):
+        res = self.c.post("/maintenance/tasklists/new", data={
+            "name": "Grinder burr clean", "rows": "4", "op-text-0": "Unplug and empty the hopper", "op-minutes-0": "2",
+            "op-text-1": "Remove and brush the burrs", "op-minutes-1": "10", "op-text-2": "", "op-text-3": "Reassemble"})
+        tasklist = self._new_id(res)
+        found = self.store.tasklist(tasklist)
+        self.assertEqual(([o["text"] for o in found["operations"]], found["minutes"]),
+                         (["Unplug and empty the hopper", "Remove and brush the burrs", "Reassemble"], 12))
+        task = self._new_id(self._post("/maintenance/tasks/new", name="Burr clean", frequency_days="7",
+                                       next_due=TODAY.isoformat(), tasklist_id=str(tasklist)))
+        page = self.c.get(f"/maintenance/tasks/{task}").get_data(as_text=True)
+        self.assertIn('name="op-2"', page)
+        self._post(f"/maintenance/tasks/{task}/complete", status="completed", **{"op-0": "1", "op-2": "1"},
+                   parts_cost="12.50", labor_hours="0.25")
+        c = self.store.task(task, TODAY)["completions"][0]
+        self.assertEqual([s["done"] for s in c["steps"]], [True, False, True])
+        self.assertIn("2 of 3 steps", self.c.get(f"/maintenance/tasks/{task}").get_data(as_text=True))
+        self.assertIn("1 task uses Grinder burr clean", self.c.post(f"/maintenance/tasklists/{tasklist}/delete",
+                                                            follow_redirects=True).get_data(as_text=True))
+        history = self.store.work_done()
+        self.assertEqual((history[0]["cost"], history[0]["labor_hours"]), (12.5, 0.25))
+
+    def test_requests_become_work_orders_with_costs(self):
+        gar, kit, esp = self._store_tree()
+        grinder = self._new_id(self._post("/maintenance/equipment/new", name="Grinder 2", location_id=str(esp),
+                                          criticality="A"))
+        self.assertIn("Say where it is", self.c.post("/maintenance/requests/new", data={"title": "Noise"}).get_data(as_text=True))
+        req = self._new_id(self._post("/maintenance/requests/new", title="Grinder 2 won't start", equipment_id=str(grinder),
+                                      breakdown="1", description="Clicks, then nothing"))
+        r = self.store.request(req)
+        self.assertEqual((r["number"], r["priority"], r["location"], r["status"]),
+                         ("R-00001", 1, "GAR-KIT-ESP · Espresso station", "open"))  # machine down: very high
+        quiet = self._new_id(self._post("/maintenance/requests/new", title="Drip tray loose", equipment_id=str(grinder)))
+        self.assertEqual(self.store.request(quiet)["priority"], 2)  # criticality A: high
+        overview = self.c.get("/maintenance/").get_data(as_text=True)
+        self.assertIn("Machines down", overview)
+        self.assertIn("1 machine down", overview)
+
+        form = self.c.get(f"/maintenance/orders/new?request={req}").get_data(as_text=True)
+        self.assertIn('value="Grinder 2 won&#39;t start"', form)
+        order = self._new_id(self._post("/maintenance/orders/new", request=str(req), title="Replace grinder 2 motor",
+                                        equipment_id=str(grinder), due_date="2026-07-14"))
+        self.assertEqual(self.store.request(req)["status"], "ordered")
+        self.assertIn(f'href="/maintenance/orders/{order}"', self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True))
+        o = self.store.order(order, TODAY)
+        self.assertEqual((o["number"], o["priority"], o["late"], o["cost_center"]), ("WO-00001", 2, True, "4100"))
+        self._post(f"/maintenance/orders/{order}/status", action="start")
+        self._post(f"/maintenance/orders/{order}/costs", kind="labor", description="Mo", quantity="2", unit_cost="45")
+        self._post(f"/maintenance/orders/{order}/costs", kind="part", description="Motor", quantity="1", unit_cost="310.50")
+        self.assertIn("Choose labor", self.c.post(f"/maintenance/orders/{order}/costs", data={
+            "kind": "x", "description": "?", "quantity": "1", "unit_cost": "1"}, follow_redirects=True).get_data(as_text=True))
+        o = self.store.order(order, TODAY)
+        self.assertEqual((o["cost"], o["labor_hours"], o["by_kind"]["Labor"]), (400.5, 2, 90))
+        self._post(f"/maintenance/orders/{order}/status", action="complete", findings="Motor burnt out; replaced.")
+        r = self.store.request(req)
+        self.assertEqual((r["status"], r["resolution"]), ("closed", "Motor burnt out; replaced."))
+        locked = self.c.post(f"/maintenance/orders/{order}/costs", data={"kind": "part", "description": "More",
+                                                                      "quantity": "1", "unit_cost": "1"}, follow_redirects=True)
+        self.assertIn("reopen it to change its costs", locked.get_data(as_text=True))
+        history = self.c.get(f"/maintenance/history?start=2026-01-01&end=2030-12-31&location={gar}").get_data(as_text=True)
+        for text in ("WO-00001 Replace grinder 2 motor", "$400.50", "4100", "Grinder 2"):
+            self.assertIn(text, history)
+        self.assertIn("$400.50", self.c.get(f"/maintenance/equipment/{grinder}").get_data(as_text=True))
+        # Reopened and cancelled: the request is open again.
+        self._post(f"/maintenance/orders/{order}/status", action="reopen")
+        self.assertIn("Say why", self.c.post(f"/maintenance/orders/{order}/status", data={"action": "cancel"},
+                                             follow_redirects=True).get_data(as_text=True))
+        self._post(f"/maintenance/orders/{order}/status", action="cancel", findings="Under warranty: vendor fixing")
+        self.assertEqual((self.store.request(req)["status"], self.store.request(req)["order_id"]), ("open", None))
+        self._post(f"/maintenance/requests/{quiet}/close", outcome="closed", resolution="Tightened the screw")
+        self.assertEqual(self.store.request(quiet)["status"], "closed")
+        self.assertTrue(self.c.get("/maintenance/orders?status=all&format=csv").get_data(as_text=True).startswith("Number,Title"))
+        cal = self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True)
+        self.assertNotIn(f'href="/maintenance/orders/{order}"', cal)  # cancelled: off the calendar
+
+    def test_files_go_with_equipment_requests_and_orders(self):
+        import io
+        gar, kit, esp = self._store_tree()
+        machine = self._new_id(self._post("/maintenance/equipment/new", name="Brewer", location_id=str(esp)))
+        self.c.post(f"/maintenance/files/equipment/{machine}", data={"file": (io.BytesIO(b"%PDF manual"), "Manual.pdf")},
+                    content_type="multipart/form-data")
+        files = self.store.equipment(machine)["files"]
+        self.assertEqual(files[0]["filename"], "Manual.pdf")
+        self.assertEqual(self.c.get(f"/maintenance/files/{files[0]['id']}").data, b"%PDF manual")
+        req = self.c.post("/maintenance/requests/new", data={"title": "Leaking", "equipment_id": str(machine),
+                                                             "file": (io.BytesIO(b"\x89PNG"), "leak.png")},
+                          content_type="multipart/form-data")
+        request_id = self._new_id(req)
+        self.assertEqual(self.store.request(request_id)["files"][0]["filename"], "leak.png")
+        self.c.post(f"/maintenance/files/{files[0]['id']}/delete")
+        self.assertEqual(self.store.equipment(machine)["files"], [])
 
 
 class RefusingTransport(WsgiTransport):
@@ -1510,7 +1759,7 @@ class TeamAccountTests(unittest.TestCase):
         bea = restarted.extensions["users"].by_email("bea@yeems.test")
         self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production"})
         owner = restarted.extensions["users"].by_email("owner@yeems.test")
-        self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance"})
+        self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance", "maint_requests"})
 
     def test_profiles_decide_which_tabs_each_person_opens(self):
         admin = self._admin_client()
@@ -1614,6 +1863,37 @@ class TeamAccountTests(unittest.TestCase):
         self.assertIsNotNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
         admin.post(f"/maintenance/tasks/{task_id}/delete")
         self.assertIsNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
+
+    def test_people_who_only_report_problems(self):
+        admin = self._admin_client()
+        admin.post("/settings/profiles", data={"name": "Barista", "areas": ["maint_requests"]})
+        temp = self._add(admin, "Barista Bea", "bea@yeems.test", profile="Barista")
+        bea = self.app.test_client()
+        self._sign_in(bea, "bea@yeems.test", temp)
+        self._choose_password(bea, temp, "bea-own-password1")
+        self.assertEqual(bea.get("/").headers["Location"], "/maintenance/requests")
+        page = bea.get("/maintenance/requests").get_data(as_text=True)
+        self.assertIn(">Maintenance<", page)
+        self.assertIn(">Requests<", page)
+        for tab in (">Work orders<", ">Tasks<", ">Equipment<", ">Overview<"):
+            self.assertNotIn(tab, page)
+        self.assertEqual(bea.get("/maintenance/").headers["Location"], "/maintenance/requests")
+        admin.post("/maintenance/locations", data={"name": "Gardena"})
+        loc = self.app.extensions["maintenance"].locations()[0]["id"]
+        res = bea.post("/maintenance/requests/new", data={"title": "Fridge warm", "location_id": str(loc)})
+        req = int(res.headers["Location"].rsplit("/", 1)[1])
+        mine = bea.get(f"/maintenance/requests/{req}").get_data(as_text=True)
+        self.assertIn("Fridge warm", mine)
+        self.assertNotIn("Make a work order", mine)
+        for path in ("/maintenance/orders", "/maintenance/tasks", "/maintenance/equipment", f"/maintenance/orders/new?request={req}"):
+            self.assertEqual(bea.get(path).status_code, 403, path)
+        self.assertEqual(bea.post(f"/maintenance/requests/{req}/close", data={"outcome": "rejected", "resolution": "x"}).status_code, 403)
+        import io
+        bea.post(f"/maintenance/files/request/{req}", data={"file": (io.BytesIO(b"GIF89a"), "fridge.gif")},
+                 content_type="multipart/form-data")
+        self.assertEqual(len(self.app.extensions["maintenance"].request(req)["files"]), 1)
+        # The maintenance team sees it and deals with it.
+        self.assertIn("Make a work order", admin.get(f"/maintenance/requests/{req}").get_data(as_text=True))
 
     def test_admin_reset_restores_access(self):
         self._admin_client()

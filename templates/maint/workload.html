@@ -4,14 +4,15 @@
 <div class="page-head"><h1>Workload</h1><a class="btn" href="{{ csv_url }}">CSV</a></div>
 <section class="card">
   <div class="table-wrap"><table>
-    <thead><tr><th>Person</th><th class="num">Tasks</th><th class="num">Overdue</th><th class="num">Due in {{ due_soon_days }} days</th><th class="wide-only bar-col"></th></tr></thead>
+    <thead><tr><th>Person</th><th class="num">Tasks</th><th class="num">Overdue</th><th class="num">Due in {{ due_soon_days }} days</th><th class="num">Work orders</th><th class="wide-only bar-col"></th></tr></thead>
     <tbody>{% for r in rows %}
     <tr><td>{% if r.id %}<a href="{{ url_for('maint.tasks', person=r.id) }}">{{ r.name }}</a>{% else %}<a href="{{ url_for('maint.tasks', status='unassigned') }}">{{ r.name }}</a>{% endif %}
         {% if r.email %}<div class="muted small">{{ r.email }}</div>{% endif %}</td>
       <td class="num">{{ r.tasks }}</td><td class="num{{ ' due-late' if r.overdue }}">{{ r.overdue }}</td><td class="num">{{ r.due_soon }}</td>
-      <td class="wide-only bar-col"><div class="bar"><div class="bar-fill" style="width: {{ (100 * r.tasks / most)|round(0) }}%"></div></div></td></tr>
-    {% else %}<tr><td colspan="5" class="muted">No one can open Maintenance yet. Give people a profile with Maintenance on the Team page.</td></tr>{% endfor %}</tbody>
+      <td class="num">{% if r.id %}<a href="{{ url_for('maint.orders', person=r.id) }}">{{ r.orders }}</a>{% else %}{{ r.orders }}{% endif %}{% if r.late_orders %} <span class="due-late small">{{ r.late_orders }} late</span>{% endif %}</td>
+      <td class="wide-only bar-col"><div class="bar"><div class="bar-fill" style="width: {{ (100 * (r.tasks + r.orders) / most)|round(0) }}%"></div></div></td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No one can open Maintenance yet. Give people a profile with Maintenance on the Team page.</td></tr>{% endfor %}</tbody>
   </table></div>
-  <p class="muted">Everyone who can open Maintenance, and the tasks assigned to each.</p>
+  <p class="muted">Everyone who can open Maintenance: their tasks and open work orders.</p>
 </section>
 {% endblock %}

@@ -1,0 +1,41 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import priority, state, files %}
+{% block title %}{{ r.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ r.title }} {{ state(r.status, r.status_label) }}</h1>
+  <a href="{{ url_for('maint.requests') }}">← Requests</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Request</dt><dd>{{ r.number }}</dd></div>
+    <div><dt>Priority</dt><dd>{{ priority(r.priority, r.priority_label) }}{{ ' · machine down' if r.breakdown }}</dd></div>
+    {% if r.equipment_id %}<div><dt>Equipment</dt><dd>{% if can_manage %}<a href="{{ url_for('maint.equipment', equipment_id=r.equipment_id) }}">{{ r.equipment_name }}</a>{% else %}{{ r.equipment_name }}{% endif %}</dd></div>{% endif %}
+    <div><dt>Where</dt><dd>{% if r.location_id and can_manage %}<a href="{{ url_for('maint.location', location_id=r.location_id) }}">{{ r.location_path }}</a>{% else %}{{ r.location_path or '—' }}{% endif %}</dd></div>
+    <div><dt>Reported</dt><dd>{{ r.reported_at|local }} · {{ r.reported_by or '' }}</dd></div>
+    {% if r.order_id %}<div><dt>Work order</dt><dd>{% if can_manage %}<a href="{{ url_for('maint.order', order_id=r.order_id) }}">{{ r.order_number }}</a>{% else %}{{ r.order_number }}{% endif %}</dd></div>{% endif %}
+    {% if r.closed_at %}<div><dt>{{ 'Closed' if r.status == 'closed' else 'Rejected' }}</dt><dd>{{ r.closed_at|local }} · {{ r.closed_by or '' }}</dd></div>{% endif %}
+  </dl>
+  {% if r.description %}<p class="instructions">{{ r.description }}</p>{% endif %}
+  {% if r.resolution %}<div class="proc-notes"><h3>{{ 'Why it was rejected' if r.status == 'rejected' else 'What was done' }}</h3><p class="instructions">{{ r.resolution }}</p></div>{% endif %}
+</section>
+
+{% if can_manage and r.status == 'open' %}
+<section class="card">
+  <h2>Deal with it</h2>
+  <div class="run-actions"><a class="btn btn-primary" href="{{ url_for('maint.order_new', request=r.id) }}">Make a work order</a></div>
+  <form method="post" action="{{ url_for('maint.request_close', request_id=r.id) }}" class="maint-form">
+    <label class="block">Or close it without one <textarea name="resolution" rows="2" maxlength="2000" required placeholder="What was done, or why it's rejected"></textarea></label>
+    <div class="run-actions">
+      <button class="btn" name="outcome" value="closed">Close: it's fixed</button>
+      <button class="btn btn-quiet" name="outcome" value="rejected">Reject</button>
+    </div>
+  </form>
+</section>
+{% endif %}
+
+<section class="card" id="files">
+  <h2>Photos and files</h2>
+  {{ files(r.files, url_for('maint.file_add', object_type='request', object_id=r.id), can_add=can_add_files, can_remove=can_manage, hint='A photo of the problem helps.') }}
+</section>
+{% endblock %}

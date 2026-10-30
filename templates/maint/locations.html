@@ -1,9 +1,14 @@
 {% extends "dash/base.html" %}
+{% from "maint/_macros.html" import location_options, crit %}
 {% block title %}Maintenance locations{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Locations</h1></div>
-<p class="muted">Functional locations organise tasks by where they're done: a building, its rooms, the equipment in
-  them. A location's tasks include the ones in the locations under it.</p>
+<div class="page-head">
+  <h1>Locations</h1>
+  <form method="get" class="filters"><label>Find <input name="q" value="{{ q }}" placeholder="Code or name"></label><button class="btn btn-primary">Find</button></form>
+</div>
+<p class="muted">Functional locations are the places maintenance is done: a store, its kitchen, the espresso machine's spot in
+  it. Codes nest (GAR, GAR-KIT, GAR-KIT-ESP); site, cost center, work center and criticality left blank come from the
+  location above. A <strong>template</strong> is a reference structure, with its tasks, to copy when setting up a new store.</p>
 {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 
 <section class="card">
@@ -13,38 +18,46 @@
     {% if editing %}<input type="hidden" name="id" value="{{ editing.id }}">{% endif %}
     <div class="filters new-order">
       <label class="wide">Name <input name="name" value="{{ f.name or '' }}" maxlength="100" required placeholder="e.g. Gardena kitchen"></label>
+      <label>Code <input name="code" value="{{ f.code or '' }}" maxlength="40" placeholder="e.g. GAR-KIT" autocapitalize="characters"></label>
       <label>Under
         <select name="parent_id">
           <option value="">Nothing: a top-level location</option>
-          {% for l in locations if l.id not in blocked %}<option value="{{ l.id }}" {{ 'selected' if f.parent_id|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.name }}</option>{% endfor %}
+          {{ location_options(locations, f.parent_id or '', blocked) }}
         </select></label>
     </div>
+    <div class="filters new-order">
+      <label>Site <input name="site" value="{{ f.site or '' }}" maxlength="60" placeholder="e.g. Gardena store"></label>
+      <label>Cost center <input name="cost_center" value="{{ f.cost_center or '' }}" maxlength="40" placeholder="e.g. 4100"></label>
+      <label>Work center <input name="work_center" value="{{ f.work_center or '' }}" maxlength="60" placeholder="Who looks after it"></label>
+      <label>Criticality
+        <select name="criticality"><option value="">From above</option>
+          {% for k, label in criticalities.items() %}<option value="{{ k }}" {{ 'selected' if (f.criticality or '') == k }}>{{ label }}</option>{% endfor %}</select></label>
+    </div>
     <label class="block">Description <textarea name="description" rows="2" maxlength="2000" placeholder="Optional">{{ f.description or '' }}</textarea></label>
+    <label class="check-field"><input type="checkbox" name="is_template" value="1" {{ 'checked' if f.is_template }}> Template: a reference structure to copy (its tasks never come due)</label>
     <div class="run-actions">
       <button class="btn btn-primary">{{ 'Save' if editing else 'Add location' }}</button>
-      {% if editing %}<a class="btn" href="{{ url_for('maint.locations') }}">Cancel</a>{% endif %}
+      {% if editing %}<a class="btn" href="{{ url_for('maint.location', location_id=editing.id) }}">Cancel</a>{% endif %}
     </div>
   </form>
 </section>
 
 <section class="card">
-  <h2>All locations</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Location</th><th class="num">Tasks</th><th></th></tr></thead>
-    <tbody>{% for l in locations %}
-    <tr><td><span class="loc-indent" style="--depth: {{ l.depth }}"></span><a href="{{ url_for('maint.tasks', location=l.id) }}">{{ l.name }}</a>
-        {% if l.description %}<div class="muted small loc-indent-text" style="--depth: {{ l.depth }}">{{ l.description }}</div>{% endif %}</td>
-      <td class="num">{{ l.tasks }}</td>
+  <h2>{{ 'Found' if q else 'All locations' }}</h2>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Location</th><th class="wide-only">Cost center</th><th class="center">Crit.</th><th class="num">Equipment</th><th class="num">Tasks</th><th></th></tr></thead>
+    <tbody>{% for l in shown %}
+    <tr class="{{ 'row-sub' if l.in_template }}"><td><span class="loc-indent" style="--depth: {{ 0 if q else l.depth }}"></span>{% if l.code %}<span class="loc-code">{{ l.code }}</span> {% endif %}<a href="{{ url_for('maint.location', location_id=l.id) }}">{{ l.name }}</a>
+        {% if l.is_template %}<span class="pill">Template</span>{% endif %}
+        {% if q %}<div class="muted small">{{ l.path }}</div>{% elif l.description %}<div class="muted small loc-indent-text" style="--depth: {{ l.depth }}">{{ l.description }}</div>{% endif %}</td>
+      <td class="wide-only">{{ l.eff_cost_center or '' }}</td>
+      <td class="center">{{ crit(l.eff_criticality) }}</td>
+      <td class="num">{{ l.equipment or '' }}</td><td class="num">{{ l.tasks }}</td>
       <td class="row-actions">
-        <a class="btn btn-quiet" href="{{ url_for('maint.task_new', location=l.id) }}">+ Task</a>
+        <a class="btn btn-quiet" href="{{ url_for('maint.locations', parent=l.id) }}" title="Add a location under {{ l.name }}">+ Under</a>
         <a class="btn btn-quiet" href="{{ url_for('maint.locations', edit=l.id) }}">Edit</a>
-        {% if can_delete and not l.children and not l.here %}
-        <form method="post" action="{{ url_for('maint.location_delete', location_id=l.id) }}"
-              onsubmit='return confirm({{ ("Delete " ~ l.name ~ "?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>
-        {% endif %}
       </td></tr>
-    {% else %}<tr><td colspan="3" class="muted">No locations yet.</td></tr>{% endfor %}</tbody>
+    {% else %}<tr><td colspan="6" class="muted">{{ 'Nothing matches.' if q else 'No locations yet.' }}</td></tr>{% endfor %}</tbody>
   </table></div>
-  {% if can_delete %}<p class="muted small">A location can be deleted once it has no tasks and no locations under it.</p>{% endif %}
 </section>
 {% endblock %}

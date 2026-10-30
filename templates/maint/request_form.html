@@ -1,0 +1,23 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import location_options, equipment_options %}
+{% block title %}Report a problem{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Report a problem</h1><a href="{{ url_for('maint.requests') }}">← Requests</a></div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" enctype="multipart/form-data" class="card maint-form">
+  <div class="filters new-order">
+    <label class="wide">What's wrong <input name="title" value="{{ form.title or '' }}" maxlength="150" required placeholder="e.g. Grinder 2 won't start"></label>
+  </div>
+  <div class="filters new-order">
+    <label>Which equipment <select name="equipment_id"><option value="">Not a machine / don't know</option>{{ equipment_options(equipment, form.equipment_id or '') }}</select></label>
+    <label>Or where <select name="location_id"><option value="">Choose…</option>{{ location_options(locations, form.location_id or '') }}</select></label>
+    <label>Priority <select name="priority"><option value="">Automatic</option>
+      {% for k, label in priorities.items() %}<option value="{{ k }}" {{ 'selected' if form.priority|string == k|string }}>{{ label }}</option>{% endfor %}</select></label>
+  </div>
+  <label class="check-field"><input type="checkbox" name="breakdown" value="1" {{ 'checked' if form.breakdown }}> It's not working at all (machine down)</label>
+  <label class="block">Details <textarea name="description" rows="4" maxlength="5000" placeholder="What happened, any error codes, what you've tried">{{ form.description or '' }}</textarea></label>
+  <label class="block">Photo or file (optional) <input type="file" name="file" accept="{{ file_types }}"></label>
+  <p class="muted small">Automatic priority: very high when a machine is down, otherwise from how critical the equipment or place is.</p>
+  <div class="run-actions"><button class="btn btn-primary">Send</button><a class="btn" href="{{ url_for('maint.requests') }}">Cancel</a></div>
+</form>
+{% endblock %}

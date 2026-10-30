@@ -133,6 +133,19 @@ class Database:
                                                   "BIGSERIAL PRIMARY KEY").replace(" BLOB ", " BYTEA ")
                 conn.raw.execute(statement)
 
+    def ensure_columns(self, table, columns):
+        """Add whichever of `columns` ({name: SQL type}) `table` doesn't have yet: for a
+        database made by an earlier version, which CREATE TABLE IF NOT EXISTS leaves as is."""
+        with self.connect() as conn:
+            if self.dialect == "postgres":
+                for name, kind in columns.items():
+                    conn.raw.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {kind}")
+                return
+            have = {row[1] for row in conn.raw.execute(f"PRAGMA table_info({table})").fetchall()}
+            for name, kind in columns.items():
+                if name not in have:
+                    conn.raw.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
     def require_schema(self):
         """For view-only instances, which may connect with a read-only login."""
         try:

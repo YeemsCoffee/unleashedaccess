@@ -8,6 +8,7 @@ import dashboard
 import maintenance
 from access import Profiles
 from accounts import AccountError, UserStore, app_secret
+from maintenance_store import migrate as migrate_maintenance
 from unleashed.db import Database, database_url_from_env, is_postgres_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,6 +72,7 @@ def create_app(test_config=None):
         db.require_schema()  # created by the syncing instance; viewers may be read-only
     else:
         db.init_schema(os.path.join(BASE_DIR, "schema.sql"))
+        migrate_maintenance(db)  # columns added since the maintenance tables were first made
     app.extensions["db"] = db
 
     if not cfg["SECRET_KEY"]:

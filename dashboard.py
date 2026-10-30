@@ -146,9 +146,12 @@ _TABS = [
                     ("dash.production_requirements", "Material requirements"),
                     ("dash.production_boms", "Bills of materials"),
                     ("dash.production_usage", "Component usage")]),
-    ("maintenance", [("maint.overview", "Overview"), ("maint.tasks", "Tasks"),
-                     ("maint.locations", "Locations"), ("maint.calendar", "Calendar"),
-                     ("maint.workload", "Workload"), ("maint.history", "History")]),
+    # A page can need a narrower area than its tab: requests are open to people who only
+    # report problems.
+    ("maintenance", [("maint.overview", "Overview"), ("maint.requests", "Requests", "maint_requests"),
+                     ("maint.orders", "Work orders"), ("maint.tasks", "Tasks"), ("maint.tasklists", "Task lists"),
+                     ("maint.equipment_list", "Equipment"), ("maint.locations", "Locations"),
+                     ("maint.calendar", "Calendar"), ("maint.history", "History")]),
 ]
 _AREA_LABELS = dict(AREAS)
 _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "Team"),
@@ -168,8 +171,23 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "maint.task_reschedule": "maint.calendar",
             "maint.attachment_add": "maint.tasks", "maint.attachment": "maint.tasks",
             "maint.attachment_delete": "maint.tasks",
-            "maint.location_save": "maint.locations", "maint.location_delete": "maint.locations"}
-_AREA_OF_PAGE = {ep: area for area, pages in _TABS for ep, _ in pages}
+            "maint.location_save": "maint.locations", "maint.location_delete": "maint.locations",
+            "maint.location": "maint.locations", "maint.location_copy": "maint.locations",
+            "maint.workload": "maint.overview",
+            "maint.equipment": "maint.equipment_list", "maint.equipment_new": "maint.equipment_list",
+            "maint.equipment_edit": "maint.equipment_list", "maint.equipment_move": "maint.equipment_list",
+            "maint.equipment_delete": "maint.equipment_list", "maint.counter_add": "maint.equipment_list",
+            "maint.reading_add": "maint.equipment_list", "maint.counter_delete": "maint.equipment_list",
+            "maint.tasklist": "maint.tasklists", "maint.tasklist_new": "maint.tasklists",
+            "maint.tasklist_delete": "maint.tasklists",
+            # Requesters add photos to their requests and see them; the pages check other files.
+            "maint.request": "maint.requests", "maint.request_new": "maint.requests",
+            "maint.file_add": "maint.requests", "maint.file": "maint.requests", "maint.file_delete": "maint.requests",
+            "maint.request_close": "maint.orders",
+            "maint.order": "maint.orders", "maint.order_new": "maint.orders", "maint.order_edit": "maint.orders",
+            "maint.order_status": "maint.orders", "maint.order_cost_add": "maint.orders",
+            "maint.order_cost_delete": "maint.orders"}
+_AREA_OF_PAGE = {page[0]: (page[2] if len(page) > 2 else area) for area, pages in _TABS for page in pages}
 # Pages anyone signed in can open; Settings pages check for admins themselves.
 _GENERAL_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz", "dash.account", "dash.sync_now",
                       "dash.no_access"}
@@ -190,17 +208,26 @@ def user_areas():
     return g.user_areas
 
 
+def _visible_tabs():
+    """[(label, [(endpoint, name)])]: the tabs, and pages in each, the signed-in person opens."""
+    areas = user_areas()
+    tabs = []
+    for area, pages in _TABS:
+        shown = [(p[0], p[1]) for p in pages if (p[2] if len(p) > 2 else area) in areas]
+        if shown:
+            tabs.append((_AREA_LABELS[area], shown))
+    return tabs
+
+
 def _first_page():
     """The first page the signed-in person can open, or None."""
-    areas = user_areas()
-    return next((url_for(pages[0][0]) for area, pages in _TABS if area in areas), None)
+    return next((url_for(pages[0][0]) for _, pages in _visible_tabs()), None)
 
 
 def _nav():
     """The header's tabs, and the open tab's pages when it has several."""
     page = _PAGE_OF.get(request.endpoint, request.endpoint)
-    areas = user_areas()
-    tabs = [(_AREA_LABELS[area], pages) for area, pages in _TABS if area in areas]
+    tabs = _visible_tabs()
     if is_admin():
         accounts = current_app.config["AUTH_MODE"] == "accounts"
         label, pages = _SETTINGS_TAB
@@ -301,6 +328,13 @@ def require_access():
     area = area_of(request.endpoint)
     if area is None or area in user_areas():
         return None
+    home_of = {pages[0][0]: tab for tab, pages in _TABS}
+    if request.endpoint in home_of:
+        # A tab's first page, when they open other pages in the tab (Maintenance requests only).
+        label = _AREA_LABELS[home_of[request.endpoint]]
+        pages = next((pages for name, pages in _visible_tabs() if name == label), None)
+        if pages:
+            return redirect(url_for(pages[0][0]))
     if request.endpoint == "dash.overview":
         return redirect(_first_page() or url_for("dash.no_access"))
     return render_template("dash/error.html", heading=f"No access to {_AREA_LABELS[area]}",

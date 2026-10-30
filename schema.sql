@@ -149,16 +149,28 @@ CREATE TABLE IF NOT EXISTS app_user_profiles (
 
 -- Maintenance (maintenance.py). Dates are the business's calendar dates (YYYY-MM-DD);
 -- times are UTC.
--- Functional locations: a tree (parent_id) organising the equipment and its tasks.
+-- Functional locations: a tree (parent_id) of the places maintenance is done. A code
+-- under a coded parent starts with the parent's code (GAR, GAR-KIT, GAR-KIT-ESP). Site,
+-- cost center, work center and criticality left blank come from the location above. A
+-- template (and everything under it) is a reference structure to copy: its tasks never
+-- come due. Columns added after the first version are also added by maintenance_store.migrate.
 CREATE TABLE IF NOT EXISTS maint_locations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
     description TEXT,
     parent_id   INTEGER,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    code        TEXT,
+    site        TEXT,
+    cost_center TEXT,
+    work_center TEXT,
+    criticality TEXT,                  -- A | B | C
+    is_template INTEGER
 );
 
--- Recurring maintenance tasks: due every frequency_days, next on next_due.
+-- Recurring maintenance tasks (maintenance plans): due every frequency_days (0: not by
+-- time), next on next_due, and/or every usage_interval on an equipment counter, counted
+-- from last_reading. A task on a piece of equipment follows it when it moves.
 CREATE TABLE IF NOT EXISTS maint_tasks (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT NOT NULL,
@@ -174,7 +186,12 @@ CREATE TABLE IF NOT EXISTS maint_tasks (
     instructions       TEXT,
     last_completed     TEXT,
     created_by         TEXT,
-    created_at         TEXT NOT NULL
+    created_at         TEXT NOT NULL,
+    equipment_id       INTEGER,
+    tasklist_id        INTEGER,
+    counter_id         INTEGER,
+    usage_interval     REAL,
+    last_reading       REAL
 );
 
 -- Each time a task was done (or skipped), which moved it on to its next due date.
@@ -189,13 +206,141 @@ CREATE TABLE IF NOT EXISTS maint_completions (
     notes            TEXT,
     duration_minutes INTEGER,
     labor_hours      REAL,
-    parts_used       TEXT
+    parts_used       TEXT,
+    parts_cost       REAL,
+    reading          REAL,                 -- the counter reading when it was done
+    checklist        TEXT                  -- JSON [{"text", "done"}]: its task list's steps
 );
 
 -- Files kept with a task (SOPs, job aids, photos), stored here so every server has them.
 CREATE TABLE IF NOT EXISTS maint_attachments (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id      INTEGER NOT NULL,
+    filename     TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    data         BLOB NOT NULL,
+    uploaded_by  TEXT,
+    uploaded_at  TEXT NOT NULL
+);
+
+-- Equipment: individual machines (make, model, serial), installed at a functional
+-- location, in storage, or retired; maint_equipment_moves is where each has been.
+CREATE TABLE IF NOT EXISTS maint_equipment (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    category       TEXT,
+    tag            TEXT,                -- the asset tag on the machine
+    manufacturer   TEXT,
+    model          TEXT,
+    serial_number  TEXT,
+    purchase_date  TEXT,
+    purchase_cost  REAL,
+    warranty_until TEXT,
+    criticality    TEXT,
+    status         TEXT NOT NULL,       -- installed | storage | retired
+    location_id    INTEGER,
+    notes          TEXT,
+    created_by     TEXT,
+    created_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS maint_equipment_moves (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipment_id INTEGER NOT NULL,
+    action       TEXT NOT NULL,         -- installed | dismantled | retired
+    location_id  INTEGER,
+    on_date      TEXT NOT NULL,
+    note         TEXT,
+    by_name      TEXT,
+    recorded_at  TEXT NOT NULL
+);
+
+-- Counters (measuring points) on equipment, e.g. shots pulled, and their readings, for
+-- tasks done by usage.
+CREATE TABLE IF NOT EXISTS maint_counters (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    equipment_id INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    unit         TEXT,
+    created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS maint_readings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    counter_id  INTEGER NOT NULL,
+    value       REAL NOT NULL,
+    read_on     TEXT NOT NULL,
+    note        TEXT,
+    by_name     TEXT,
+    recorded_at TEXT NOT NULL
+);
+
+-- Task lists: reusable steps (operations) for doing a task, JSON [{"text", "minutes"}].
+CREATE TABLE IF NOT EXISTS maint_tasklists (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    description TEXT,
+    operations  TEXT NOT NULL,
+    updated_by  TEXT,
+    updated_at  TEXT NOT NULL
+);
+
+-- Requests (SAP notifications): a problem reported, e.g. a machine down.
+CREATE TABLE IF NOT EXISTS maint_requests (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    title          TEXT NOT NULL,
+    description    TEXT,
+    location_id    INTEGER,
+    equipment_id   INTEGER,
+    priority       INTEGER NOT NULL,    -- 1 very high .. 4 low
+    breakdown      INTEGER NOT NULL,    -- 1: not working at all
+    status         TEXT NOT NULL,       -- open | ordered | closed | rejected
+    order_id       INTEGER,
+    reported_by    TEXT,
+    reported_by_id INTEGER,
+    reported_at    TEXT NOT NULL,
+    closed_by      TEXT,
+    closed_at      TEXT,
+    resolution     TEXT
+);
+
+-- Work orders: the job of fixing something, with its costs in maint_order_costs.
+CREATE TABLE IF NOT EXISTS maint_orders (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT NOT NULL,
+    description  TEXT,
+    request_id   INTEGER,
+    location_id  INTEGER,
+    equipment_id INTEGER,
+    assigned_to  INTEGER,
+    priority     INTEGER NOT NULL,
+    status       TEXT NOT NULL,         -- open | in_progress | completed | cancelled
+    due_date     TEXT,
+    created_by   TEXT,
+    created_at   TEXT NOT NULL,
+    started_at   TEXT,
+    completed_at TEXT,
+    completed_by TEXT,
+    findings     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS maint_order_costs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id    INTEGER NOT NULL,
+    kind        TEXT NOT NULL,          -- labor | part | service | other
+    description TEXT NOT NULL,
+    quantity    REAL NOT NULL,          -- hours for labor
+    unit_cost   REAL NOT NULL,
+    added_by    TEXT,
+    added_at    TEXT NOT NULL
+);
+
+-- Files kept with equipment (manuals), requests and work orders (photos).
+CREATE TABLE IF NOT EXISTS maint_files (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_type  TEXT NOT NULL,         -- equipment | request | order
+    object_id    INTEGER NOT NULL,
     filename     TEXT NOT NULL,
     content_type TEXT NOT NULL,
     size         INTEGER NOT NULL,

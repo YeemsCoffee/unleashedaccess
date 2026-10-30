@@ -1,0 +1,71 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import priority, state, files %}
+{% block title %}{{ o.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ o.title }} {{ state(o.status, o.status_label) }}</h1>
+  <a href="{{ url_for('maint.orders') }}">← Work orders</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Work order</dt><dd>{{ o.number }}</dd></div>
+    <div><dt>Priority</dt><dd>{{ priority(o.priority, o.priority_label) }}</dd></div>
+    {% if o.equipment_id %}<div><dt>Equipment</dt><dd><a href="{{ url_for('maint.equipment', equipment_id=o.equipment_id) }}">{{ o.equipment_name }}</a></dd></div>{% endif %}
+    <div><dt>Where</dt><dd>{% if o.location_id %}<a href="{{ url_for('maint.location', location_id=o.location_id) }}">{{ o.location_path }}</a>{% else %}—{% endif %}</dd></div>
+    {% if o.cost_center %}<div><dt>Cost center</dt><dd>{{ o.cost_center }}</dd></div>{% endif %}
+    <div><dt>Assigned to</dt><dd>{{ o.assignee_name or 'No one yet' }}</dd></div>
+    <div><dt>Needed by</dt><dd class="{{ 'due-late' if o.late }}">{{ o.due|d if o.due else '—' }}</dd></div>
+    {% if o.request %}<div><dt>Request</dt><dd><a href="{{ url_for('maint.request', request_id=o.request.id) }}">{{ o.request.number }}</a> · {{ o.request.reported_by or '' }}</dd></div>{% endif %}
+    <div><dt>Made</dt><dd>{{ o.created_at|local }} · {{ o.created_by or '' }}</dd></div>
+    {% if o.completed_at %}<div><dt>{{ 'Completed' if o.status == 'completed' else 'Cancelled' }}</dt><dd>{{ o.completed_at|local }} · {{ o.completed_by or '' }}</dd></div>{% endif %}
+  </dl>
+  {% if o.description %}<p class="instructions">{{ o.description }}</p>{% endif %}
+  {% if o.findings %}<div class="proc-notes"><h3>{{ 'Findings' if o.status == 'completed' else 'Why it was cancelled' }}</h3><p class="instructions">{{ o.findings }}</p></div>{% endif %}
+  <div class="run-actions">
+    {% if not o.locked %}<a class="btn" href="{{ url_for('maint.order_edit', order_id=o.id) }}">Edit</a>{% endif %}
+    {% if o.status == 'open' %}<form method="post" action="{{ url_for('maint.order_status', order_id=o.id) }}"><button class="btn" name="action" value="start">Start work</button></form>{% endif %}
+    {% if o.locked %}<form method="post" action="{{ url_for('maint.order_status', order_id=o.id) }}"><button class="btn btn-quiet" name="action" value="reopen">Reopen</button></form>{% endif %}
+  </div>
+</section>
+
+<section class="card" id="costs">
+  <h2>Costs</h2>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th class="wide-only">Type</th><th>Description</th><th class="num wide-only">Qty / hours</th><th class="num wide-only">Unit cost / rate</th><th class="num">Cost</th><th></th></tr></thead>
+    <tbody>{% for c in o.costs %}
+    <tr><td class="wide-only">{{ c.kind_label }}</td><td>{{ c.description }}<div class="muted small"><span class="narrow-only">{{ c.kind_label }} · {{ c.quantity|n }} × {{ c.unit_cost|money }} · </span>{{ c.added_by or '' }}</div></td>
+      <td class="num wide-only">{{ c.quantity|n }}</td><td class="num wide-only">{{ c.unit_cost|money }}</td><td class="num">{{ c.total|money }}</td>
+      <td class="row-actions">{% if not o.locked %}<form method="post" action="{{ url_for('maint.order_cost_delete', cost_id=c.id) }}"><button class="btn btn-quiet">Remove</button></form>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No costs yet.</td></tr>{% endfor %}</tbody>
+    {% if o.costs %}<tfoot><tr><td class="wide-only">Total</td><td><span class="narrow-only">Total: </span>{% for label, v in o.by_kind.items() if v %}{{ ' · ' if not loop.first }}{{ label }} {{ v|money }}{% endfor %}{% if o.labor_hours %} · {{ o.labor_hours|n }} labor h{% endif %}</td><td class="wide-only" colspan="2"></td><td class="num">{{ o.cost|money }}</td><td></td></tr></tfoot>{% endif %}
+  </table></div>
+  {% if not o.locked %}
+  <form method="post" action="{{ url_for('maint.order_cost_add', order_id=o.id) }}" class="filters add-cost">
+    <label>Type <select name="kind">{% for k, label in kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select></label>
+    <label class="grow">Description <input name="description" maxlength="200" required placeholder="e.g. Mo, 2 h / Burr set 64 mm"></label>
+    <label>Qty or hours <input class="qty-input" type="number" name="quantity" min="0" step="any" inputmode="decimal" required></label>
+    <label>Unit cost or rate ($) <input class="qty-input" type="number" name="unit_cost" min="0" step="0.01" inputmode="decimal" required></label>
+    <button class="btn">Add</button>
+  </form>
+  {% endif %}
+</section>
+
+{% if not o.locked %}
+<section class="card">
+  <h2>Finish it</h2>
+  <form method="post" action="{{ url_for('maint.order_status', order_id=o.id) }}" class="maint-form">
+    <label class="block">Findings <textarea name="findings" rows="3" maxlength="5000" placeholder="What was wrong and what was done"></textarea></label>
+    <div class="run-actions">
+      <button class="btn btn-primary" name="action" value="complete">Complete{{ ' (closes ' ~ o.request.number ~ ')' if o.request }}</button>
+      <button class="btn btn-quiet" name="action" value="cancel">Cancel the work order</button>
+    </div>
+    <p class="muted small">Cancelling needs a reason in Findings{{ ', and opens ' ~ o.request.number ~ ' again' if o.request }}.</p>
+  </form>
+</section>
+{% endif %}
+
+<section class="card" id="files">
+  <h2>Files</h2>
+  {{ files(o.files, url_for('maint.file_add', object_type='order', object_id=o.id), hint='Photos, invoices, service reports.') }}
+</section>
+{% endblock %}

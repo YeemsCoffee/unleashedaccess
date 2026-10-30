@@ -368,3 +368,35 @@ td.wrap { white-space: normal; min-width: 280px; }
 .cal-is-dragging, .cal-is-dragging * { cursor: grabbing !important; }
 .cal-drop { background: var(--series-1-soft); border-color: var(--series-1); box-shadow: inset 0 0 0 1px var(--series-1); }
 .cal-help { margin-top: -4px; }
+
+/* Maintenance: SAP-style records */
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.loc-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-secondary);
+  background: var(--surface-0); border-radius: 6px; padding: 1px 5px; }
+.loc-template { font-style: italic; }
+.crit { display: inline-block; min-width: 18px; text-align: center; font-size: 11px; font-weight: 700; border-radius: 6px; padding: 1px 4px; }
+.crit-A { background: var(--bad-bg); color: var(--bad-ink); }
+.crit-B { background: var(--warn-bg); color: var(--warn-ink); }
+.crit-C { background: var(--surface-0); color: var(--text-secondary); }
+.prio-1 { background: var(--bad-bg); color: var(--bad-ink); font-weight: 600; }
+.prio-2 { background: var(--warn-bg); color: var(--warn-ink); }
+.prio-3 { background: var(--series-1-soft); color: var(--text-primary); }
+.st-open { background: var(--warn-bg); color: var(--warn-ink); }
+.st-ordered, .st-in_progress, .st-installed { background: var(--series-1-soft); color: var(--text-primary); }
+.st-closed, .st-completed { background: var(--good-bg); color: var(--good-ink); }
+.st-rejected, .st-cancelled, .st-retired, .st-storage { background: var(--surface-0); color: var(--text-secondary); }
+.card-alert { border-color: var(--bad-ink); }
+.card-alert h2 { color: var(--bad-ink); }
+.plain-list { list-style: none; margin: 0; padding: 0; }
+.plain-list li { padding: 5px 0; border-bottom: 1px solid var(--grid); }
+.plain-list li:last-child { border-bottom: 0; }
+.usage-box { background: var(--surface-0); border-radius: 10px; padding: 10px 14px; margin: 4px 0 10px; }
+.checklist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.checklist .check-field { margin-top: 0; }
+.counter { padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.counter-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.add-counter, .add-cost { margin-top: 12px; }
+.ops { padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.ops li input.text-input { width: calc(100% - 100px); }
+.btn.small { font-size: 12px; padding: 2px 8px; }
+.cal-order { border-left: 3px solid var(--warn-ink); }

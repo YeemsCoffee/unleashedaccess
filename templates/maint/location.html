@@ -1,0 +1,84 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import task_table, location_options, crit, priority, state %}
+{% block title %}{{ loc.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{% if loc.code %}<span class="loc-code">{{ loc.code }}</span> {% endif %}{{ loc.name }}{% if loc.in_template %} <span class="pill">Template</span>{% endif %}</h1>
+  <a href="{{ url_for('maint.locations') }}">← Locations</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Where</dt><dd>{{ loc.path }}</dd></div>
+    {% for field, label in (('site', 'Site'), ('cost_center', 'Cost center'), ('work_center', 'Work center')) %}
+    <div><dt>{{ label }}</dt><dd>{{ loc['eff_' ~ field] or '—' }}{% if loc['from_' ~ field] %} <span class="muted small">from {{ loc['from_' ~ field] }}</span>{% endif %}</dd></div>
+    {% endfor %}
+    <div><dt>Criticality</dt><dd>{% if loc.eff_criticality %}{{ crit(loc.eff_criticality) }} {{ criticalities[loc.eff_criticality].split(': ')[1] }}{% if loc.from_criticality %} <span class="muted small">from {{ loc.from_criticality }}</span>{% endif %}{% else %}—{% endif %}</dd></div>
+  </dl>
+  {% if loc.description %}<p class="instructions">{{ loc.description }}</p>{% endif %}
+  {% if loc.in_template %}<p class="recon recon-warn">! This is {{ 'a template' if loc.is_template else 'part of a template' }}: a reference structure. Its tasks never come due; copy it below to set up a real place.</p>{% endif %}
+  <div class="run-actions">
+    <a class="btn" href="{{ url_for('maint.locations', edit=loc.id) }}">Edit</a>
+    <a class="btn" href="{{ url_for('maint.locations', parent=loc.id) }}">+ Location under it</a>
+    <a class="btn" href="{{ url_for('maint.task_new', location=loc.id) }}">+ Task</a>
+    {% if not loc.in_template %}
+    <a class="btn" href="{{ url_for('maint.equipment_new', location=loc.id) }}">+ Equipment</a>
+    <a class="btn" href="{{ url_for('maint.request_new', location=loc.id) }}">Report a problem</a>
+    {% endif %}
+    <a class="btn btn-quiet" href="{{ url_for('maint.history', location=loc.id, start='2000-01-01') }}">History →</a>
+    {% if can_delete and not children %}
+    <form method="post" action="{{ url_for('maint.location_delete', location_id=loc.id) }}"
+          onsubmit='return confirm({{ ("Delete " ~ loc.name ~ "?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>
+    {% endif %}
+  </div>
+</section>
+
+<div class="two-col">
+<section class="card">
+  <h2>Under it</h2>
+  <ul class="plain-list">{% for c in children %}<li><a href="{{ url_for('maint.location', location_id=c.id) }}">{% if c.code %}<span class="loc-code">{{ c.code }}</span> {% endif %}{{ c.name }}</a></li>{% else %}<li class="muted">Nothing.</li>{% endfor %}</ul>
+</section>
+<section class="card">
+  <h2>Equipment here</h2>
+  <ul class="plain-list">{% for e in equipment %}<li><a href="{{ url_for('maint.equipment', equipment_id=e.id) }}">{{ e.name }}</a> <span class="muted small">{{ e.number }}{{ ' · ' ~ e.location if e.location_id != loc.id }}</span></li>{% else %}<li class="muted">None installed.</li>{% endfor %}</ul>
+</section>
+</div>
+
+{% if requests or orders %}
+<section class="card">
+  <h2>Open requests and work orders</h2>
+  <ul class="plain-list">
+    {% for r in requests if r.status == 'open' %}<li><a href="{{ url_for('maint.request', request_id=r.id) }}">{{ r.number }} {{ r.title }}</a> {{ priority(r.priority, r.priority_label) }}</li>{% endfor %}
+    {% for o in orders %}<li><a href="{{ url_for('maint.order', order_id=o.id) }}">{{ o.number }} {{ o.title }}</a> {{ state(o.status, o.status_label) }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>Tasks</h2><a href="{{ url_for('maint.tasks', location=loc.id) }}">All here →</a></div>
+  {{ task_table(tasks[:15], empty="No tasks here or under it.") }}
+</section>
+
+{% if done %}
+<section class="card">
+  <div class="card-head"><h2>Done lately</h2><a href="{{ url_for('maint.history', location=loc.id, start='2000-01-01') }}">History →</a></div>
+  <ul class="plain-list">{% for r in done %}<li>{{ r.at|local }} · <a href="{{ url_for('maint.order', order_id=r.id) if r.kind == 'order' else url_for('maint.task', task_id=r.id) }}">{{ r.title }}</a> · {{ r.by }}{% if r.cost %} · {{ r.cost|money }}{% endif %}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="card" id="copy">
+  <h2>Copy this structure</h2>
+  <p class="muted">Copies {{ loc.name }} and everything under it to a new place, for example to set up a new store from
+    a template. Codes under it are renamed to start with the new code.</p>
+  <form method="post" action="{{ url_for('maint.location_copy', location_id=loc.id) }}" class="maint-form">
+    <div class="filters new-order">
+      <label class="wide">New name <input name="name" required maxlength="100" placeholder="e.g. Torrance"></label>
+      <label>New code <input name="code" maxlength="40" placeholder="{{ 'e.g. TOR' if loc.code else 'Optional' }}" autocapitalize="characters"></label>
+      <label>Under
+        <select name="parent_id"><option value="">Nothing: top level</option>{{ location_options(locations, loc.parent_id or '', blocked) }}</select></label>
+    </div>
+    <label class="check-field"><input type="checkbox" name="with_tasks" value="1" checked> Copy the tasks too (not those on equipment), first due on
+      <input type="date" name="first_due" value="{{ today.isoformat() }}"></label>
+    <div class="run-actions"><button class="btn btn-primary">Copy</button></div>
+  </form>
+</section>
+{% endblock %}

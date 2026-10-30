@@ -12,7 +12,9 @@ from accounts import AccountError
 from unleashed.store import utc_now
 
 AREAS = (("finance", "Finance"), ("warehouse", "Warehouse"), ("production", "Production"),
-         ("maintenance", "Maintenance"))
+         ("maintenance", "Maintenance"), ("maint_requests", "Maintenance requests"))
+# Opening a tab includes these narrower areas within it.
+INCLUDES = {"maintenance": ("maint_requests",)}
 AREA_KEYS = tuple(key for key, _ in AREAS)
 # Tabs that show data from Unleashed (and its sync status).
 UNLEASHED_AREAS = ("finance", "warehouse", "production")
@@ -95,7 +97,10 @@ class Profiles:
         if user["role"] == "admin":
             return set(AREA_KEYS)
         profile = self.of_user(user["id"])
-        return set(profile["areas"]) if profile else set()
+        areas = set(profile["areas"]) if profile else set()
+        for area in list(areas):
+            areas.update(INCLUDES.get(area, ()))
+        return areas
 
     def seed(self):
         """The first time: the starter profiles, and Standard (what every account could see

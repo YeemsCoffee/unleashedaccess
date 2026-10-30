@@ -1,0 +1,31 @@
+{% extends "dash/base.html" %}
+{% from "maint/_macros.html" import priority, state %}
+{% block title %}Work orders{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Work orders</h1>
+  <form method="get" class="filters">
+    <label>Show <select name="status">
+      <option value="active" {{ 'selected' if status == 'active' }}>Open or in progress</option>
+      {% for k, label in statuses.items() %}<option value="{{ k }}" {{ 'selected' if k == status }}>{{ label }}</option>{% endfor %}
+      <option value="all" {{ 'selected' if status == 'all' }}>All</option></select></label>
+    {% if people %}<label>Assigned to <select name="person"><option value="">Anyone</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if p.id == person }}>{{ p.name }}</option>{% endfor %}</select></label>{% endif %}
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">CSV</a>
+  </form>
+</div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('maint.order_new') }}">+ Work order</a></div>
+<p class="muted">The jobs of fixing things, from requests or made directly, with their labor, parts and service costs.</p>
+<section class="card">
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Work order</th><th>Where</th><th>Assigned to</th><th>Needed by</th><th class="wide-only">Priority</th><th>Status</th><th class="num wide-only">Cost</th></tr></thead>
+    <tbody>{% for o in rows %}
+    <tr class="{{ 'row-warn' if o.late }}"><td><a href="{{ url_for('maint.order', order_id=o.id) }}">{{ o.title }}</a><div class="muted small">{{ o.number }}</div></td>
+      <td>{{ o.equipment_name or o.location or '—' }}</td><td>{{ o.assignee_name or '—' }}</td>
+      <td class="nowrap">{{ o.due|d if o.due else '—' }}</td><td class="wide-only">{{ priority(o.priority, o.priority_label) }}</td>
+      <td>{{ state(o.status, o.status_label) }}</td><td class="num wide-only">{{ o.cost|money if o.cost else '' }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No work orders here.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

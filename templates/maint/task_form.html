@@ -1,4 +1,5 @@
 {% extends "dash/base.html" %}
+{% from "maint/_macros.html" import location_options, equipment_options %}
 {% block title %}{{ 'Edit ' ~ task.name if task else 'New maintenance task' }}{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -10,13 +11,16 @@
   {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
   <div class="filters new-order">
     <label class="wide">Task <input name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
+    <label>Equipment
+      <select name="equipment_id">
+        <option value="">None: a location</option>
+        {{ equipment_options(equipment, form.equipment_id or '') }}
+      </select></label>
     <label>Location
       <select name="location_id">
         <option value="">None</option>
-        {% for l in locations %}<option value="{{ l.id }}" {{ 'selected' if form.location_id|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.name }}</option>{% endfor %}
+        {{ location_options(locations, form.location_id or '') }}
       </select></label>
-    <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" required placeholder="90"></label>
-    <label>Next due <input type="date" name="next_due" value="{{ form.next_due or today.isoformat() }}" required></label>
     {% if people %}
     <label>Assigned to
       <select name="assigned_to">
@@ -25,7 +29,31 @@
         {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
       </select></label>
     {% endif %}
+    <label>Task list
+      <select name="tasklist_id">
+        <option value="">None</option>
+        {% for t in tasklists %}<option value="{{ t.id }}" {{ 'selected' if form.tasklist_id|string == t.id|string }}>{{ t.name }} ({{ t.operations|length }} steps)</option>{% endfor %}
+      </select></label>
   </div>
+  <p class="muted small">A task on equipment is wherever the equipment is installed, and moves with it. A task list gives the
+    steps to tick off when it's done (<a href="{{ url_for('maint.tasklists') }}">task lists</a>).</p>
+
+  <h2>When it's due</h2>
+  <div class="filters new-order">
+    <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" placeholder="90"></label>
+    <label>Next due <input type="date" name="next_due" value="{{ form.next_due if form.next_due is defined and form.next_due else (today.isoformat() if not task else '') }}"></label>
+    <label>Or by usage: counter
+      <select name="counter_id">
+        <option value="">None</option>
+        {% for c in counters %}<option value="{{ c.id }}" {{ 'selected' if form.counter_id|string == c.id|string }}>{{ c.label }}</option>{% endfor %}
+      </select></label>
+    <label>Every (usage) <input type="number" name="usage_interval" value="{{ form.usage_interval|n if form.usage_interval else '' }}" min="0" step="any" inputmode="decimal" placeholder="10000"></label>
+    <label>Last done at <input type="number" name="last_reading" value="{{ form.last_reading|n if form.last_reading is not none and form.last_reading != '' else '' }}" min="0" step="any" inputmode="decimal" placeholder="the reading now"></label>
+  </div>
+  <p class="muted small">By time (every so many days), by usage on one of its equipment's counters (e.g. every 10,000 shots),
+    or both: it's due at whichever comes first. A usage-based task's date is estimated from the counter's readings.
+    {% if not counters %}Add counters on an equipment page to use them here.{% endif %}</p>
+
   <h2>Part</h2>
   <div class="filters new-order">
     <label class="wide">Part <input name="part_name" value="{{ form.part_name or '' }}" maxlength="150" placeholder="Optional, e.g. Water filter cartridge"></label>
