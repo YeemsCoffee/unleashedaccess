@@ -132,6 +132,19 @@ CREATE TABLE IF NOT EXISTS prod_step_entries (
     PRIMARY KEY (assembly_guid, step_index)
 );
 
+-- Pictures shown at a step of a product's operating procedure; each step lists its
+-- pictures' ids. Orders keep the procedure they started with, pictures included.
+CREATE TABLE IF NOT EXISTS prod_step_pictures (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_code TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size         INTEGER NOT NULL,
+    data         BLOB NOT NULL,
+    uploaded_by  TEXT,
+    uploaded_at  TEXT NOT NULL
+);
+
 -- Access profiles (access.py): the tabs each kind of account opens. Admins open everything.
 -- areas: JSON list of finance | warehouse | production | maintenance.
 CREATE TABLE IF NOT EXISTS access_profiles (

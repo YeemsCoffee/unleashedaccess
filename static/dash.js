@@ -164,6 +164,60 @@ function fromTemplate(id, values) {
     refresh();
     step.querySelector('[name="name-' + i + '"]').focus();
   });
+  // Pictures chosen for a step: shown straight away, and made smaller (at most 1600 px on a
+  // side, as JPEG) so that saving several phone photos stays well under the upload limit.
+  // GIFs are sent as they are (they may move). Save waits until they're ready.
+  var save = form.querySelector("button.btn-primary"), shrinking = 0;
+  var MAX_SIDE = 1600, SMALL_ENOUGH = 1024 * 1024;
+  function shrink(file) {
+    return new Promise(function (resolve) {
+      if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { resolve(file); return; }
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        var scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        if (scale === 1 && file.size <= SMALL_ENOUGH) { resolve(file); return; }
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.naturalWidth * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        var ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";  // a see-through PNG goes on white
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(function (blob) {
+          resolve(blob && blob.size < file.size
+            ? new File([blob], file.name.replace(/\.[^.]*$/, "") + ".jpg", { type: "image/jpeg" }) : file);
+        }, "image/jpeg", 0.85);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
+  form.addEventListener("change", function (e) {
+    var input = e.target;
+    if (!input.matches("[data-picture-input]")) return;
+    var preview = input.parentNode.querySelector("[data-picture-preview]");
+    preview.textContent = "";
+    shrinking += 1;
+    save.disabled = true;
+    Promise.all(Array.prototype.map.call(input.files, shrink)).then(function (files) {
+      if (window.DataTransfer) {
+        var picked = new DataTransfer();
+        files.forEach(function (f) { picked.items.add(f); });
+        input.files = picked.files;
+      }
+      files.forEach(function (f) {
+        var img = document.createElement("img");
+        img.src = URL.createObjectURL(f);
+        img.alt = f.name;
+        preview.appendChild(img);
+      });
+    }).finally(function () {
+      shrinking -= 1;
+      save.disabled = shrinking > 0;
+    });
+  });
+
   form.addEventListener("click", function (e) {
     var button = e.target.closest("[data-add-field]");
     if (!button) return;

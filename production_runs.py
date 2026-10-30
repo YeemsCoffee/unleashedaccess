@@ -5,8 +5,8 @@ component totals to Unleashed as the quantities used (unleashed/assembly_writes.
 
 Procedures are kept per made product (its bill of materials), since Unleashed has
 none: general notes, then steps, each with instructions, the components it uses and
-the fields to fill in. A run keeps the procedure it started with, so editing a
-procedure doesn't change orders already being recorded. Components on the order that
+the fields to fill in, and pictures to show. A run keeps the procedure it started with, so
+editing a procedure doesn't change orders already being recorded. Components on the order that
 no step lists are recorded at the last step; a product without a procedure gets a
 single step with every component.
 
@@ -24,8 +24,12 @@ from unleashed.store import utc_now
 
 DEFAULT_STEP = "Production"
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
-# The most steps a procedure, and fields a step, can have.
-MAX_STEPS, MAX_FIELDS = 50, 30
+# The most steps a procedure, and fields and pictures a step, can have.
+MAX_STEPS, MAX_FIELDS, MAX_PICTURES = 50, 30, 10
+MAX_PICTURE_BYTES = 10 * 1024 * 1024
+# Pictures a browser shows, told apart by their first bytes rather than their name.
+PICTURE_SIGNATURES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                      (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"))
 RECORDING, CLOSING, CLOSED, FAILED = "recording", "closing", "closed", "failed"
 SENT = "sent"  # quantities in Unleashed; its batches are checked, and it's completed, there
 MAX_BATCHES = 50
@@ -46,8 +50,16 @@ def parse_procedure(data):
     return {"notes": data.get("notes") or "",
             "steps": [{"name": s.get("name") or "", "instructions": s.get("instructions") or "",
                        "components": list(s.get("components") or []),
-                       "fields": [dict(f) for f in s.get("fields") or []]}
+                       "fields": [dict(f) for f in s.get("fields") or []],
+                       "pictures": [int(p) for p in s.get("pictures") or [] if str(p).isdigit()]}
                       for s in data.get("steps") or []]}
+
+
+def picture_type(data):
+    """The content type of a PNG, JPEG, GIF or WebP picture; None for anything else."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return next((kind for start, kind in PICTURE_SIGNATURES if data.startswith(start)), None)
 
 
 class ProductionRuns:
@@ -62,8 +74,10 @@ class ProductionRuns:
 
     def set_procedure(self, product_code, notes, steps, user):
         """Replace a product's procedure. `steps`: [{"name", "instructions", "components":
-        [codes], "fields": [{"id", "label", "type", "unit", "min", "max", "required"}]}].
-        Steps without a name and fields without a label are dropped."""
+        [codes], "fields": [{"id", "label", "type", "unit", "min", "max", "required"}],
+        "pictures": [ids from add_picture]}]. Steps without a name and fields without a
+        label are dropped, and pictures no longer shown anywhere are deleted."""
+        owned = self._picture_ids(product_code)
         clean = []
         for s in steps:
             name = (s.get("name") or "").strip()
@@ -85,18 +99,61 @@ class ProductionRuns:
                                "min": _number(f.get("min")) if number else None,
                                "max": _number(f.get("max")) if number else None,
                                "required": bool(f.get("required"))})
+            pictures = [p for p in dict.fromkeys(int(p) for p in s.get("pictures") or [] if str(p).isdigit())
+                        if p in owned][:MAX_PICTURES]
             clean.append({"name": name[:100], "instructions": (s.get("instructions") or "").strip()[:5000],
                           "components": list(dict.fromkeys(s.get("components") or [])),
-                          "fields": fields})
+                          "fields": fields, "pictures": pictures})
         notes = (notes or "").strip()[:5000]
         if not clean and not notes:
             self.db.execute("DELETE FROM prod_steps WHERE product_code = ?", (product_code,))
-            return
-        self.db.execute(
-            "INSERT INTO prod_steps (product_code, steps, updated_by, updated_at) VALUES (?, ?, ?, ?)"
-            " ON CONFLICT (product_code) DO UPDATE SET steps = excluded.steps,"
-            " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
-            (product_code, json.dumps({"notes": notes, "steps": clean}), user, utc_now()))
+        else:
+            self.db.execute(
+                "INSERT INTO prod_steps (product_code, steps, updated_by, updated_at) VALUES (?, ?, ?, ?)"
+                " ON CONFLICT (product_code) DO UPDATE SET steps = excluded.steps,"
+                " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+                (product_code, json.dumps({"notes": notes, "steps": clean}), user, utc_now()))
+        self._prune_pictures(product_code)
+
+    # ------------------------------------------------------------ pictures
+
+    def add_picture(self, product_code, filename, data, user):
+        """Keep a picture for a step of `product_code`'s procedure; returns its id, for the
+        step's "pictures". Raises RunError if it isn't a picture a browser shows."""
+        name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()[:200] or "picture"
+        if not data:
+            raise RunError(f"{name} is empty.")
+        if len(data) > MAX_PICTURE_BYTES:
+            raise RunError(f"{name} is over {MAX_PICTURE_BYTES // (1024 * 1024)} MB.")
+        kind = picture_type(data)
+        if kind is None:
+            raise RunError(f"{name} isn't a PNG, JPEG, GIF or WebP picture (save iPhone HEIC photos as "
+                           "JPEG first).")
+        return self.db.query(
+            "INSERT INTO prod_step_pictures (product_code, filename, content_type, size, data, uploaded_by,"
+            " uploaded_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (product_code, name, kind, len(data), data, user, utc_now()))[0]["id"]
+
+    def picture(self, picture_id):
+        rows = self.db.query("SELECT * FROM prod_step_pictures WHERE id = ?", (picture_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        row["data"] = bytes(row["data"])  # PostgreSQL may hand back a memoryview
+        return row
+
+    def _picture_ids(self, product_code):
+        return {r["id"] for r in self.db.query("SELECT id FROM prod_step_pictures WHERE product_code = ?",
+                                               (product_code,))}
+
+    def _prune_pictures(self, product_code):
+        """Delete `product_code`'s pictures that neither its procedure nor an order still
+        being recorded shows (completed orders show the ones that remain)."""
+        keep = {p for s in self.procedure_for(product_code)["steps"] for p in s["pictures"]}
+        for row in self.db.query("SELECT steps FROM prod_runs WHERE status NOT IN (?, ?)", (CLOSED, SENT)):
+            keep.update(p for s in parse_procedure(row["steps"])["steps"] for p in s["pictures"])
+        for picture_id in self._picture_ids(product_code) - keep:
+            self.db.execute("DELETE FROM prod_step_pictures WHERE id = ?", (picture_id,))
 
     # ------------------------------------------------------------ runs
 
@@ -136,11 +193,13 @@ class ProductionRuns:
                                               and c.get("planned") is not None else c["consumed"])
                       for c in order["components"]}
         steps, listed = [], set()
+        pictures = self._picture_ids(order["product_code"])  # a removed one stays while orders show it
         for i, s in enumerate(definition):
             codes = [c for c in s["components"] if c in components]  # may repeat across steps
             listed.update(codes)
             steps.append({"index": i, "name": s["name"], "instructions": s["instructions"],
-                          "codes": codes, "fields": s["fields"]})
+                          "codes": codes, "fields": s["fields"],
+                          "pictures": [p for p in s.get("pictures", []) if p in pictures]})
         steps[-1]["codes"] += [c for c in components if c not in listed]
 
         recorded = {code: 0.0 for code in components}

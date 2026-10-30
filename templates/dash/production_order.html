@@ -83,6 +83,10 @@
       {% elif s.current and editable %}<span class="pill pill-receipted">Current step</span>{% endif %}
     </div>
     {% if s.instructions %}<p class="instructions">{{ s.instructions }}</p>{% endif %}
+    {% if s.pictures %}<div class="step-pictures">{% for p in s.pictures %}
+      <a href="{{ url_for('dash.production_picture', picture_id=p) }}" target="_blank" rel="noopener">
+        <img src="{{ url_for('dash.production_picture', picture_id=p) }}" alt="{{ s.name }}, picture {{ loop.index }}" loading="lazy"></a>{% endfor %}
+    </div>{% endif %}
     {% if s.rows %}
     <div class="table-wrap"><table>
       <thead><tr><th class="wide-only">Component</th><th>Description</th><th class="num">Recipe<span class="wide-only"> (whole order)</span></th><th class="num">Used<span class="wide-only"> at this step</span></th></tr></thead>

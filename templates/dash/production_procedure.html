@@ -34,6 +34,17 @@
       <tbody data-fields>{% for f in s.fields %}{{ field_row(i, loop.index0, f) }}{% endfor %}</tbody>
     </table></div>
     <div><button type="button" class="btn" data-add-field hidden>+ Add a field</button></div></div>
+    <div class="block"><span>Pictures shown at this step</span>
+      {% if s.pictures %}<div class="proc-pictures">{% for p in s.pictures %}
+        <figure class="proc-picture"><input type="hidden" name="pictures-{{ i }}" value="{{ p }}">
+          <a href="{{ url_for('dash.production_picture', picture_id=p) }}" target="_blank" rel="noopener">
+            <img src="{{ url_for('dash.production_picture', picture_id=p) }}" alt="Picture {{ loop.index }} for this step" loading="lazy"></a>
+          <label><input type="checkbox" name="remove_picture" value="{{ p }}"> Remove</label></figure>{% endfor %}
+      </div>{% endif %}
+      <input type="file" name="picture-{{ i }}" accept="image/png,image/jpeg,image/gif,image/webp" multiple
+        aria-label="Add pictures to this step" data-picture-input>
+      <div class="proc-pictures" data-picture-preview></div>
+    </div>
   </section>
 {%- endmacro %}
 
@@ -45,7 +56,7 @@
   step in order with its instructions, the components it uses, and what to record at it (a weight, a temperature, a
   check). Clear a step's name to remove the step, or a field's label to remove the field. Orders already being recorded
   keep the procedure they started with.</p>
-<form method="post" class="proc">
+<form method="post" class="proc" enctype="multipart/form-data">
   <input type="hidden" name="rows" value="{{ steps|length }}" data-step-count data-max-steps="{{ max_steps }}"
     data-max-fields="{{ max_fields }}">
   <section class="card">
@@ -63,7 +74,8 @@
 
   <p class="muted">Min and max are the acceptable range for a number: entries outside it are flagged on the order and at
     close-out. A required yes/no field must be ticked to save the step. Empty steps and fields are left out when you
-    save.</p>
+    save. Pictures (PNG, JPEG, GIF or WebP, up to {{ max_pictures }} a step) are made smaller before they're sent;
+    tap one to see it full size.</p>
   <div class="run-actions">
     <button class="btn btn-primary">Save procedure</button>
     <a class="btn" href="{{ url_for('dash.production_bom', number=b.number) }}">Cancel</a>

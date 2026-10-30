@@ -13,8 +13,8 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
 
 from access import AREA_KEYS, AREAS, UNLEASHED_AREAS
 from accounts import AccountError, check_new_password, temporary_password
-from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_STEPS, SENT, ProductionRuns, RunError, check_batches,
-                             parse_batches)
+from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_PICTURES, MAX_STEPS, SENT, ProductionRuns, RunError,
+                             check_batches, parse_batches)
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
@@ -165,6 +165,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_step": "dash.production_orders",
             "dash.production_bom": "dash.production_boms",
             "dash.production_procedure": "dash.production_boms",
+            "dash.production_picture": "dash.production_orders",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -1068,36 +1069,61 @@ def _person():
 @admin_only
 def production_procedure(number):
     """The operating procedure for making a bill of materials' product: notes, then steps
-    with instructions, the components each uses, and the fields techs fill in."""
+    with instructions, the components each uses, the fields techs fill in, and pictures."""
     bom = _production().bom(number)
     if bom is None:
         abort(404)
     runs = current_app.extensions["production_runs"]
     if request.method == "POST":
         form = request.form
-        steps = []
+        removed = set(form.getlist("remove_picture"))
+        steps, left_out = [], []
         for i in range(min(form.get("rows", 0, type=int), MAX_STEPS)):
             fields = [{"id": form.get(f"f-{i}-{j}-id"), "label": form.get(f"f-{i}-{j}-label", ""),
                        "type": form.get(f"f-{i}-{j}-type"), "unit": form.get(f"f-{i}-{j}-unit"),
                        "min": form.get(f"f-{i}-{j}-min"), "max": form.get(f"f-{i}-{j}-max"),
                        "required": form.get(f"f-{i}-{j}-required")}
                       for j in range(min(form.get(f"fields-{i}", 0, type=int), MAX_FIELDS))]
+            pictures = [p for p in form.getlist(f"pictures-{i}") if p not in removed]
+            for upload in request.files.getlist(f"picture-{i}"):
+                if not upload.filename:
+                    continue
+                if len(pictures) >= MAX_PICTURES:
+                    left_out.append(f"{upload.filename} (a step has at most {MAX_PICTURES} pictures)")
+                    continue
+                try:
+                    pictures.append(runs.add_picture(bom["product_code"], upload.filename, upload.read(), _person()))
+                except RunError as e:
+                    left_out.append(str(e))
             steps.append((form.get(f"pos-{i}", i + 1, type=float), i, {
                 "name": form.get(f"name-{i}", ""), "instructions": form.get(f"instructions-{i}", ""),
-                "components": form.getlist(f"components-{i}"), "fields": fields}))
+                "components": form.getlist(f"components-{i}"), "fields": fields, "pictures": pictures}))
         runs.set_procedure(bom["product_code"], form.get("notes", ""),
                            [s for _, _, s in sorted(steps, key=lambda x: x[:2])], _person())
         flash("Saved the procedure. Orders already being recorded keep the one they started with.", "ok")
+        if left_out:
+            flash("Left out: " + "; ".join(left_out), "warn")
         return redirect(url_for("dash.production_bom", number=number))
     procedure = runs.procedure_for(bom["product_code"])
     blank_field = {"id": "", "label": "", "type": "number", "unit": "", "min": None, "max": None,
                    "required": False}
-    blank_step = {"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3}
+    blank_step = {"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3, "pictures": []}
     steps = [dict(s, fields=s["fields"] + [blank_field] * 2) for s in procedure["steps"]]
     steps += [blank_step] * 2
     return _render_production("production_procedure", b=bom, notes=procedure["notes"], steps=steps,
                               field_types=FIELD_TYPES, blank_step=blank_step, blank_field=blank_field,
-                              max_steps=MAX_STEPS, max_fields=MAX_FIELDS)
+                              max_steps=MAX_STEPS, max_fields=MAX_FIELDS, max_pictures=MAX_PICTURES)
+
+
+@bp.get("/production/pictures/<int:picture_id>")
+def production_picture(picture_id):
+    """A picture from a procedure step. It never changes, so browsers keep it."""
+    found = current_app.extensions["production_runs"].picture(picture_id)
+    if found is None:
+        abort(404)
+    return Response(found["data"], mimetype=found["content_type"], headers={
+        "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'"})
 
 
 @bp.get("/production/requirements")

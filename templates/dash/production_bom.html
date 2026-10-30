@@ -41,7 +41,11 @@
   <ol class="steps-list">{% for s in procedure.steps %}
     <li><strong>{{ s.name }}</strong>{% if s.components %} · uses {% for c in s.components %}{{ names.get(c, c) }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
       {% if s.fields %} · records {% for f in s.fields %}{{ f.label }}{{ ' (' ~ f.unit ~ ')' if f.unit }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}
-      {% if s.instructions %}<div class="instructions muted">{{ s.instructions }}</div>{% endif %}</li>
+      {% if s.instructions %}<div class="instructions muted">{{ s.instructions }}</div>{% endif %}
+      {% if s.pictures %}<div class="step-pictures small">{% for p in s.pictures %}
+        <a href="{{ url_for('dash.production_picture', picture_id=p) }}" target="_blank" rel="noopener">
+          <img src="{{ url_for('dash.production_picture', picture_id=p) }}" alt="{{ s.name }}, picture {{ loop.index }}" loading="lazy"></a>{% endfor %}
+      </div>{% endif %}</li>
   {% endfor %}</ol>
   {% elif not procedure.notes %}
   <p class="muted">No procedure yet, so orders for this product are recorded in one step with every component.{{ ' An admin can write it.' if not is_admin }}</p>

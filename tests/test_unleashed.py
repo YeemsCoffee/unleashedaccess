@@ -26,7 +26,7 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "access_profiles", "app_user_profiles", "maint_locations", "maint_tasks",
               "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
-              "maint_order_costs", "maint_files")
+              "maint_order_costs", "maint_files", "prod_step_pictures")
 
 
 def sqlite_database(testcase):
@@ -777,6 +777,46 @@ class ProductionRunTests(unittest.TestCase):
         # Saved steps come back with two empty steps after them, and the next added is numbered after those.
         self.assertIn('name="rows" value="4"', c.get("/production/boms/BOM-CB/procedure").get_data(as_text=True))
 
+    def test_procedure_steps_show_pictures(self):
+        from io import BytesIO
+        app = self._app()
+        c = app.test_client()
+        runs = app.extensions["production_runs"]
+        png, jpeg = b"\x89PNG\r\n\x1a\n" + b"\0" * 40, b"\xff\xd8\xff\xe0" + b"\0" * 40
+        res = c.post("/production/boms/BOM-CB/procedure", content_type="multipart/form-data", follow_redirects=True,
+                     data={"rows": 2, "name-0": "Steep", "components-0": ["COF-ESP-5LB"],
+                           "picture-0": [(BytesIO(png), "brewer.png"), (BytesIO(jpeg), "photos/bag.jpg"),
+                                         (BytesIO(b"hello"), "notes.txt")],
+                           "name-1": "Bottle", "components-1": ["JUG-GAL"]})
+        self.assertIn("Left out: notes.txt isn&#39;t a PNG, JPEG, GIF or WebP picture", res.get_data(as_text=True))
+        steep, bottle = runs.procedure_for("CB-CONC-GAL")["steps"]
+        self.assertEqual((len(steep["pictures"]), bottle["pictures"]), (2, []))
+        brewer, bag = steep["pictures"]
+        self.assertEqual(runs.picture(bag)["filename"], "bag.jpg")
+        got = c.get(f"/production/pictures/{brewer}")
+        self.assertEqual((got.status_code, got.mimetype, got.data), (200, "image/png", png))
+        self.assertEqual(got.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(c.get("/production/pictures/999999").status_code, 404)
+        for page in (c.get(self.url), c.get("/production/boms/BOM-CB"), c.get("/production/boms/BOM-CB/procedure")):
+            self.assertIn(f'src="/production/pictures/{bag}"', page.get_data(as_text=True))
+
+        # The order starts recording with both pictures; the procedure then drops one.
+        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.2"})
+        c.post("/production/boms/BOM-CB/procedure", data={
+            "rows": 1, "name-0": "Steep", "pictures-0": [str(brewer), str(bag)], "remove_picture": str(bag)})
+        self.assertEqual(runs.procedure_for("CB-CONC-GAL")["steps"][0]["pictures"], [brewer])
+        self.assertIn(f'src="/production/pictures/{bag}"', c.get(self.url).get_data(as_text=True))  # still on it
+        # Once no open order shows it, saving the procedure deletes it.
+        app.extensions["db"].execute("UPDATE prod_runs SET status = 'closed'")
+        c.post("/production/boms/BOM-CB/procedure", data={"rows": 1, "name-0": "Steep", "pictures-0": str(brewer)})
+        self.assertIsNone(runs.picture(bag))
+        self.assertNotIn(f"/production/pictures/{bag}", c.get(self.url).get_data(as_text=True))
+        self.assertIsNotNone(runs.picture(brewer))
+        # Another product's picture can't be put on this procedure.
+        other = runs.add_picture("VAN-SYR", "x.png", png, "Nathan")
+        c.post("/production/boms/BOM-CB/procedure", data={"rows": 1, "name-0": "Steep", "pictures-0": [str(brewer), str(other)]})
+        self.assertEqual(runs.procedure_for("CB-CONC-GAL")["steps"][0]["pictures"], [brewer])
+
     def test_steps_with_nothing_to_record_do_not_hold_up_completing(self):
         c = self._app().test_client()
         c.post("/production/boms/BOM-CB/procedure", data={
@@ -817,7 +857,8 @@ class ProductionRunTests(unittest.TestCase):
         from production_runs import parse_procedure
         old = parse_procedure('[{"name": "Mix", "components": ["SYR-VAN-750"]}]')
         self.assertEqual(old, {"notes": "", "steps": [{"name": "Mix", "instructions": "",
-                                                      "components": ["SYR-VAN-750"], "fields": []}]})
+                                                      "components": ["SYR-VAN-750"], "fields": [],
+                                                      "pictures": []}]})
 
     def test_close_out_checks_its_inputs(self):
         c = self._app().test_client()

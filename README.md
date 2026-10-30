@@ -225,7 +225,12 @@ closing the order out replaces Unleashed's figures with those.
    fills in: a **number** with a unit and an acceptable range (a weight, a
    temperature), **text** (a lot code), or **yes / no** (a check). Fields can
    be required. A step's number sets its order. **+ Add a step** and **+ Add a
-   field** add more as you write; empty ones are left out when you save.
+   field** add more as you write; empty ones are left out when you save. Each
+   step can show **pictures** (PNG, JPEG, GIF or WebP, up to 10): the browser
+   makes phone photos smaller (1600 px) before sending them, and they're kept in
+   the database. An order keeps the pictures its procedure had when it started;
+   a picture removed from the procedure is deleted once no order being recorded
+   shows it.
    Without a procedure, an order is recorded in a single step with every
    component.
 2. **Record** (anyone, e.g. production techs): open a parked order under
@@ -534,7 +539,7 @@ unleashedaccess/
 ├── dashboard.py        # dashboard pages, sign-in and wiring (mock, live or viewer)
 ├── accounts.py         # team accounts
 ├── access.py           # access profiles: the tabs each kind of account opens
-├── production_runs.py  # operating procedures and what's recorded at each step
+├── production_runs.py  # operating procedures (with step pictures) and what's recorded at each step
 ├── maintenance.py      # the Maintenance tab: overview, tasks, locations, calendar, history
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, task lists, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
