@@ -17,11 +17,11 @@ def report(app):
     """Startup summary for the server log."""
     ext = app.extensions["unleashed"]
     if ext["mode"] == "live":
-        print(f" * Unleashed Access: LIVE data from {ext['base_url']}")
+        print(f" * Yeems Core: LIVE data from {ext['base_url']}")
     elif ext["mode"] == "viewer":
-        print(" * Unleashed Access: VIEW-ONLY, reading the shared database (another instance syncs it)")
+        print(" * Yeems Core: VIEW-ONLY, reading the shared database (another instance syncs it)")
     else:
-        print(" * Unleashed Access: MOCK data (simulated). For real data, set UNLEASHED_MODE=live and the"
+        print(" * Yeems Core: MOCK data (simulated). For real data, set UNLEASHED_MODE=live and the"
               " API ID/key (in .env, or the server's environment settings).")
     print(f" * Database: {ext['db'].label}")
     if ext["db"].created_database:

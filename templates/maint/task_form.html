@@ -3,10 +3,11 @@
 {% block content %}
 <div class="page-head">
   <h1>{{ 'Edit ' ~ task.name if task else 'New maintenance task' }}</h1>
-  <a href="{{ url_for('maint.task', task_id=task.id) if task else url_for('maint.tasks') }}">← {{ 'Back to the task' if task else 'Tasks' }}</a>
+  <a href="{{ url_for('maint.task', task_id=task.id) if task else (return_to or url_for('maint.tasks')) }}">← {{ 'Back to the task' if task else ('Back' if return_to else 'Tasks') }}</a>
 </div>
 {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card maint-form">
+  {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
   <div class="filters new-order">
     <label class="wide">Task <input name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
     <label>Location
@@ -37,7 +38,7 @@
   {% if task %}<label class="check-field"><input type="checkbox" name="in_progress" value="1" {{ 'checked' if form.in_progress }}> In progress</label>{% endif %}
   <div class="run-actions">
     <button class="btn btn-primary">{{ 'Save' if task else 'Add task' }}</button>
-    <a class="btn" href="{{ url_for('maint.task', task_id=task.id) if task else url_for('maint.tasks') }}">Cancel</a>
+    <a class="btn" href="{{ url_for('maint.task', task_id=task.id) if task else (return_to or url_for('maint.tasks')) }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

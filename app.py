@@ -1,4 +1,4 @@
-"""Unleashed Access — Flask app serving the Unleashed dashboard."""
+"""Yeems Core: Flask app serving the Unleashed dashboard, production and maintenance."""
 import hashlib
 import os
 

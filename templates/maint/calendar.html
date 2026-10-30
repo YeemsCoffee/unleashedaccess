@@ -9,17 +9,25 @@
     <a class="btn" href="{{ url_for('maint.calendar', month=following.strftime('%Y-%m')) }}">{{ following.strftime('%b') }} →</a>
   </div>
 </div>
+{% set here = url_for('maint.calendar', month=month.strftime('%Y-%m')) %}
 <p class="muted cal-key"><span class="cal-entry cal-due">Due</span> <span class="cal-entry cal-overdue">Overdue</span>
   <span class="cal-entry cal-planned">Coming up on its schedule</span> <span class="cal-entry cal-completed">✓ Done</span>
   <span class="cal-entry cal-skipped">⊘ Skipped</span></p>
-<section class="card cal-card">
+<p class="muted cal-help">Click a day (or its +) to add a task due then. Drag a task's due date to another day to move
+  it; its schedule carries on from the new date.</p>
+<p class="recon recon-warn cal-error" role="alert" hidden></p>
+<section class="card cal-card" data-calendar>
   <div class="cal-grid">
     {% for name in ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] %}<div class="cal-head">{{ name }}</div>{% endfor %}
     {% for week in weeks %}{% for d in week %}
-    <div class="cal-day{{ ' cal-other' if d.month != month.month }}{{ ' cal-today' if d == today }}">
-      <div class="cal-num">{{ d.day }}</div>
+    {% set add = url_for('maint.task_new', next_due=d.isoformat(), return_to=here) %}
+    <div class="cal-day{{ ' cal-other' if d.month != month.month }}{{ ' cal-today' if d == today }}" data-date="{{ d.isoformat() }}" data-new-url="{{ add }}">
+      <div class="cal-day-head"><span class="cal-num">{{ d.day }}</span><a class="cal-add" href="{{ add }}" title="Add a task due {{ d|d }}" aria-label="Add a task due {{ d|d }}">+</a></div>
       {% for e in days.get(d, []) %}
-      {% if e.task %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.task.id) }}" title="{{ e.task.name }}{{ ' · ' ~ e.task.location if e.task.location }}">{{ e.task.name }}</a>
+      {% if e.task and e.kind in ('due', 'overdue') %}<a class="cal-entry cal-{{ e.kind }} cal-movable" href="{{ url_for('maint.task', task_id=e.task.id) }}"
+         data-move-url="{{ url_for('maint.task_reschedule', task_id=e.task.id) }}" data-due="{{ e.task.next_due.isoformat() }}" draggable="false"
+         title="{{ e.task.name }}{{ ' · ' ~ e.task.location if e.task.location }} (drag to move)">{{ e.task.name }}</a>
+      {% elif e.task %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.task.id) }}" title="{{ e.task.name }}{{ ' · ' ~ e.task.location if e.task.location }}: coming up on its schedule">{{ e.task.name }}</a>
       {% else %}<a class="cal-entry cal-{{ e.kind }}" href="{{ url_for('maint.task', task_id=e.completion.task_id) }}" title="{{ e.completion.task_name }} · {{ e.completion.completed_by }}">{{ '✓' if e.kind == 'completed' else '⊘' }} {{ e.completion.task_name }}</a>{% endif %}
       {% endfor %}
     </div>

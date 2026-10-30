@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Dashboard{% endblock %} · Unleashed Access</title>
+  <title>{% block title %}Dashboard{% endblock %} · Yeems Core</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
   {% block head %}{% endblock %}
 </head>
@@ -11,7 +11,7 @@
   {% set signed_out = login_enabled and not signed_in %}
   <header class="dash-header">
     <div class="brand">
-      <strong>Unleashed Access</strong>
+      <strong>Yeems Core</strong>
       {% if shows_unleashed or signed_out %}<span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
         {{ {'mock': 'Mock API (simulated data)', 'live': 'Live Unleashed API', 'viewer': 'Shared Unleashed data (view only)'}[unleashed_mode] }}
       </span>{% endif %}

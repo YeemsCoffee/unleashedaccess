@@ -105,6 +105,102 @@
   sum();
 })();
 
+/* Maintenance calendar: click a day to add a task due then; drag a task's due date to
+   another day to move it. Pointer events, so a mouse and a finger both work. */
+(function () {
+  "use strict";
+  var cal = document.querySelector("[data-calendar]");
+  if (!cal) return;
+  var errorBox = document.querySelector(".cal-error");
+  var drag = null, swallowClick = false;
+
+  function dayAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    var day = el && el.closest ? el.closest(".cal-day") : null;
+    return day && cal.contains(day) ? day : null;
+  }
+  function unmark() {
+    cal.querySelectorAll(".cal-drop").forEach(function (d) { d.classList.remove("cal-drop"); });
+  }
+  function stop() {
+    if (!drag) return;
+    if (drag.ghost) drag.ghost.remove();
+    drag.entry.classList.remove("cal-dragging");
+    document.body.classList.remove("cal-is-dragging");
+    unmark();
+    drag = null;
+  }
+  function problem(message) {
+    errorBox.textContent = "! " + message;
+    errorBox.hidden = false;
+  }
+
+  cal.addEventListener("pointerdown", function (e) {
+    var entry = e.target.closest(".cal-movable");
+    if (!entry || e.button !== 0) return;
+    drag = { entry: entry, x: e.clientX, y: e.clientY, pointer: e.pointerId, started: false };
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!drag || e.pointerId !== drag.pointer) return;
+    if (!drag.started) {
+      if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 6) return;  // still a click
+      drag.started = true;
+      drag.ghost = drag.entry.cloneNode(true);
+      drag.ghost.classList.add("cal-ghost");
+      drag.ghost.style.width = drag.entry.getBoundingClientRect().width + "px";
+      document.body.appendChild(drag.ghost);
+      drag.entry.classList.add("cal-dragging");
+      document.body.classList.add("cal-is-dragging");
+    }
+    e.preventDefault();
+    drag.ghost.style.left = (e.clientX + 6) + "px";
+    drag.ghost.style.top = (e.clientY + 6) + "px";
+    unmark();
+    var day = dayAt(e.clientX, e.clientY);
+    if (day) day.classList.add("cal-drop");
+  });
+  document.addEventListener("pointerup", function (e) {
+    if (!drag || e.pointerId !== drag.pointer) return;
+    if (!drag.started) { drag = null; return; }  // a click: open the task
+    var entry = drag.entry, day = dayAt(e.clientX, e.clientY);
+    stop();
+    swallowClick = true;  // the click that ends a drag doesn't open the task
+    setTimeout(function () { swallowClick = false; }, 0);
+    if (day && day.dataset.date !== entry.dataset.due) move(entry, day);
+  });
+  document.addEventListener("pointercancel", stop);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") stop(); });
+
+  function move(entry, day) {
+    var from = entry.parentNode, next = entry.nextSibling;
+    day.appendChild(entry);
+    entry.classList.add("cal-saving");
+    function undo(message) {
+      from.insertBefore(entry, next);
+      entry.classList.remove("cal-saving");
+      problem(message);
+    }
+    fetch(entry.dataset.moveUrl, {
+      method: "POST", credentials: "same-origin", headers: { "Accept": "application/json" },
+      body: new URLSearchParams({ from: entry.dataset.due, to: day.dataset.date })
+    }).then(function (r) {
+      var json = (r.headers.get("Content-Type") || "").indexOf("application/json") === 0;
+      if (!json) return undo("You may have been signed out. Reload the page and try again.");
+      return r.json().then(function (body) {
+        if (r.ok && body.ok) window.location.reload();
+        else undo(body.message || "Couldn't move it.");
+      });
+    }).catch(function () { undo("Couldn't reach the server. Check the connection and try again."); });
+  }
+
+  cal.addEventListener("click", function (e) {
+    if (swallowClick) { e.preventDefault(); return; }
+    if (e.target.closest("a")) return;  // a task, or a day's +
+    var day = e.target.closest(".cal-day");
+    if (day && day.dataset.newUrl) window.location.href = day.dataset.newUrl;
+  });
+})();
+
 /* On narrow screens the tab rows scroll sideways: bring the open tab into view. */
 (function () {
   "use strict";

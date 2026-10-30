@@ -184,6 +184,17 @@ class Maintenance:
             " lead_time_days = ?, instructions = ? WHERE id = ?", values + (task_id,))
         return task_id
 
+    def reschedule(self, task_id, from_date, to_date):
+        """Move the task's next due date from `from_date` to `to_date` (as on the calendar).
+        Refused if it's no longer due on `from_date`: someone else moved or recorded it."""
+        if not dt.date(2000, 1, 1) <= to_date <= dt.date(2100, 12, 31):
+            raise MaintenanceError("Pick a date between 2000 and 2100.")
+        if self.db.execute("UPDATE maint_tasks SET next_due = ? WHERE id = ? AND next_due = ?",
+                           (to_date.isoformat(), task_id, from_date.isoformat())) != 1:
+            if not self.db.query("SELECT 1 FROM maint_tasks WHERE id = ?", (task_id,)):
+                raise MaintenanceError("That task doesn't exist any more.")
+            raise MaintenanceError("Its due date changed since this page was opened. Reload to see where it is now.")
+
     def delete_task(self, task_id):
         with self.db.connect() as conn:
             for table in ("maint_completions", "maint_attachments"):

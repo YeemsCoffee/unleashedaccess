@@ -110,12 +110,12 @@ class StartupGuard:
         page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="{self.retry_seconds}">
-<title>Unleashed Access can't start</title>
+<title>Yeems Core can't start</title>
 <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:680px;margin:48px auto;padding:0 16px;color:#1b1b1b}}
 h1{{font-size:22px}}.todo{{background:#fdf0d9;padding:12px 14px;border-radius:8px}}
 pre{{white-space:pre-wrap;background:#f4f3f0;padding:12px;border-radius:8px;font-size:13px}}
 .muted{{color:#6b6a66;font-size:14px}}</style></head><body>
-<h1>Unleashed Access can't start yet</h1>
+<h1>Yeems Core can't start yet</h1>
 <p><strong>{html.escape(headline)}</strong></p>
 <p class="todo">{html.escape(todo)}</p>
 <p class="muted">After you change a setting, the app restarts by itself. It also tries again every

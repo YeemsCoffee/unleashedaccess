@@ -139,7 +139,7 @@ class Database:
             self.query("SELECT COUNT(*) AS n FROM ul_sync_runs")
         except Exception as e:
             raise RuntimeError(
-                "The shared database has no Unleashed Access tables yet. Start the instance that "
+                "The shared database has no Yeems Core tables yet. Start the instance that "
                 "has the Unleashed API key first (it creates them), then start this one.") from e
 
     def close(self):

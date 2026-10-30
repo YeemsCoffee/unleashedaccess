@@ -66,7 +66,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Maintenance → Overview | Overdue tasks, tasks due in the next 7 days, what's assigned to you, parts to order |
 | Maintenance → Tasks | Tasks by functional location (a location includes the ones under it), filtered by status or person; each task's details, recording work, files and history |
 | Maintenance → Locations | The functional location tree: add, rename, move, delete |
-| Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, and work done |
+| Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, and work done. Click a day to add a task due then; drag a task's due date to another day to move it (with a mouse or a finger) |
 | Maintenance → Workload | Tasks, overdue and due soon for each person |
 | Maintenance → History | Work recorded (completed or skipped) over any dates, by person |
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |

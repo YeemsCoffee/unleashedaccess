@@ -952,6 +952,45 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIn(text, page)
         self.assertIn("cal-planned", self.c.get("/maintenance/calendar?month=2026-08").get_data(as_text=True))
 
+    def test_calendar_days_add_tasks_and_due_dates_can_be_moved(self):
+        weekly = self._task("Clean grinder burrs", 7, TODAY + dt.timedelta(days=1))  # due Jul 16
+        page = self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True)
+        self.assertIn("<strong>Yeems Core</strong>", page)
+        add = "/maintenance/tasks/new?next_due=2026-07-20&amp;return_to=/maintenance/calendar?month%3D2026-07"
+        self.assertIn(f'data-date="2026-07-20" data-new-url="{add}"', page)
+        self.assertIn(f'data-move-url="/maintenance/tasks/{weekly}/reschedule" data-due="2026-07-16"', page)
+        self.assertEqual(page.count("cal-movable"), 1)  # its due date; not the dates its schedule brings
+
+        # Clicking Jul 20: the new task is due then, and saving goes back to the calendar.
+        form = self.c.get("/maintenance/tasks/new?next_due=2026-07-20&return_to=/maintenance/calendar?month=2026-07")
+        html = form.get_data(as_text=True)
+        self.assertIn('name="next_due" value="2026-07-20"', html)
+        self.assertIn('name="return_to" value="/maintenance/calendar?month=2026-07"', html)
+        res = self.c.post("/maintenance/tasks/new", data={"name": "Check ice machine", "frequency_days": "30",
+                                                          "next_due": "2026-07-20",
+                                                          "return_to": "/maintenance/calendar?month=2026-07"})
+        self.assertEqual(res.headers["Location"], "/maintenance/calendar?month=2026-07")
+        elsewhere = self.c.post("/maintenance/tasks/new", data={"name": "X", "frequency_days": "1", "next_due": "2026-07-20",
+                                                                "return_to": "https://example.com/maintenance/"})
+        self.assertRegex(elsewhere.headers["Location"], r"^/maintenance/tasks/\d+$")
+
+        # Dragging the grinder from Jul 16 to Jul 18.
+        moved = self.c.post(f"/maintenance/tasks/{weekly}/reschedule", data={"from": "2026-07-16", "to": "2026-07-18"})
+        self.assertEqual(moved.get_json(), {"ok": True, "message": "Moved Clean grinder burrs to Jul 18, 2026.",
+                                            "next_due": "2026-07-18"})
+        self.assertEqual(self.store.task(weekly, TODAY)["next_due"], dt.date(2026, 7, 18))
+        self.assertIn("Moved Clean grinder burrs to Jul 18, 2026",
+                      self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True))
+        stale = self.c.post(f"/maintenance/tasks/{weekly}/reschedule", data={"from": "2026-07-16", "to": "2026-07-25"})
+        self.assertEqual(stale.status_code, 409)
+        self.assertIn("changed since this page was opened", stale.get_json()["message"])
+        self.assertEqual(self.c.post(f"/maintenance/tasks/{weekly}/reschedule",
+                                     data={"from": "2026-07-18", "to": "soon"}).status_code, 400)
+        self.assertEqual(self.store.task(weekly, TODAY)["next_due"], dt.date(2026, 7, 18))
+        past = self.c.post(f"/maintenance/tasks/{weekly}/reschedule", data={"from": "2026-07-18", "to": "2026-07-10"})
+        self.assertIn("That date has passed, so it's overdue.", past.get_json()["message"])
+        self.assertEqual(self.store.task(weekly, TODAY)["status"], "overdue")
+
 
 class RefusingTransport(WsgiTransport):
     """Mock transport that answers 403 for some endpoints, like an API user without access."""

@@ -6,7 +6,7 @@ record work and attach files; deleting a task or a location is for admins.
 """
 import datetime as dt
 
-from flask import (Blueprint, Response, abort, current_app, flash, redirect, render_template,
+from flask import (Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template,
                    request, url_for)
 
 import dashboard
@@ -127,20 +127,28 @@ def tasks():
 def _task_form(task=None, form=None, error=None):
     status = 400 if error else 200
     return render_template("maint/task_form.html", task=task, form=form or {}, error=error,
-                           locations=_store().locations(), people=_people(), today=_today()), status
+                           locations=_store().locations(), people=_people(), today=_today(),
+                           return_to=_return_to()), status
+
+
+def _return_to():
+    """Where to go back to after adding a task (e.g. the calendar month it was added from):
+    only a Maintenance page."""
+    target = request.values.get("return_to") or ""
+    return target if target.startswith("/maintenance/") and "//" not in target else None
 
 
 @bp.route("/tasks/new", methods=["GET", "POST"])
 def task_new():
     if request.method == "GET":
-        return _task_form(form={"location_id": request.args.get("location", ""),
-                                "next_due": _today().isoformat()})
+        due = dashboard._date_arg("next_due", _today())
+        return _task_form(form={"location_id": request.args.get("location", ""), "next_due": due.isoformat()})
     try:
         task_id = _store().save_task(None, request.form, {p["id"] for p in _people()}, dashboard._person())
     except MaintenanceError as e:
         return _task_form(form=request.form, error=str(e))
     flash(f"Added {' '.join(request.form.get('name', '').split())}.", "ok")
-    return redirect(url_for("maint.task", task_id=task_id))
+    return redirect(_return_to() or url_for("maint.task", task_id=task_id))
 
 
 @bp.get("/tasks/<int:task_id>")
@@ -183,6 +191,25 @@ def task_complete(task_id):
     done = "Skipped" if request.form.get("status") == "skipped" else "Recorded"
     flash(f"{done}. It's next due {dashboard.fmt_date(following)}.", "ok")
     return redirect(url_for("maint.task", task_id=task_id))
+
+
+@bp.post("/tasks/<int:task_id>/reschedule")
+def task_reschedule(task_id):
+    """Move a task's next due date, from the calendar (dragging it to another day)."""
+    try:
+        from_date = dt.date.fromisoformat(request.form.get("from", ""))
+        to_date = dt.date.fromisoformat(request.form.get("to", ""))
+    except ValueError:
+        return jsonify(ok=False, message="That isn't a date."), 400
+    found = _store().task(task_id, _today())
+    try:
+        _store().reschedule(task_id, from_date, to_date)
+    except MaintenanceError as e:
+        return jsonify(ok=False, message=str(e)), 409
+    message = f"Moved {found['name']} to {dashboard.fmt_date(to_date)}." + (
+        " That date has passed, so it's overdue." if to_date < _today() else "")
+    flash(message, "ok")
+    return jsonify(ok=True, message=message, next_due=to_date.isoformat())
 
 
 @bp.post("/tasks/<int:task_id>/delete")

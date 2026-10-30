@@ -165,6 +165,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
             "maint.task_complete": "maint.tasks", "maint.task_delete": "maint.tasks",
+            "maint.task_reschedule": "maint.calendar",
             "maint.attachment_add": "maint.tasks", "maint.attachment": "maint.tasks",
             "maint.attachment_delete": "maint.tasks",
             "maint.location_save": "maint.locations", "maint.location_delete": "maint.locations"}
