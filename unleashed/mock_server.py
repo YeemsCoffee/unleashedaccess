@@ -80,8 +80,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     def stock_on_hand(page=1):
         as_at = _date_arg("asAtDate")
         wh = request.args.get("warehouseCode")
-        if wh and wh not in {w["WarehouseCode"] for w in ds.warehouses}:
-            return _paged([], page)
+        if wh and wh != next(w["WarehouseCode"] for w in ds.warehouses if w.get("IsDefault")):
+            return _paged([], page)  # all the stock is in the default warehouse
         rows = []
         for p in ds.products.values():
             if not _match(p["ProductCode"], "productCode"):

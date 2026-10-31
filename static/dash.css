@@ -267,6 +267,15 @@ td.wrap { white-space: normal; min-width: 280px; }
 .fieldlist dt { font-weight: 600; font-size: 13px; }
 .fieldlist dd { margin: 2px 0 0; color: var(--text-secondary); word-break: break-word; }
 .explain { margin-top: 12px; }
+.row-total td { font-weight: 600; border-top: 1px solid var(--line); }
+.cogs-setup { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; max-width: 640px; }
+.cogs-setup .block { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.cogs-setup select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); max-width: 100%; }
+.store-picks { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface-1); }
+.store-picks label { display: flex; gap: 8px; align-items: baseline; color: var(--text-primary); font-size: 14px; }
+.cogs-setup .btn { align-self: flex-start; }
 .explain p { margin: 8px 0 0; color: var(--text-secondary); font-size: 14px; max-width: 72ch; }
 
 .header-actions { align-items: center; }

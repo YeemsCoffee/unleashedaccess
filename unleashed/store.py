@@ -29,6 +29,26 @@ OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies"}
 UNWINDOWED_ENDPOINTS = {"Assemblies"}
 ALL_DATES = "all"  # the stored window of an unwindowed endpoint
 CURRENT = "current"
+# Settings kept with the copy, since they name things in this Unleashed account: the
+# warehouse whose stock on hand COGS uses ("" for all of them), and the customers that
+# are stores (a JSON list of customer codes). Stock snapshots are kept for that warehouse;
+# COGS switches to it once a sync has fetched them (COGS_WAREHOUSE_READY).
+COGS_WAREHOUSE, COGS_WAREHOUSE_READY, COGS_STORES = "cogs_warehouse", "cogs_warehouse_ready", "cogs_stores"
+
+
+def cogs_settings(store):
+    """{"warehouse": the code COGS counts stock in now (None: all), "pending": one chosen
+    whose stock history hasn't downloaded yet, "stores": [customer codes]}."""
+    chosen = store.get_state(COGS_WAREHOUSE) or None
+    ready = chosen and store.get_state(COGS_WAREHOUSE_READY) == chosen
+    return {"warehouse": chosen if ready else None, "pending": None if ready else chosen,
+            "stores": json.loads(store.get_state(COGS_STORES) or "[]")}
+
+
+def snapshot_key(as_at, warehouse=None):
+    """How a stock snapshot is stored: its date (or CURRENT), then "@warehouse" for one
+    warehouse's stock rather than all of it."""
+    return f"{as_at}@{warehouse}" if warehouse else as_at
 
 
 def utc_now(offset_seconds=0):
@@ -216,19 +236,29 @@ class LocalStore:
             " ON CONFLICT (as_at) DO UPDATE SET data = excluded.data,"
             " fetched_at = excluded.fetched_at", (as_at, json.dumps(items), utc_now()))
 
-    def snapshots_in_month(self, month):
-        """{as_at: rows} for every stored snapshot dated in `month` ("YYYY-MM"), in one query."""
-        return {r["as_at"]: json.loads(r["data"]) for r in self.db.query(
-            "SELECT as_at, data FROM ul_stock_snapshots WHERE as_at LIKE ?", (f"{month}-%",))}
+    def snapshots_in_month(self, month, warehouse=None):
+        """{as_at: rows} for every stored snapshot dated in `month` ("YYYY-MM"), in one
+        query: of all stock, or of one warehouse's."""
+        suffix = snapshot_key("", warehouse)
+        return {r["as_at"][:10]: json.loads(r["data"]) for r in self.db.query(
+            "SELECT as_at, data FROM ul_stock_snapshots WHERE as_at LIKE ?", (f"{month}-%",))
+            if r["as_at"][10:] == suffix}
 
-    def snapshot_dates(self):
-        return {r["as_at"] for r in self.db.query("SELECT as_at FROM ul_stock_snapshots")
-                if r["as_at"] != CURRENT}
+    def snapshot_dates(self, warehouse=None):
+        suffix = snapshot_key("", warehouse)
+        return {r["as_at"][:10] for r in self.db.query("SELECT as_at FROM ul_stock_snapshots")
+                if not r["as_at"].startswith(CURRENT) and r["as_at"][10:] == suffix}
 
-    def delete_snapshots(self, keep):
-        """Drop dated snapshots not in `keep`."""
-        gone = [(d,) for d in self.snapshot_dates() if d not in keep]
+    def delete_snapshots(self, keep, warehouse=None):
+        """Drop dated snapshots (of all stock, or of `warehouse`'s) not in `keep`."""
+        gone = [(snapshot_key(d, warehouse),) for d in self.snapshot_dates(warehouse) if d not in keep]
         self.db.executemany("DELETE FROM ul_stock_snapshots WHERE as_at = ?", gone)
+
+    def delete_warehouse_snapshots(self, keep=None):
+        """Drop every warehouse's snapshots but `keep`'s (when COGS uses another one)."""
+        rows = self.db.query("SELECT as_at FROM ul_stock_snapshots WHERE as_at LIKE ?", ("%@%",))
+        self.db.executemany("DELETE FROM ul_stock_snapshots WHERE as_at = ?",
+                            [(r["as_at"],) for r in rows if r["as_at"].split("@", 1)[1] != keep])
 
     # ------------------------------------------------------------ sync runs
 
@@ -358,20 +388,22 @@ class LocalStoreClient:
         return items
 
     def _stock(self, params):
-        if params.get("warehouseCode"):
+        warehouse = params.get("warehouseCode") or None
+        if warehouse and warehouse != self._memo(("state", COGS_WAREHOUSE),
+                                                 lambda: self.store.get_state(COGS_WAREHOUSE) or None):
             return self._live("StockOnHand", params, "Per-warehouse stock isn't in the stored copy")
         as_at = params.get("asAtDate")
         key = CURRENT if not as_at or as_at[:10] >= self.today_fn().isoformat() else as_at[:10]
         # A month of daily snapshots loads in one query: the COGS chart reads them all.
-        bucket = self._memo(("snapshots", key[:7] if key != CURRENT else CURRENT),
-                            lambda: {CURRENT: self.store.snapshot(CURRENT)} if key == CURRENT
-                            else self.store.snapshots_in_month(key[:7]))
+        bucket = self._memo(("snapshots", warehouse, key[:7] if key != CURRENT else CURRENT),
+                            lambda: {CURRENT: self.store.snapshot(snapshot_key(CURRENT, warehouse))}
+                            if key == CURRENT else self.store.snapshots_in_month(key[:7], warehouse))
         rows = bucket.get(key)
         if rows is None:
             if not self.fetch_snapshot:
-                raise UnleashedError(f"Stock on hand as at {key} isn't in the shared copy yet "
-                                     "(only the syncing instance can fetch it)")
-            rows = bucket[key] = self.fetch_snapshot(key)
+                raise UnleashedError(f"Stock on hand{' in ' + warehouse if warehouse else ''} as at {key} "
+                                     "isn't in the shared copy yet (only the syncing instance can fetch it)")
+            rows = bucket[key] = self.fetch_snapshot(key, warehouse)
         code = params.get("productCode")
         if code:
             rows = [r for r in rows if (r.get("ProductCode") or "").lower() == code.lower()]

@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from unleashed.client import (UnleashedClient, UnleashedError, WsgiTransport, parse_date, sign,  # noqa: E402
                               writable)
 from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app  # noqa: E402
-from unleashed.reports import Reports, add_months  # noqa: E402
+from unleashed.reports import Reports, add_months, month_end  # noqa: E402
+from unleashed.store import snapshot_key  # noqa: E402
 
 TODAY = dt.date(2026, 7, 15)
 # Tests finish the first sync before serving and never start the background thread.
@@ -1420,6 +1421,75 @@ class StoreSyncTests(unittest.TestCase):
                      "/production/boms/BOM-CB", "/production/usage", "/production/orders/ASM-00000001"):
             self.assertEqual(c.get(path).status_code, 200, path)
         self.assertEqual(len(self._api_log()), before)
+
+    def test_cogs_is_split_by_store(self):
+        app = self._app()
+        c = app.test_client()
+        reports = app.extensions["unleashed"]["reports"]
+        page = c.get("/cogs").get_data(as_text=True)
+        self.assertIn("Choose which Unleashed customers are your stores", page)
+        self.assertIn('value="GDN-POS"', page)  # an admin picks them here
+        res = c.post("/cogs/settings", data={"store": ["GDN-POS", "WHSL-01", "NOT-A-CUSTOMER"], "warehouse": ""})
+        self.assertEqual(res.headers["Location"], "/cogs#by-store")
+        self.assertEqual(reports.cogs_settings()["stores"], ["GDN-POS", "WHSL-01"])
+
+        month = add_months(TODAY.replace(day=1), -1)
+        cogs = reports.cogs(month)
+        split = reports.cogs_by_store(cogs)
+        sales = [o for o in reports.sales_orders(month - dt.timedelta(days=7), month_end(month), status="Completed")
+                 if month <= (o["completed_date"] or o["order_date"]) <= month_end(month)]
+        for row in split["stores"]:
+            mine = [o for o in sales if o["customer_code"] == row["code"]]
+            self.assertEqual(row["orders"], len(mine))
+            self.assertAlmostEqual(row["cost"], sum(o["cost"] for o in mine), places=6)  # at cost, not price
+        self.assertEqual([r["name"] for r in split["stores"]], ["Gardena POS (daily sales)", "Mock Wholesale Cafe"])
+        self.assertGreater(split["other_orders"], 0)  # the catering client isn't a store
+        self.assertAlmostEqual(split["sent"] + split["other_customers"] + split["written_off"] + split["rest"],
+                               cogs["cogs"], places=6)
+        self.assertLess(abs(split["rest"]), 1.0)  # the mock's orders and write-offs explain its COGS
+
+        page = c.get(f"/cogs?month={month:%Y-%m}").get_data(as_text=True)
+        for text in ("Gardena POS (daily sales)", "Sent to stores", "Other customers", "Stock written off",
+                     "Not on an order or write-off", "Not sent to a store"):
+            self.assertIn(text, page)
+        csv_text = c.get(f"/cogs?month={month:%Y-%m}&format=csv&by=store").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Store,Customer code,Orders,Cost of what was sent,Share of COGS"))
+        self.assertIn("Gardena POS (daily sales),GDN-POS,", csv_text)
+        self.assertIn(f"COGS,,,{round(cogs['cogs'], 2)},1", csv_text)
+
+    def test_cogs_counts_stock_in_the_warehouse_chosen(self):
+        self.ds.warehouses.append({"Guid": "wh-tor", "WarehouseCode": "TOR", "WarehouseName": "Torrance Store",
+                                   "IsDefault": False})
+        app = self._app()
+        c = app.test_client()
+        ext = app.extensions["unleashed"]
+        reports, store = ext["reports"], ext["store"]
+        before = reports.cogs(TODAY)
+        self.assertIsNone(before["warehouse"])
+        # The main warehouse holds all the mock's stock: COGS is the same, from its own snapshots.
+        page = c.post("/cogs/settings", data={"warehouse": "GDN"}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("once its stock history has downloaded", page)
+        self.assertEqual(reports.cogs_settings()["warehouse"], "GDN")  # the sync ran (no scheduler here)
+        self.assertIn("in Gardena Store", page)
+        self.assertIn(snapshot_key(TODAY.replace(day=1).isoformat(), "GDN"),
+                      {r["as_at"] for r in self.app_db.query("SELECT as_at FROM ul_stock_snapshots")})
+        self.assertAlmostEqual(reports.cogs(TODAY)["cogs"], before["cogs"], places=4)
+        # One that holds none: everything received counts as used.
+        store.set_state("cogs_warehouse", "TOR")
+        ext["store_client"].clear_cache()
+        self.assertEqual(reports.cogs_settings(), {"warehouse": None, "pending": "TOR", "stores": []})
+        self.assertIn("COGS will count stock on hand in Torrance Store once", c.get("/cogs").get_data(as_text=True))
+        ext["syncer"].sync()
+        torrance = reports.cogs(TODAY)
+        self.assertEqual((torrance["warehouse"], torrance["opening"], torrance["closing"]), ("TOR", 0, 0))
+        self.assertAlmostEqual(torrance["cogs"], torrance["purchases"], places=4)
+        kept = {r["as_at"] for r in self.app_db.query("SELECT as_at FROM ul_stock_snapshots")}
+        self.assertFalse(any(k.endswith("@GDN") for k in kept))  # the old warehouse's are gone
+        # Every page still reads from the copy.
+        logged = len(self.app_db.query("SELECT id FROM unleashed_api_log"))
+        for path in ("/", "/cogs", f"/cogs?month={add_months(TODAY.replace(day=1), -1):%Y-%m}"):
+            self.assertEqual(c.get(path).status_code, 200, path)
+        self.assertEqual(len(self.app_db.query("SELECT id FROM unleashed_api_log")), logged)
 
     def test_incremental_sync_picks_up_backdated_change(self):
         app = self._app()

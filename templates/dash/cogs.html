@@ -14,15 +14,20 @@
   <div class="hero-label">{{ c.month|month_name }}{{ ' · running through ' ~ (c.through|d) if c.is_current else ' · full month' }}</div>
   <div class="hero-value">{{ c.cogs|money }}</div>
   <div class="formula">
-    <div><span class="f-label">Ending inventory {{ c.prior_end|d }}</span><span class="f-val">{{ c.opening|money }}</span></div>
+    <div><span class="f-label">Ending inventory {{ c.prior_end|d }}</span><span class="f-val">{{ c.opening|money }}</span>
+      {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
     <div class="op">+</div>
     <div><span class="f-label">Purchases received</span><span class="f-val">{{ c.purchases|money }}</span>
       <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping</span></div>
     <div class="op">−</div>
-    <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span></div>
+    <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span>
+      {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
     <div class="op">=</div>
     <div class="f-result"><span class="f-label">COGS</span><span class="f-val">{{ c.cogs|money }}</span></div>
   </div>
+  {% if warehouse_name %}<p class="muted small">Inventory is the stock on hand in {{ warehouse_name }}: stock that leaves it counts as used, wherever it goes.</p>{% endif %}
+  {% if pending_name %}<p class="recon recon-warn">! COGS will count stock on hand in {{ pending_name }} once its stock history has
+    downloaded with the next sync. Until then it counts every warehouse.</p>{% endif %}
   {% set diff = c.cogs - recon.total %}
   <p class="recon {{ 'recon-ok' if diff|abs < 1 else 'recon-warn' }}">
     {{ '✓' if diff|abs < 1 else '!' }}
@@ -44,6 +49,52 @@
       an adjustment explaining it: usage not recorded as sales, unrecorded waste, purchase costs
       changed after receipt, or documents entered with an earlier date.</p>
   </details>
+</section>
+
+<section class="card" id="by-store">
+  <div class="card-head"><h2>By store</h2>
+    {% if split.stores %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), format='csv', by='store') }}">Export CSV</a>{% endif %}</div>
+  {% if split.stores %}
+  <p class="muted">A store's COGS is what was sent to it on completed sales orders, at Unleashed's average landed cost
+    when it went out (not the price on the order). What wasn't sent to a store is underneath, so the rows add up to COGS.</p>
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Store</th><th class="num">Orders</th><th class="num">Cost of what was sent</th><th class="num">Share of COGS</th></tr></thead>
+    <tbody>
+    {% for s in split.stores %}
+    <tr><td><a href="{{ url_for('dash.sales', customer=s.code, start=c.month.isoformat(), end=c.through.isoformat(), status='Completed') }}">{{ s.name }}</a></td>
+      <td class="num">{{ s.orders }}</td><td class="num">{{ s.cost|money }}</td><td class="num">{{ s.share|pct }}</td></tr>
+    {% endfor %}
+    <tr class="row-total"><td>Sent to stores</td><td></td><td class="num">{{ split.sent|money }}</td><td class="num">{{ split.sent_share|pct }}</td></tr>
+    <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}</td><td class="num">{{ split.other_share|pct }}</td></tr>
+    <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
+    <tr><td>Not on an order or write-off
+        <div class="muted small">Usage not recorded, production losses, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
+      <td></td><td class="num">{{ split.rest|money }}</td><td class="num">{{ split.rest_share|pct }}</td></tr>
+    </tbody>
+    <tfoot><tr><td>COGS</td><td></td><td class="num">{{ split.cogs|money }}</td><td class="num">{{ '100.0%' if split.cogs > 0 else '—' }}</td></tr></tfoot>
+  </table></div>
+  {% else %}
+  <p class="muted">Choose which Unleashed customers are your stores{{ '' if can_set_up else ' (an admin can)' }}. Each store's
+    COGS is then what was sent to it on sales orders, at cost.</p>
+  {% endif %}
+  {% if can_set_up %}
+  <details class="explain" {{ 'open' if not split.stores }}>
+    <summary>Stores and stock on hand</summary>
+    <form method="post" action="{{ url_for('dash.cogs_settings_save') }}" class="cogs-setup">
+      <input type="hidden" name="month" value="{{ month.strftime('%Y-%m') }}">
+      <label class="block">Stock on hand counted in COGS
+        <select name="warehouse"><option value="">Every warehouse</option>
+          {% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == (settings.pending or settings.warehouse) }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+      <p class="muted small">Stock that leaves this warehouse counts as used, wherever it goes.</p>
+      <div class="block"><span>Customers that are stores</span>
+        <div class="store-picks">{% for cu in customers %}
+          <label><input type="checkbox" name="store" value="{{ cu.CustomerCode }}" {{ 'checked' if cu.CustomerCode in settings.stores }}>
+            {{ cu.CustomerName or cu.CustomerCode }} <span class="muted small">{{ cu.CustomerCode }}</span></label>{% else %}
+          <p class="muted">No customers in Unleashed yet.</p>{% endfor %}</div></div>
+      <button class="btn btn-primary">Save</button>
+    </form>
+  </details>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -99,5 +150,21 @@
     </tbody>
   </table>
   </div>
+  {% if split.stores and history and history[0].by_store %}
+  <h3 class="run-totals">By store</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Month</th>{% for s in split.stores %}<th class="num">{{ s.name }}</th>{% endfor %}<th class="num">Not sent to a store</th><th class="num">COGS</th></tr></thead>
+    <tbody>
+    {% for h in history|reverse %}
+    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m')) }}#by-store">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
+      {% for s in split.stores %}{% set row = h.by_store.stores|selectattr('code', 'equalto', s.code)|first %}
+      <td class="num">{{ row.cost|money if row else '—' }}</td>{% endfor %}
+      <td class="num">{{ (h.cogs - h.by_store.sent)|money }}</td><td class="num"><strong>{{ h.cogs|money }}</strong></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
 </section>
 {% endblock %}

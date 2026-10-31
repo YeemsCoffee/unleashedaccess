@@ -174,6 +174,29 @@ The COGS page also cross-checks the result against cost of sales (average
 landed cost × quantity on completed sales orders) plus stock write-offs, and
 flags any gap.
 
+**Stock on hand from one warehouse.** Under **By store → Stores and stock on
+hand**, an admin can choose the warehouse whose stock on hand COGS counts (for
+example the main warehouse, "Warehouse"), instead of every warehouse. Stock that
+leaves it counts as used, wherever it goes. The sync keeps that warehouse's
+stock history too, and COGS switches to it once a sync has downloaded it (until
+then it counts every warehouse, and the page says so).
+
+**By store.** Stores are Unleashed customers that stock is sent to on sales
+orders; the admin ticks which customers are stores in the same place. A store's
+COGS is what was sent to it on completed sales orders that month, at
+Unleashed's average landed cost when it went out (not the price on the order).
+What wasn't sent to a store is shown underneath, so the rows add up to COGS:
+
+```
+COGS = sent to each store (cost of completed sales orders to it)
+     + other customers (cost of their completed sales orders)
+     + stock written off (adjustments in the COGS warehouse)
+     + not on an order or write-off (usage not recorded, production losses, …)
+```
+
+The last 12 months table gets a column per store, and **Export CSV** in the By
+store section downloads the split.
+
 ## Production
 
 Production reads Unleashed **assemblies** (production orders) and **bills of

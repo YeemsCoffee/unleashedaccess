@@ -17,8 +17,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .client import UnleashedError
 from .reports import add_months, cost_line_keys, month_start
-from .store import (ALL_DATES, CURRENT, DOCUMENT_ENDPOINTS, OPTIONAL_ENDPOINTS,
-                    REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns, utc_now)
+from .store import (ALL_DATES, COGS_WAREHOUSE, COGS_WAREHOUSE_READY, CURRENT, DOCUMENT_ENDPOINTS,
+                    OPTIONAL_ENDPOINTS, REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns,
+                    snapshot_key, utc_now)
 
 LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it lapse
 
@@ -79,11 +80,14 @@ class Syncer:
         finally:
             self._lock.release()
 
-    def fetch_snapshot(self, as_at):
-        """Fetch one stock-on-hand snapshot ('current' or an ISO date) and store it."""
+    def fetch_snapshot(self, as_at, warehouse=None):
+        """Fetch one stock-on-hand snapshot ('current' or an ISO date), of all stock or of
+        one warehouse's, and store it."""
         params = {} if as_at == CURRENT else {"asAtDate": as_at}
+        if warehouse:
+            params["warehouseCode"] = warehouse
         rows = self.client.get_all("StockOnHand", params)
-        self.store.save_snapshot(as_at, rows)
+        self.store.save_snapshot(snapshot_key(as_at, warehouse), rows)
         return rows
 
     # ------------------------------------------------------------ internals
@@ -141,23 +145,31 @@ class Syncer:
                     (f", {pruned} removed" if pruned else "")
 
             required = self.required_snapshot_dates(today)
-            if full:
-                store.delete_snapshots(keep={d.isoformat() for d in required})
-                todo = required
-            else:
-                recheck_from = today - dt.timedelta(days=self.recheck_days)
-                if changed_dates:
-                    recheck_from = min(recheck_from, min(changed_dates))
-                have = store.snapshot_dates()
-                required_iso = {d.isoformat() for d in required}
-                # Extra snapshots fetched on demand may be stale now; they refetch when needed.
-                store.delete_snapshots(keep={d for d in have if d in required_iso
-                                             or d < recheck_from.isoformat()})
-                todo = [d for d in required if d >= recheck_from or d.isoformat() not in have]
-            self._fetch_snapshots(todo, run)
-            self._step(run, "Current stock on hand")
-            self.fetch_snapshot(CURRENT)
-            counts["stock snapshots"] = len(todo) + 1
+            required_iso = {d.isoformat() for d in required}
+            recheck_from = today - dt.timedelta(days=self.recheck_days)
+            if changed_dates:
+                recheck_from = min(recheck_from, min(changed_dates))
+            # All stock, and the warehouse COGS counts (if it counts just one).
+            cogs_warehouse = store.get_state(COGS_WAREHOUSE) or None
+            store.delete_warehouse_snapshots(keep=cogs_warehouse)
+            fetched = 0
+            for warehouse in (None, cogs_warehouse) if cogs_warehouse else (None,):
+                if full:
+                    store.delete_snapshots(keep=required_iso, warehouse=warehouse)
+                    todo = required
+                else:
+                    have = store.snapshot_dates(warehouse)
+                    # Extra snapshots fetched on demand may be stale now; they refetch when needed.
+                    store.delete_snapshots(keep={d for d in have if d in required_iso
+                                                 or d < recheck_from.isoformat()}, warehouse=warehouse)
+                    todo = [d for d in required if d >= recheck_from or d.isoformat() not in have]
+                self._fetch_snapshots(todo, run, warehouse)
+                self._step(run, f"Current stock on hand{' in ' + warehouse if warehouse else ''}")
+                self.fetch_snapshot(CURRENT, warehouse)
+                fetched += len(todo) + 1
+            if cogs_warehouse:
+                store.set_state(COGS_WAREHOUSE_READY, cogs_warehouse)  # COGS can count it now
+            counts["stock snapshots"] = fetched
 
             store.prune_api_log(self.log_retention_days)
             detail = "; ".join(f"{k}: {v}" for k, v in counts.items())
@@ -216,16 +228,17 @@ class Syncer:
         self.store.set_state(state_key, "yes" if any(has(d) for d in details) else "no")
         return details
 
-    def _fetch_snapshots(self, dates, run):
+    def _fetch_snapshots(self, dates, run, warehouse=None):
         if not dates:
             return
         done = [0]
+        where = f" in {warehouse}" if warehouse else ""
 
         def one(d):
-            self.fetch_snapshot(d.isoformat())
+            self.fetch_snapshot(d.isoformat(), warehouse)
             done[0] += 1
             if done[0] % 5 == 0 or done[0] == len(dates):
-                self._step(run, f"Stock on hand history ({done[0]} of {len(dates)} days)")
+                self._step(run, f"Stock on hand history{where} ({done[0]} of {len(dates)} days)")
 
         self._map(one, dates)
 

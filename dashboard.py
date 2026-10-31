@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import hmac
 import io
+import json
 import math
 import traceback
 from functools import wraps
@@ -20,6 +21,7 @@ from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
+from unleashed.store import COGS_STORES, COGS_WAREHOUSE
 
 bp = Blueprint("dash", __name__)
 
@@ -166,6 +168,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_bom": "dash.production_boms",
             "dash.production_procedure": "dash.production_boms",
             "dash.production_picture": "dash.production_orders",
+            "dash.cogs_settings_save": "dash.cogs_page",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -643,8 +646,23 @@ def cogs_page():
     month = _month_arg(month_start(r.today))
     if month > r.today:
         month = month_start(r.today)
-    c = r.cogs(month, daily=True)
+    settings = r.cogs_settings()
+    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") == "store"))
+    split = r.cogs_by_store(c)
     if _wants_csv():
+        if request.args.get("by") == "store":
+            rest = [{"name": "Other customers", "code": "", "orders": split["other_orders"],
+                     "cost": split["other_customers"], "share": split["other_share"]},
+                    {"name": "Stock written off", "code": "", "orders": "", "cost": split["written_off"],
+                     "share": split["written_off_share"]},
+                    {"name": "Not on an order or write-off", "code": "", "orders": "", "cost": split["rest"],
+                     "share": split["rest_share"]},
+                    {"name": "COGS", "code": "", "orders": "", "cost": split["cogs"], "share": 1 if split["cogs"] > 0 else None}]
+            return _csv(f"cogs-by-store-{month:%Y-%m}", [
+                ("Store", "name"), ("Customer code", "code"), ("Orders", "orders"),
+                ("Cost of what was sent", lambda x: round(x["cost"], 2)),
+                ("Share of COGS", lambda x: "" if x["share"] is None else round(x["share"], 4)),
+            ], split["stores"] + rest)
         return _csv(f"cogs-{month:%Y-%m}", [
             ("Date", lambda x: x["date"].isoformat()),
             ("Purchases to date", lambda x: round(x["purchases_to_date"], 2)),
@@ -652,16 +670,50 @@ def cogs_page():
             ("COGS for day", lambda x: round(x["cogs_day"], 2)),
             ("COGS to date", lambda x: round(x["cogs_to_date"], 2)),
         ], c.get("daily", []))
-    history = r.cogs_history(12)
+    history = r.cogs_history(12, by_store=bool(settings["stores"]))
     bars = [(h["month"].strftime("%b"), h["cogs"],
              f'{month_name(h["month"])} · COGS {money(h["cogs"])}'
              + (" (month to date)" if h["is_current"] else "")) for h in history]
+    admin = is_admin()
     return render_template(
-        "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month), history=history,
+        "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month), history=history, split=split,
+        settings=settings, can_set_up=admin,
+        warehouse_name=r.warehouse_name(c["warehouse"]) if c["warehouse"] else None,
+        pending_name=r.warehouse_name(settings["pending"]) if settings["pending"] else None,
+        warehouses=r.warehouses() if admin else [],
+        customers=sorted(r.customers(), key=lambda x: (x.get("CustomerCode") not in settings["stores"],
+                                                       (x.get("CustomerName") or "").lower())) if admin else [],
         chart=_cogs_chart(c.get("daily", []), month),
         history_chart=charts.bar_chart(bars, "COGS by month, last 12 months"),
         month=month, csv_url=_csv_url(),
     )
+
+
+@bp.post("/cogs/settings")
+@admin_only
+def cogs_settings_save():
+    """Which customers are stores, and which warehouse's stock on hand COGS counts."""
+    r = reports()
+    store = _ext()["store"]
+    back = redirect(url_for("dash.cogs_page", month=request.form.get("month") or None) + "#by-store")
+    warehouse = request.form.get("warehouse") or ""
+    if warehouse and warehouse not in {w.get("WarehouseCode") for w in r.warehouses()}:
+        flash("That warehouse isn't in Unleashed any more. Nothing was changed.", "warn")
+        return back
+    customers = {c.get("CustomerCode") for c in r.customers()}
+    stores = [code for code in dict.fromkeys(request.form.getlist("store")) if code in customers]
+    moved = warehouse != (store.get_state(COGS_WAREHOUSE) or "")
+    store.set_state(COGS_STORES, json.dumps(stores))
+    store.set_state(COGS_WAREHOUSE, warehouse)
+    _ext()["store_client"].clear_cache()
+    flash(f"Saved: {len(stores)} store{'s' if len(stores) != 1 else ''}.", "ok")
+    if moved and warehouse:
+        syncing = _ext()["syncer"] is not None
+        flash(f"COGS will count stock on hand in {r.warehouse_name(warehouse)} once its stock history has "
+              f"downloaded{', with the sync starting now' if syncing else ' with the next sync'}. Until then it "
+              "counts every warehouse.", "ok")
+        _sync_soon()
+    return back
 
 
 @bp.get("/stock-on-hand")
@@ -1270,7 +1322,7 @@ def init_app(app):
     from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app
     from unleashed.production import Production
     from unleashed.reports import Reports
-    from unleashed.store import LocalStore, LocalStoreClient, SourceMismatch, utc_now
+    from unleashed.store import LocalStore, LocalStoreClient, SourceMismatch, cogs_settings, utc_now
     from unleashed.sync import Syncer, SyncScheduler
 
     cfg = app.config
@@ -1336,7 +1388,7 @@ def init_app(app):
     if syncer is not None:
         syncer.on_complete.append(store_client.clear_cache)
 
-    reports = Reports(store_client, today_fn=today_fn)
+    reports = Reports(store_client, today_fn=today_fn, cogs_settings_fn=lambda: cogs_settings(store))
     app.extensions["unleashed"] = {
         "mode": mode, "client": client, "live_client": live_client, "db": db,
         "store": store, "syncer": syncer, "scheduler": scheduler,
