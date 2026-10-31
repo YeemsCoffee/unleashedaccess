@@ -74,10 +74,9 @@
     <tfoot><tr><td>COGS</td><td></td><td class="num">{{ split.cogs|money }}</td><td class="num">{{ '100.0%' if split.cogs > 0 else '—' }}</td></tr></tfoot>
   </table></div>
   {% else %}
-  <p class="muted">Choose which Unleashed customers are your stores{{ '' if can_set_up else ' (an admin can)' }}. Each store's
-    COGS is then what was sent to it on sales orders, at cost.</p>
+  <p class="muted">Choose which Unleashed customers are your stores. Each store's COGS is then what was sent to it on
+    sales orders, at cost.</p>
   {% endif %}
-  {% if can_set_up %}
   <details class="explain" {{ 'open' if not split.stores }}>
     <summary>Stores and stock on hand</summary>
     <form method="post" action="{{ url_for('dash.cogs_settings_save') }}" class="cogs-setup">
@@ -94,7 +93,6 @@
       <button class="btn btn-primary">Save</button>
     </form>
   </details>
-  {% endif %}
 </section>
 
 <section class="card">

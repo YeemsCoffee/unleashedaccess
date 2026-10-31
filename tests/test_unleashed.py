@@ -2007,6 +2007,26 @@ class TeamAccountTests(unittest.TestCase):
         admin.post(f"/maintenance/tasks/{task_id}/delete")
         self.assertIsNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
 
+    def test_finance_users_set_up_cogs_by_store(self):
+        admin = self._admin_client()
+        temp = self._add(admin, "David", "david@yeems.test")  # Standard: Finance, Warehouse, Production
+        david = self.app.test_client()
+        self._sign_in(david, "david@yeems.test", temp)
+        self._choose_password(david, temp, "david-own-password")
+        page = david.get("/cogs").get_data(as_text=True)
+        self.assertIn("Stores and stock on hand", page)
+        self.assertIn('name="store" value="GDN-POS"', page)
+        david.post("/cogs/settings", data={"store": ["GDN-POS"], "warehouse": ""})
+        self.assertEqual(self.app.extensions["unleashed"]["reports"].cogs_settings()["stores"], ["GDN-POS"])
+        # Without Finance, neither the page nor the change.
+        temp = self._add(admin, "Mechanic Mo", "mo@yeems.test", profile="Maintenance technician")
+        mo = self.app.test_client()
+        self._sign_in(mo, "mo@yeems.test", temp)
+        self._choose_password(mo, temp, "mo-own-password1")
+        self.assertEqual(mo.get("/cogs").status_code, 403)
+        self.assertEqual(mo.post("/cogs/settings", data={"store": []}).status_code, 403)
+        self.assertEqual(self.app.extensions["unleashed"]["reports"].cogs_settings()["stores"], ["GDN-POS"])
+
     def test_people_who_only_report_problems(self):
         admin = self._admin_client()
         admin.post("/settings/profiles", data={"name": "Barista", "areas": ["maint_requests"]})

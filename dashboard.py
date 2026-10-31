@@ -674,15 +674,14 @@ def cogs_page():
     bars = [(h["month"].strftime("%b"), h["cogs"],
              f'{month_name(h["month"])} · COGS {money(h["cogs"])}'
              + (" (month to date)" if h["is_current"] else "")) for h in history]
-    admin = is_admin()
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month), history=history, split=split,
-        settings=settings, can_set_up=admin,
+        settings=settings,
         warehouse_name=r.warehouse_name(c["warehouse"]) if c["warehouse"] else None,
         pending_name=r.warehouse_name(settings["pending"]) if settings["pending"] else None,
-        warehouses=r.warehouses() if admin else [],
+        warehouses=r.warehouses(),
         customers=sorted(r.customers(), key=lambda x: (x.get("CustomerCode") not in settings["stores"],
-                                                       (x.get("CustomerName") or "").lower())) if admin else [],
+                                                       (x.get("CustomerName") or "").lower())),
         chart=_cogs_chart(c.get("daily", []), month),
         history_chart=charts.bar_chart(bars, "COGS by month, last 12 months"),
         month=month, csv_url=_csv_url(),
@@ -690,9 +689,9 @@ def cogs_page():
 
 
 @bp.post("/cogs/settings")
-@admin_only
 def cogs_settings_save():
-    """Which customers are stores, and which warehouse's stock on hand COGS counts."""
+    """Which customers are stores, and which warehouse's stock on hand COGS counts. For
+    anyone who opens Finance (the COGS page's tab), as require_access checks."""
     r = reports()
     store = _ext()["store"]
     back = redirect(url_for("dash.cogs_page", month=request.form.get("month") or None) + "#by-store")
