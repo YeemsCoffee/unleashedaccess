@@ -565,6 +565,15 @@ def _api_error(e):
     return render_template("dash/error.html", error=str(e), status=e.status_code), 502
 
 
+@bp.app_errorhandler(404)
+def _not_found(e):
+    if request.path.startswith("/static/"):
+        return e
+    return render_template("dash/error.html", heading="Page not found",
+                           error="There's nothing here. It may have been deleted, in Unleashed or in Core, "
+                                 "or the link is out of date."), 404
+
+
 # ---------------------------------------------------------------- helpers
 
 def _date_arg(name, default):

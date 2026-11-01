@@ -602,6 +602,7 @@ unleashedaccess/
 │   └── charts.py       # server-side SVG charts
 ├── templates/dash/     # page templates
 ├── templates/maint/    # Maintenance page templates
-├── static/             # dash.css, dash.js
+├── templates/brand/    # Yeems logo, submark and icons (SVG, from the brand manual)
+├── static/             # dash.css (the Yeems look), dash.js, favicon.svg, fonts/ (Inter, Montserrat Alternates; SIL OFL)
 └── tests/test_unleashed.py
 ```

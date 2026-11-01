@@ -90,7 +90,7 @@ def bar_chart(bars, label, width=1100, height=260, highlight_last=True):
     y_max = _nice_max(max(max(b[1] for b in bars), 0))
     plot_w, plot_h = width - left - right, height - top - bottom
     slot = plot_w / len(bars)
-    bar_w = min(slot - 2, max(slot * 0.62, 4))
+    bar_w = min(slot - 2, max(slot * 0.62, 4), 56)  # slim, however few bars
     parts = _frame(width, height, pad, y_max)
     base = top + plot_h
     for i, (xl, v, tip) in enumerate(bars):

@@ -1,6 +1,12 @@
 {% extends "dash/base.html" %}
 {% block title %}Sign in{% endblock %}
 {% block content %}
+<div class="signin">
+<aside class="signin-brand" aria-hidden="true">
+  <span class="brand-logo">{% include "brand/logo.svg" %}</span>
+  <span class="signin-home">{% include "brand/home.svg" %}</span>
+  <p>Yeems Core: stock, production, maintenance and finance for Yeems Coffee.</p>
+</aside>
 <section class="card login">
   <h1>Sign in</h1>
   <form method="post">
@@ -23,4 +29,5 @@
   <p class="muted">Forgot your password? Ask an admin on your team to reset it.</p>
   {% endif %}
 </section>
+</div>
 {% endblock %}

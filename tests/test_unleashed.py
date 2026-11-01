@@ -1020,10 +1020,23 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIn(text, page)
         self.assertIn("cal-planned", self.c.get("/maintenance/calendar?month=2026-08").get_data(as_text=True))
 
+    def test_pages_wear_the_yeems_brand(self):
+        page = self.c.get("/maintenance/").get_data(as_text=True)
+        for text in ('rel="icon" href="/static/favicon.svg"', 'aria-label="Yeems coffee"',
+                     'class="brand-name">Yeems Core</strong>', "/static/fonts/inter-latin-400-normal.woff2"):
+            self.assertIn(text, page)
+        for asset in ("favicon.svg", "fonts/inter-latin-400-normal.woff2",
+                      "fonts/montserrat-alternates-latin-700-normal.woff2"):
+            self.assertEqual(self.c.get(f"/static/{asset}").status_code, 200, asset)
+        missing = self.c.get("/maintenance/tasks/999999")  # a branded page, not Flask's plain one
+        self.assertEqual(missing.status_code, 404)
+        self.assertIn("Page not found", missing.get_data(as_text=True))
+        self.assertEqual(self.c.get("/static/nope.css").status_code, 404)
+
     def test_calendar_days_add_tasks_and_due_dates_can_be_moved(self):
         weekly = self._task("Clean grinder burrs", 7, TODAY + dt.timedelta(days=1))  # due Jul 16
         page = self.c.get("/maintenance/calendar?month=2026-07").get_data(as_text=True)
-        self.assertIn("<strong>Yeems Core</strong>", page)
+        self.assertIn('class="brand-name">Yeems Core</strong>', page)
         add = "/maintenance/tasks/new?next_due=2026-07-20&amp;return_to=/maintenance/calendar?month%3D2026-07"
         self.assertIn(f'data-date="2026-07-20" data-new-url="{add}"', page)
         self.assertIn(f'data-move-url="/maintenance/tasks/{weekly}/reschedule" data-due="2026-07-16"', page)

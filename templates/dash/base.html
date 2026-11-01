@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Dashboard{% endblock %} · Yeems Core</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <meta name="theme-color" content="#2B4628">
+  <link rel="preload" href="{{ url_for('static', filename='fonts/inter-latin-400-normal.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='dash.css') }}">
   {% block head %}{% endblock %}
 </head>
@@ -11,7 +14,9 @@
   {% set signed_out = login_enabled and not signed_in %}
   <header class="dash-header">
     <div class="brand">
-      <strong>Yeems Core</strong>
+      <a class="brand-home" href="{{ url_for('dash.overview') }}" aria-label="Yeems Core home">
+        <span class="brand-logo" aria-hidden="true">{% include "brand/logo.svg" %}</span>
+        <strong class="brand-name">Yeems Core</strong></a>
       {% if shows_unleashed or signed_out %}<span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
         {{ {'mock': 'Mock API (simulated data)', 'live': 'Live Unleashed API', 'viewer': 'Shared Unleashed data (view only)'}[unleashed_mode] }}
       </span>{% endif %}
