@@ -292,6 +292,16 @@ the quantities back first. If Unleashed didn't keep them, or refuses to complete
 the reason shows on the order, and it can be completed again. A completion cut
 off part-way (the app restarted) can be retried after 10 minutes.
 
+**Orders finished in Unleashed.** An order completed or deleted in Unleashed
+shows that in Core after the next sync. Each sync asks Unleashed for what
+changed, which can't include an order deleted there (and may miss one completed
+there), so every sync also re-reads, one by one, each order Core still shows as
+open: a completed one gets its new status, and one Unleashed no longer has is
+removed. To see it straight away, use **Check with Unleashed** on the order, or
+**Check open orders with Unleashed** on Production orders. When that finds an
+order completed on an earlier day, the next sync fetches that day's stock on
+hand again, so stock and COGS for it are right too.
+
 **Yield** is two separate measures:
 
 - **Material yield**, for each material: what the bill of materials calls for to

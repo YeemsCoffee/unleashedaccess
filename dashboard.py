@@ -168,6 +168,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_bom": "dash.production_boms",
             "dash.production_procedure": "dash.production_boms",
             "dash.production_picture": "dash.production_orders",
+            "dash.production_check": "dash.production_orders",
             "dash.cogs_settings_save": "dash.cogs_page",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
@@ -863,7 +864,41 @@ def _production_problem():
 
 
 def _render_production(template, **context):
-    return render_template(f"dash/{template}.html", problem=_production_problem(), **context)
+    return render_template(f"dash/{template}.html", problem=_production_problem(),
+                           can_check=_ext()["syncer"] is not None, **context)
+
+
+@bp.post("/production/orders/check")
+def production_check():
+    """Re-read open production orders from Unleashed now (or just "number"), to pick up any
+    completed or deleted there since the last sync."""
+    ext = _ext()
+    number = request.form.get("number") or None
+    if ext["syncer"] is None:
+        flash("This copy of Core doesn't sync with Unleashed, so it can't check. The server that syncs "
+              "does on its next sync.", "warn")
+        return redirect(url_for("dash.production_order", number=number) if number else url_for("dash.production_orders"))
+    checked = ext["syncer"].refresh_open_assemblies({number} if number else None)
+    ext["store_client"].clear_cache()
+    removed = [c["number"] for c in checked["changes"] if c["now"] is None]
+    for c in checked["changes"]:
+        if c["now"] is None:
+            flash(f"{c['number']} isn't in Unleashed any more (deleted there), so it's gone from Core too.", "ok")
+        else:
+            flash(f"{c['number']} is {c['now'].lower()} in Unleashed (it was {(c['was'] or 'open').lower()} here). "
+                  "Updated.", "ok")
+    if checked["failed"]:
+        flash(f"Couldn't read {', '.join(checked['failed'])} from Unleashed. Try again in a minute.", "warn")
+    n = checked["checked"]
+    if not checked["changes"] and not checked["failed"]:
+        flash("Checked with Unleashed: nothing has changed." if number else "There are no open orders to check."
+              if not n else f"Checked {n} open order{'s' if n != 1 else ''} with Unleashed: "
+              f"{'it is' if n == 1 else 'they are all'} still open there.", "ok")
+    if checked["dates"]:
+        _sync_soon()  # stock on hand on the days those orders moved stock
+    if number and number not in removed:
+        return redirect(url_for("dash.production_order", number=number))
+    return redirect(url_for("dash.production_orders"))
 
 
 @bp.get("/production")

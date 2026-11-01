@@ -32,6 +32,10 @@
   <p class="recon {{ 'recon-warn' if o.short else 'recon-ok' }}">
     {% if o.short %}! Not enough stock for every component once orders due before this one take theirs (see Short
       below and Material requirements).{% else %}✓ Stock covers every component, after orders due before this one take theirs.{% endif %}</p>
+  {% if can_check %}<form method="post" action="{{ url_for('dash.production_check') }}" class="run-actions">
+    <input type="hidden" name="number" value="{{ o.number }}">
+    <button class="btn" title="If it was completed or deleted in Unleashed, Core shows that now">Check with Unleashed</button>
+    <span class="muted small">Completed or deleted it in Unleashed? This updates Core now instead of at the next sync.</span></form>{% endif %}
   {% endif %}
 </section>
 
@@ -55,7 +59,7 @@
   {% elif run.status == 'sent' %}
   {% if o.open %}<p class="recon recon-warn">! {{ run.closed_by }} sent what was used and made on {{ run.closed_at|local }}, but
     Unleashed didn't keep the batches as entered, so {{ o.number }} is still parked. Check its batches in Unleashed against the
-    ones below, then complete it there. Core picks it up on the next sync.</p>
+    ones below, then complete it there. Core picks it up on the next sync{{ ', or use Check with Unleashed above' if can_check }}.</p>
   {% elif o.completed %}<p class="recon recon-ok">✓ Sent by {{ run.closed_by }} on {{ run.closed_at|local }}, and completed in Unleashed.</p>{% endif %}
   {% elif not o.open and run.started %}<p class="recon recon-warn">! This order was {{ o.status|lower }} in Unleashed directly, so the quantities recorded here weren't sent.</p>{% endif %}
   {% if batch_check %}

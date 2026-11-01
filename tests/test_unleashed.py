@@ -1401,9 +1401,9 @@ class StoreSyncTests(unittest.TestCase):
         self.app_db.execute("DELETE FROM ul_sync_state WHERE key = 'window:Assemblies'")
         self.assertFalse(syncer.sync()["full"])
         self.assertEqual(store.document_count("Assemblies"), stored)
-        self.assertNotIn("modifiedSince", self._api_log("/Assemblies/%")[-1][1])
+        self.assertNotIn("modifiedSince", self._api_log("/Assemblies/1?%")[-1][1])
         syncer.sync()
-        self.assertIn("modifiedSince=", self._api_log("/Assemblies/%")[-1][1])
+        self.assertIn("modifiedSince=", self._api_log("/Assemblies/1?%")[-1][1])
 
     def test_sync_carries_on_without_production_access(self):
         app = self._app(UNLEASHED_TRANSPORT=RefusingTransport(self.mock, {"Assemblies", "BillOfMaterials"}))
@@ -1425,6 +1425,47 @@ class StoreSyncTests(unittest.TestCase):
                      "/production/boms/BOM-CB", "/production/usage", "/production/orders/ASM-00000001"):
             self.assertEqual(c.get(path).status_code, 200, path)
         self.assertEqual(len(self._api_log()), before)
+
+    def test_orders_completed_or_deleted_in_unleashed_catch_up(self):
+        app = self._app()
+        ext = app.extensions["unleashed"]
+        store, c = ext["store"], app.test_client()
+
+        def status(asm):
+            return next((s for _, n, s in store.document_statuses("Assemblies") if n == asm["AssemblyNumber"]), None)
+
+        parked = [a for a in self.ds.assemblies if a["Status"] == "Parked"]
+        # Deleted in Unleashed: asking it for what changed can't show that, so every sync
+        # re-reads the orders still open here.
+        gone = parked[0]
+        self.ds.assemblies.remove(gone)
+        self.assertEqual(status(gone), "Parked")
+        result = ext["syncer"].sync(full=False)
+        self.assertEqual(result["counts"]["open production orders"], "1 of 4 updated")
+        self.assertIsNone(status(gone))
+        self.assertEqual(c.get(f"/production/orders/{gone['AssemblyNumber']}").status_code, 404)
+
+        # Completed in Unleashed without it showing as changed: the order's button checks now.
+        done = next(a for a in parked[1:] if self.ds.complete(a) is None)  # one there's stock for
+        done["Modified"] = TODAY - dt.timedelta(days=60)
+        self.assertIn("Check with Unleashed", c.get(f"/production/orders/{done['AssemblyNumber']}").get_data(as_text=True))
+        page = c.post("/production/orders/check", data={"number": done["AssemblyNumber"]},
+                      follow_redirects=True).get_data(as_text=True)
+        self.assertIn(f"{done['AssemblyNumber']} is completed in Unleashed (it was parked here)", page)
+        self.assertEqual(status(done), "Completed")
+        self.assertNotIn("Check with Unleashed", page)  # done: nothing left to check
+        self.assertEqual(store.get_state("recheck_from"), "")  # the sync it started fetched its stock days
+
+        # A check outside a sync marks the days whose stock changed, for the next sync.
+        other = next(a for a in parked[1:] if a is not done and self.ds.complete(a) is None)
+        other["Modified"] = TODAY - dt.timedelta(days=60)
+        self.assertEqual(len(ext["syncer"].refresh_open_assemblies()["changes"]), 1)
+        self.assertLessEqual(store.get_state("recheck_from"), TODAY.isoformat())
+
+        page = c.get("/production/orders").get_data(as_text=True)
+        self.assertIn("Check open orders with Unleashed", page)
+        page = c.post("/production/orders/check", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Checked 1 open order with Unleashed: it is still open there.", page)
 
     def test_cogs_is_split_by_store(self):
         app = self._app()

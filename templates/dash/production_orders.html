@@ -12,7 +12,9 @@
   {% endcall %}
 </div>
 {{ production_notice(problem) }}
-<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.production_new') }}">+ New production order</a></div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.production_new') }}">+ New production order</a>
+  {% if can_check %}<form method="post" action="{{ url_for('dash.production_check') }}" class="inline-form">
+    <button class="btn" title="Picks up orders completed or deleted in Unleashed since the last sync">Check open orders with Unleashed</button></form>{% endif %}</div>
 <p class="muted">Unleashed assemblies, filtered by assembly date. Component cost is what the components used were
   worth{{ ", partly estimated at today's average costs where Unleashed gives no cost" if po.estimated }}.</p>
 

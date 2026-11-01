@@ -16,12 +16,15 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from .client import UnleashedError
-from .reports import add_months, cost_line_keys, month_start
+from .reports import (COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES, add_months, cost_line_keys,
+                      month_start)
 from .store import (ALL_DATES, COGS_WAREHOUSE, COGS_WAREHOUSE_READY, CURRENT, DOCUMENT_ENDPOINTS,
                     OPTIONAL_ENDPOINTS, REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns,
                     snapshot_key, utc_now)
 
 LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it lapse
+# Sync state: the earliest day whose stock snapshots a check outside a sync found changed.
+RECHECK_FROM = "recheck_from"
 
 LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
           "StockAdjustments": "stock adjustments", "Assemblies": "assemblies"}
@@ -79,6 +82,41 @@ class Syncer:
                 self.store.release_lock(self.owner)
         finally:
             self._lock.release()
+
+    def refresh_open_assemblies(self, numbers=None):
+        """Re-read from Unleashed, one by one, each production order the copy holds as open
+        (not completed or deleted), or just those in `numbers`. One Unleashed no longer has
+        is removed. Returns {"checked", "changes": [{"number", "was", "now"}] ("now" None
+        for a removed one), "failed": numbers that couldn't be read, "dates": stock dates
+        affected}."""
+        done = set(COMPLETED_ASSEMBLY_STATUSES) | set(INACTIVE_ASSEMBLY_STATUSES)
+        rows = [r for r in self.store.document_statuses("Assemblies")
+                if (r[2] or "").lower() not in done and (numbers is None or r[1] in numbers)]
+        self.client.clear_cache()
+
+        def read(row):
+            try:
+                return row, self.client.get(f"Assemblies/{row[0]}")
+            except UnleashedError as e:
+                return row, None if e.status_code == 404 else e
+
+        result = {"checked": len(rows), "changes": [], "failed": [], "dates": []}
+        for (guid, number, was), current in self._map(read, rows):
+            if current is None:  # Unleashed doesn't have it any more
+                self.store.delete_document("Assemblies", guid)
+                result["changes"].append({"number": number, "was": was, "now": None})
+            elif isinstance(current, dict) and current.get("Guid") == guid:
+                _, dates = self.store.upsert_documents("Assemblies", [current])
+                result["dates"] += dates
+                now = document_columns("Assemblies", current)[1]
+                if (now or "").lower() != (was or "").lower():
+                    result["changes"].append({"number": number, "was": was, "now": now})
+            else:
+                result["failed"].append(number)
+        if result["dates"]:  # stock on hand on those days changed: the next sync fetches it again
+            first, pending = min(result["dates"]).isoformat(), self.store.get_state(RECHECK_FROM)
+            self.store.set_state(RECHECK_FROM, min(first, pending) if pending else first)
+        return result
 
     def fetch_snapshot(self, as_at, warehouse=None):
         """Fetch one stock-on-hand snapshot ('current' or an ISO date), of all stock or of
@@ -144,9 +182,21 @@ class Syncer:
                 counts[endpoint] = f"{len(items)} fetched, {changed} changed" + \
                     (f", {pruned} removed" if pruned else "")
 
+            # Asking only for what changed leaves out an order deleted in Unleashed (and may
+            # leave out one completed there), so every order still open here is re-read.
+            if not full and store.get_state("window:Assemblies") \
+                    and not store.get_state("unavailable:Assemblies"):
+                self._step(run, "Checking open production orders")
+                checked = self.refresh_open_assemblies()
+                changed_dates += checked["dates"]
+                if checked["changes"]:
+                    counts["open production orders"] = f"{len(checked['changes'])} of {checked['checked']} updated"
+
             required = self.required_snapshot_dates(today)
             required_iso = {d.isoformat() for d in required}
             recheck_from = today - dt.timedelta(days=self.recheck_days)
+            if store.get_state(RECHECK_FROM):
+                changed_dates.append(dt.date.fromisoformat(store.get_state(RECHECK_FROM)))
             if changed_dates:
                 recheck_from = min(recheck_from, min(changed_dates))
             # All stock, and the warehouse COGS counts (if it counts just one).
@@ -169,6 +219,7 @@ class Syncer:
                 fetched += len(todo) + 1
             if cogs_warehouse:
                 store.set_state(COGS_WAREHOUSE_READY, cogs_warehouse)  # COGS can count it now
+            store.set_state(RECHECK_FROM, "")
             counts["stock snapshots"] = fetched
 
             store.prune_api_log(self.log_retention_days)

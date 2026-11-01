@@ -184,6 +184,14 @@ class LocalStore:
                 " data = excluded.data, synced_at = excluded.synced_at", rows)
         return len(rows), [dt.date.fromisoformat(x) for x in dates]
 
+    def document_statuses(self, endpoint):
+        """[(guid, number, status)] for every stored document of `endpoint`."""
+        return [(r["guid"], r["number"], r["status"]) for r in self.db.query(
+            "SELECT guid, number, status FROM ul_documents WHERE kind = ?", (endpoint,))]
+
+    def delete_document(self, endpoint, guid):
+        self.db.execute("DELETE FROM ul_documents WHERE kind = ? AND guid = ?", (endpoint, guid))
+
     def prune_documents(self, endpoint, keep_guids):
         """After a full sync: drop documents Unleashed no longer returned."""
         with self.db.connect() as conn:
