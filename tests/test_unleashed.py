@@ -90,8 +90,8 @@ class ReportsTests(unittest.TestCase):
     def test_dates_sent_back_to_unleashed_are_in_the_form_it_accepts(self):
         doc = {"AssembleBy": "/Date(1793059200000)/", "Quantity": 2, "Comments": "/Date( in a note",
                "AssemblyLines": [{"LastModifiedOn": "/Date(1793080800500+1300)/", "Product": None}]}
-        self.assertEqual(writable(doc), {
-            "AssembleBy": "2026-10-27T00:00:00", "Quantity": 2, "Comments": "/Date( in a note",
+        self.assertEqual(writable(doc), {  # a date goes back at noon, so it stays the same day
+            "AssembleBy": "2026-10-27T12:00:00", "Quantity": 2, "Comments": "/Date( in a note",
             "AssemblyLines": [{"LastModifiedOn": "2026-10-27T06:00:00", "Product": None}]})
         self.assertEqual(doc["AssembleBy"], "/Date(1793059200000)/")  # a copy; the original is unchanged
 
@@ -601,6 +601,9 @@ class ProductionRunTests(unittest.TestCase):
             self.assertIn('value="A1"' if batches[0][0] else "Batches made", html)  # what was typed is kept
         self.assertEqual(asm["Status"], "Parked")
 
+        # The mock, like Unleashed, keeps a sent time's date in Pacific time: every date stays
+        # on its day (midnight used to come back as the day before).
+        assemble_by = asm["AssembleBy"]
         page = self._close_with_batches(
             c, url, [("VSC-0715-A", "3.5", "2026-07-29"), ("VSC-0715-B", "2.5", "2026-07-30"), ("", "", "")])
         self.assertIn(f"{asm['AssemblyNumber']} is completed in Unleashed", page)
@@ -609,6 +612,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertEqual(asm["Batches"], [
             {"Number": "VSC-0715-A", "Quantity": 3.5, "ExpiryDate": dt.date(2026, 7, 29)},
             {"Number": "VSC-0715-B", "Quantity": 2.5, "ExpiryDate": dt.date(2026, 7, 30)}])
+        self.assertEqual((asm["AssemblyDate"], asm["AssembleBy"]), (TODAY, assemble_by))
         self.assertEqual({l["ProductCode"]: l["Quantity"] for l in asm["Lines"]},
                          {"CRM-HVY-HG": 3, "MILK-WHL-GAL": 1.5, "SYR-VAN-750": 1.2})
         self.assertEqual(asm["Comments"], "Weekend batch")

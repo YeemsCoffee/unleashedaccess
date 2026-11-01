@@ -243,8 +243,9 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             if len(body["Comments"] or "") > 1024:
                 return jsonify({"description": "Comments must be 1024 characters or fewer"}), 400
             a["Comments"] = body["Comments"]
-        if body.get("AssemblyDate"):
-            a["AssemblyDate"] = _body_date(body["AssemblyDate"])
+        for field in ("AssemblyDate", "AssembleBy"):
+            if body.get(field):
+                a[field] = _body_date(body[field])
         if pending is not None:
             a["Batches"] = pending
         a["Modified"] = dt.date.today()
@@ -293,9 +294,14 @@ def _date_arg(name):
     return dt.date.fromisoformat(v[:10]) if v else None
 
 
+# The mock account is in Pacific time. Like the real one, it reads a date-time sent to it
+# as UTC and keeps the date it is there: "2026-11-03T00:00:00" is 4 pm on Nov 2.
+ACCOUNT_UTC_OFFSET = dt.timedelta(hours=-8)
+
+
 def _body_date(v):
-    """A date sent in a request body: "2026-07-15T00:00:00"."""
-    return dt.date.fromisoformat(v[:10]) if v else None
+    """A date sent in a request body: "2026-07-15T12:00:00"."""
+    return (dt.datetime.fromisoformat(v[:19]) + ACCOUNT_UTC_OFFSET).date() if v else None
 
 
 def _ms_date_in(value):

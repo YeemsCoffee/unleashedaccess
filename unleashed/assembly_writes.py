@@ -15,7 +15,7 @@ the same update as PendingBatchNumbers, which completing turns into batches. The
 read back too: if Unleashed didn't keep them as sent, the order is left parked for
 them to be checked and the order completed in Unleashed.
 """
-from .client import parse_date, writable
+from .client import body_date, parse_date, writable
 from .reports import COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES
 
 # Unleashed may round quantities to a product's decimal places; this much difference is the
@@ -37,7 +37,7 @@ def create_assembly(client, product_code, qty, assemble_by, from_warehouse=None,
     `to_warehouse` (warehouse codes). Returns it as Unleashed reports it, number and
     components included."""
     body = {"Product": {"ProductCode": product_code}, "Quantity": qty,
-            "AssembleBy": f"{assemble_by.isoformat()}T00:00:00"}
+            "AssembleBy": body_date(assemble_by)}
     if from_warehouse:
         body["SourceWarehouse"] = {"WarehouseCode": from_warehouse}
     if to_warehouse:
@@ -88,13 +88,13 @@ def close_out(client, guid, quantities, made, on_date, batches=None):
     # form Unleashed accepts.
     body = writable(current)
     body["Quantity"] = made
-    body["AssemblyDate"] = f"{on_date.isoformat()}T00:00:00"
+    body["AssemblyDate"] = body_date(on_date)
     for field in TRACKING_FIELDS:
         if not body.get(field):
             body.pop(field, None)
     if batches:
         body["PendingBatchNumbers"] = [{"Number": b["number"], "Quantity": b["qty"],
-                                        "ExpiryDate": f"{b['expiry']}T00:00:00"} for b in batches]
+                                        "ExpiryDate": body_date(b["expiry"])} for b in batches]
     seen = set()
     for line in body.get("AssemblyLines") or []:
         code = (line.get("Product") or {}).get("ProductCode")

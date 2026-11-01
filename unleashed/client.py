@@ -54,10 +54,19 @@ def format_date(d):
     return d.isoformat() if d else None
 
 
+def body_date(d):
+    """A date (or "YYYY-MM-DD") as Unleashed takes it in a request body. Noon, not midnight:
+    Unleashed reads the time as UTC and keeps the date in the account's time zone, so
+    midnight became the day before in Pacific time (an expiry of Nov 3 was kept as Nov 2).
+    Noon is the same day anywhere within 11 hours of UTC."""
+    return f"{d.isoformat() if isinstance(d, dt.date) else d}T12:00:00"
+
+
 def writable(value):
     """`value` (a document as Unleashed returned it) with every "/Date(ms)/" in the
-    "2026-07-15T00:00:00" form: Unleashed rejects its own date format in a request body
-    ("... is not a valid value for DateTime")."""
+    "2026-07-15T12:00:00" form: Unleashed rejects its own date format in a request body
+    ("... is not a valid value for DateTime"). A date (midnight UTC, as Unleashed gives
+    dates) goes back at noon (body_date), so sending it back doesn't move it a day."""
     if isinstance(value, dict):
         return {k: writable(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -65,6 +74,8 @@ def writable(value):
     m = _DATE_RE.fullmatch(value) if isinstance(value, str) else None
     if m:
         moment = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc)
+        if moment.time() == dt.time(0):
+            return body_date(moment.date())
         return moment.strftime("%Y-%m-%dT%H:%M:%S")
     return value
 
