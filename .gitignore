@@ -7,3 +7,5 @@ unleashedaccess.db-shm
 venv/
 .pytest_cache/
 .env
+# Deploy zips (git archive -o unleashedaccess.zip HEAD)
+*.zip
