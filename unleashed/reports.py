@@ -58,9 +58,9 @@ class Reports:
         self.shipping_codes = {c.upper() for c in shipping_codes}
         self.max_workers = max_workers
         self._details_have_cost_lines = None
-        # {"warehouse": code whose stock on hand COGS counts (None: all), "pending": one chosen
-        # but not ready yet, "stores": [customer codes]} (store.cogs_settings)
-        self.cogs_settings_fn = cogs_settings_fn or (lambda: {"warehouse": None, "pending": None, "stores": []})
+        # {"warehouses": codes whose stock on hand COGS counts (None: every warehouse), "pending":
+        # ones chosen but not ready yet, "stores": [customer codes]} (store.cogs_settings)
+        self.cogs_settings_fn = cogs_settings_fn or (lambda: {"warehouses": None, "pending": None, "stores": []})
 
     def cogs_settings(self):
         return self.cogs_settings_fn()
@@ -505,26 +505,28 @@ class Reports:
 
     # ------------------------------------------------------------ COGS
 
-    def cogs(self, month=None, daily=False, through=None):
+    def cogs(self, month=None, daily=False, through=None, warehouses=None):
         """COGS = last month's ending inventory + this month's purchases
         (incl. shipping) - current inventory value.
 
-        Inventory is the stock on hand in the COGS warehouse (cogs_settings), or in all of
-        them when none is chosen: stock that leaves it counts as used. `through` caps the
-        period (default: today for the current month, month end for past months)."""
+        Inventory is the stock on hand in `warehouses`, by default the COGS warehouses
+        (cogs_settings), or in every warehouse when none are chosen: stock that leaves them
+        counts as used. `through` caps the period (default: today for the current month,
+        month end for past months)."""
         today = self.today
         start = month_start(month or today)
         end = month_end(start)
         through = min(through or end, end, today)
         prior_end = start - dt.timedelta(days=1)
-        warehouse = self.cogs_settings()["warehouse"]
+        if warehouses is None:
+            warehouses = self.cogs_settings()["warehouses"]
 
-        opening = self.inventory_value(as_at=prior_end, warehouse=warehouse)
+        opening, opening_by = self._inventory(prior_end, warehouses)
         received = self.received_purchases(start, through) if through >= start else []
         goods = sum(o["goods"] for o in received)
         shipping = sum(o["shipping"] for o in received)
         is_current = through >= today
-        closing = self.inventory_value(as_at=None if is_current else through, warehouse=warehouse)
+        closing, closing_by = self._inventory(None if is_current else through, warehouses)
         cogs = opening + goods + shipping - closing
 
         result = {
@@ -532,23 +534,35 @@ class Reports:
             "is_current": is_current, "opening": opening, "goods": goods,
             "shipping": shipping, "purchases": goods + shipping, "closing": closing,
             "cogs": cogs, "received": received, "days_elapsed": max((through - start).days + 1, 0),
-            "days_in_month": (end - start).days + 1, "warehouse": warehouse,
+            "days_in_month": (end - start).days + 1, "warehouses": warehouses,
+            "opening_by": opening_by, "closing_by": closing_by,
         }
         if daily and through >= start:
-            result["daily"] = self._daily_cogs(start, through, opening, received, warehouse)
+            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses)
         return result
 
-    def warehouse_name(self, code):
-        return next((w.get("WarehouseName") or code for w in self.warehouses()
-                     if w.get("WarehouseCode") == code), code)
+    def _inventory(self, as_at, warehouses=None):
+        """(Inventory value as at a date (None: now), {warehouse: value}) in `warehouses`,
+        or (value, None) in every warehouse."""
+        if not warehouses:
+            return self.inventory_value(as_at=as_at), None
+        by = {w: self.inventory_value(as_at=as_at, warehouse=w) for w in warehouses}
+        return sum(by.values()), by
 
-    def _daily_cogs(self, start, through, opening, received, warehouse=None):
+    def warehouse_names(self, codes):
+        """"Warehouse, Cold Storage and Gardena": the warehouses' names, in their order."""
+        names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode")
+                 for w in self.warehouses()}
+        named = [names.get(c, c) for c in codes]
+        return f"{', '.join(named[:-1])} and {named[-1]}" if len(named) > 1 else "".join(named)
+
+    def _daily_cogs(self, start, through, opening, received, warehouses=None):
         by_day = defaultdict(float)
         for o in received:
             by_day[o["received_date"]] += o["goods"] + o["shipping"]
         days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
         closings = self._map(
-            lambda d: self.inventory_value(as_at=None if d >= self.today else d, warehouse=warehouse), days)
+            lambda d: self._inventory(None if d >= self.today else d, warehouses)[0], days)
         rows, purchases = [], 0.0
         for day, closing in zip(days, closings):
             purchases += by_day[day]
@@ -558,28 +572,29 @@ class Reports:
                          "cogs_day": running - (rows[-1]["cogs_to_date"] if rows else 0)})
         return rows
 
-    def _completed_sales(self, start, through, warehouse=None):
+    def _completed_sales(self, start, through, warehouses=None):
         """Sales orders completed from `start` to `through` (by completed date), shipped from
-        `warehouse` when one is given (an order that doesn't say counts)."""
+        one of `warehouses` when some are given (an order that doesn't say counts)."""
         orders = self.sales_orders(start - dt.timedelta(days=SALE_LOOKBACK_DAYS), through, status="Completed")
         return [o for o in orders if start <= (o["completed_date"] or o["order_date"]) <= through
-                and (not warehouse or not o["warehouse"] or o["warehouse"] == warehouse)]
+                and (not warehouses or not o["warehouse"] or o["warehouse"] in warehouses)]
 
-    def _write_offs(self, start, through, warehouse=None):
-        """(Stock value written off by adjustments, lines without a value change), in
-        `warehouse` when one is given."""
+    def _write_offs(self, start, through, warehouses=None):
+        """(Stock value written off by adjustments, lines without a value change), in one of
+        `warehouses` when some are given."""
         rows = [r for r in self.stock_adjustments(start, through)["rows"]
-                if not warehouse or not r["warehouse"] or r["warehouse"] == warehouse]
+                if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses]
         return (-sum(r["value_change"] or 0 for r in rows),
                 sum(1 for r in rows if r["value_change"] is None))
 
-    def cogs_reconciliation(self, month=None):
+    def cogs_reconciliation(self, month=None, warehouses=None):
         """Cross-check the formula against cost of sales + adjustments."""
         start = month_start(month or self.today)
         through = min(month_end(start), self.today)
-        warehouse = self.cogs_settings()["warehouse"]
-        cost_of_sales = sum(o["cost"] for o in self._completed_sales(start, through, warehouse))
-        written_off, missing = self._write_offs(start, through, warehouse)
+        if warehouses is None:
+            warehouses = self.cogs_settings()["warehouses"]
+        cost_of_sales = sum(o["cost"] for o in self._completed_sales(start, through, warehouses))
+        written_off, missing = self._write_offs(start, through, warehouses)
         return {"cost_of_sales": cost_of_sales, "adjustments_out": written_off,
                 "adjustments_missing": missing, "total": cost_of_sales + written_off}
 
@@ -589,8 +604,8 @@ class Reports:
         landed cost when it went (not the price on the order), is that store's COGS. The
         rest wasn't sent to a store: other customers' orders, stock written off, and what
         no order or write-off explains (usage not recorded, production losses, stock
-        moved out of the COGS warehouse). The rows add up to `cogs`."""
-        start, through, warehouse, total = cogs["month"], cogs["through"], cogs["warehouse"], cogs["cogs"]
+        moved out of the COGS warehouses). The rows add up to `cogs`."""
+        start, through, warehouses, total = cogs["month"], cogs["through"], cogs["warehouses"], cogs["cogs"]
         codes = self.cogs_settings()["stores"]
         names = {c.get("CustomerCode"): c.get("CustomerName") for c in self.customers()} if codes else {}
         stores = {code: {"code": code, "name": names.get(code) or code, "orders": 0, "cost": 0.0}
@@ -598,11 +613,11 @@ class Reports:
         other = {"orders": 0, "cost": 0.0}
         written_off = 0.0
         if through >= start:
-            for o in self._completed_sales(start, through, warehouse):
+            for o in self._completed_sales(start, through, warehouses):
                 row = stores.get(o["customer_code"], other)
                 row["orders"] += 1
                 row["cost"] += o["cost"]
-            written_off = self._write_offs(start, through, warehouse)[0]
+            written_off = self._write_offs(start, through, warehouses)[0]
         rows = sorted(stores.values(), key=lambda r: (-r["cost"], r["name"].lower()))
         sent = sum(r["cost"] for r in rows)
         rest = total - sent - other["cost"] - written_off
@@ -618,11 +633,11 @@ class Reports:
                 "written_off_share": share(written_off), "rest": rest, "rest_share": share(rest),
                 "cogs": total}
 
-    def cogs_history(self, months=12, by_store=False):
+    def cogs_history(self, months=12, by_store=False, warehouses=None):
         first = add_months(month_start(self.today), -(months - 1))
 
         def month_row(m):
-            c = self.cogs(m)
+            c = self.cogs(m, warehouses=warehouses)
             sales = self.sales_enquiry(m, min(month_end(m), self.today), status="Completed")
             c["revenue"] = sales["revenue"]
             c["gross_margin"] = sales["revenue"] - c["cogs"]

@@ -75,6 +75,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
 | Settings → Team | Team accounts: add people, give each an access profile (or Admin), reset passwords, deactivate |
 | Settings → Access profiles | The kinds of account and the tabs each opens |
+| Settings → COGS | The locations COGS counts as inventory, and the customers that are stores (for everyone) |
 | Settings → API log | Every API call made: endpoint, query, status, timing, item count |
 
 **Settings** is only shown to admins (with team accounts on). Every report has
@@ -174,15 +175,19 @@ The COGS page also cross-checks the result against cost of sales (average
 landed cost × quantity on completed sales orders) plus stock write-offs, and
 flags any gap.
 
-**Stock on hand from one warehouse.** Under **By store → Stores and stock on
-hand**, anyone who can open Finance can choose the warehouse whose stock on hand COGS counts (for
-example the main warehouse, "Warehouse"), instead of every warehouse. Stock that
-leaves it counts as used, wherever it goes. The sync keeps that warehouse's
-stock history too, and COGS switches to it once a sync has downloaded it (until
-then it counts every warehouse, and the page says so).
+**Locations counted as inventory.** Under **Settings → COGS**, an admin ticks
+the locations (Unleashed warehouses) whose stock on hand is inventory, for
+example Warehouse, Cold Storage and Gardena; none ticked counts every warehouse.
+This applies to everyone's COGS. Stock that leaves those locations counts as
+used, wherever it goes. The sync keeps each location's stock history too, and
+COGS switches to a new choice once a sync has downloaded it (until then it
+counts every warehouse, and the page says so). The COGS page shows each
+location's inventory at the start of the month and now, and anyone can untick
+locations in **Locations counted** to narrow their own view (stock in the
+locations left out then counts as used, for that view only).
 
 **By store.** Stores are Unleashed customers that stock is sent to on sales
-orders; whoever can open Finance ticks which customers are stores in the same place. A store's
+orders; an admin ticks which customers are stores under Settings → COGS. A store's
 COGS is what was sent to it on completed sales orders that month, at
 Unleashed's average landed cost when it went out (not the price on the order).
 What wasn't sent to a store is shown underneath, so the rows add up to COGS:

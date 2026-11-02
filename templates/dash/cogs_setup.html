@@ -1,0 +1,34 @@
+{% extends "dash/base.html" %}
+{% block title %}COGS settings{% endblock %}
+{% block content %}
+<div class="page-head"><h1>COGS settings</h1>
+  <a href="{{ url_for('dash.cogs_page') }}">COGS →</a></div>
+<p class="muted">These apply to everyone's COGS: the Finance overview, the COGS page and its history.</p>
+{% if settings.pending %}<p class="recon recon-warn">! COGS switches to {{ settings.pending|length }} location{{ 's' if settings.pending|length != 1 }}
+  once their stock history has downloaded with the next sync. Until then it counts every warehouse.</p>{% endif %}
+
+<form method="post" class="cogs-setup">
+  <section class="card">
+    <h2>Locations counted as inventory</h2>
+    <p class="muted">COGS is last month's ending inventory, plus purchases received, minus inventory now. Inventory is the
+      stock on hand in the locations ticked here (for example the main warehouse, cold storage and Gardena); stock
+      that leaves them counts as used. Tick none to count every warehouse.</p>
+    <div class="store-picks">{% for w in warehouses %}
+      <label><input type="checkbox" name="location" value="{{ w.WarehouseCode }}" {{ 'checked' if w.WarehouseCode in chosen }}>
+        {{ w.WarehouseName or w.WarehouseCode }} <span class="muted small">{{ w.WarehouseCode }}</span></label>{% else %}
+      <p class="muted">No warehouses in Unleashed yet.</p>{% endfor %}</div>
+    <p class="muted small">On the COGS page, anyone can narrow their own view to some of these locations.</p>
+  </section>
+
+  <section class="card">
+    <h2>Customers that are stores</h2>
+    <p class="muted">A store's COGS is what was sent to it on completed sales orders, at Unleashed's average landed cost
+      when it went out (not the price on the order).</p>
+    <div class="store-picks">{% for cu in customers %}
+      <label><input type="checkbox" name="store" value="{{ cu.CustomerCode }}" {{ 'checked' if cu.CustomerCode in settings.stores }}>
+        {{ cu.CustomerName or cu.CustomerCode }} <span class="muted small">{{ cu.CustomerCode }}</span></label>{% else %}
+      <p class="muted">No customers in Unleashed yet.</p>{% endfor %}</div>
+  </section>
+  <button class="btn btn-primary">Save</button>
+</form>
+{% endblock %}

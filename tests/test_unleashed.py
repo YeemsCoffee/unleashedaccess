@@ -164,7 +164,7 @@ class DashboardPageTests(unittest.TestCase):
             self.assertEqual(links(path)[5:], warehouse, path)
         self.assertEqual(links("/stock-movement", active=True), ["Warehouse", "Stock movement"])
         for path in ("/connection", "/api-log"):
-            self.assertEqual(links(path)[-2:], ["Connection", "API log"], path)  # no Team without accounts
+            self.assertEqual(links(path)[-3:], ["Connection", "COGS", "API log"], path)  # no Team without accounts
         self.assertEqual(links("/api-log", active=True), ["Settings", "API log"])
         self.assertEqual(links("/purchases/PO-00000001", active=True), ["Warehouse", "Purchases"])
         self.assertEqual(links("/maintenance/", active=True), ["Maintenance", "Overview"])
@@ -202,7 +202,7 @@ class LiveModeTests(unittest.TestCase):
     def test_pages_render_in_live_mode(self):
         for path in ("/", "/cogs", "/stock-on-hand", "/purchases", "/sales", "/transactions"):
             html = self.client.get(path).get_data(as_text=True)
-            self.assertIn("Live Unleashed API", html, path)
+            self.assertNotIn("Live Unleashed API", html, path)  # the usual case: no badge by the name
             self.assertNotIn("Couldn't load data", html, path)
 
     def test_live_data_check_passes_on_mock_data(self):
@@ -1485,10 +1485,11 @@ class StoreSyncTests(unittest.TestCase):
         c = app.test_client()
         reports = app.extensions["unleashed"]["reports"]
         page = c.get("/cogs").get_data(as_text=True)
-        self.assertIn("Choose which Unleashed customers are your stores", page)
-        self.assertIn('value="GDN-POS"', page)  # an admin picks them here
-        res = c.post("/cogs/settings", data={"store": ["GDN-POS", "WHSL-01", "NOT-A-CUSTOMER"], "warehouse": ""})
-        self.assertEqual(res.headers["Location"], "/cogs#by-store")
+        self.assertIn("No stores chosen yet", page)
+        self.assertIn("Settings → COGS", page)  # stores are set up there, for everyone
+        self.assertIn('value="GDN-POS"', c.get("/settings/cogs").get_data(as_text=True))
+        res = c.post("/settings/cogs", data={"store": ["GDN-POS", "WHSL-01", "NOT-A-CUSTOMER"]})
+        self.assertEqual(res.headers["Location"], "/settings/cogs")
         self.assertEqual(reports.cogs_settings()["stores"], ["GDN-POS", "WHSL-01"])
 
         month = add_months(TODAY.replace(day=1), -1)
@@ -1515,34 +1516,56 @@ class StoreSyncTests(unittest.TestCase):
         self.assertIn("Gardena POS (daily sales),GDN-POS,", csv_text)
         self.assertIn(f"COGS,,,{round(cogs['cogs'], 2)},1", csv_text)
 
-    def test_cogs_counts_stock_in_the_warehouse_chosen(self):
-        self.ds.warehouses.append({"Guid": "wh-tor", "WarehouseCode": "TOR", "WarehouseName": "Torrance Store",
-                                   "IsDefault": False})
+    def test_cogs_counts_stock_in_the_locations_chosen(self):
+        for code, name in (("CS", "Cold Storage"), ("TOR", "Torrance Store")):
+            self.ds.warehouses.append({"Guid": f"wh-{code}", "WarehouseCode": code, "WarehouseName": name,
+                                       "IsDefault": False})
         app = self._app()
         c = app.test_client()
         ext = app.extensions["unleashed"]
         reports, store = ext["reports"], ext["store"]
         before = reports.cogs(TODAY)
-        self.assertIsNone(before["warehouse"])
-        # The main warehouse holds all the mock's stock: COGS is the same, from its own snapshots.
-        page = c.post("/cogs/settings", data={"warehouse": "GDN"}, follow_redirects=True).get_data(as_text=True)
-        self.assertIn("once its stock history has downloaded", page)
-        self.assertEqual(reports.cogs_settings()["warehouse"], "GDN")  # the sync ran (no scheduler here)
-        self.assertIn("in Gardena Store", page)
-        self.assertIn(snapshot_key(TODAY.replace(day=1).isoformat(), "GDN"),
-                      {r["as_at"] for r in self.app_db.query("SELECT as_at FROM ul_stock_snapshots")})
-        self.assertAlmostEqual(reports.cogs(TODAY)["cogs"], before["cogs"], places=4)
-        # One that holds none: everything received counts as used.
-        store.set_state("cogs_warehouse", "TOR")
-        ext["store_client"].clear_cache()
-        self.assertEqual(reports.cogs_settings(), {"warehouse": None, "pending": "TOR", "stores": []})
-        self.assertIn("COGS will count stock on hand in Torrance Store once", c.get("/cogs").get_data(as_text=True))
-        ext["syncer"].sync()
-        torrance = reports.cogs(TODAY)
-        self.assertEqual((torrance["warehouse"], torrance["opening"], torrance["closing"]), ("TOR", 0, 0))
-        self.assertAlmostEqual(torrance["cogs"], torrance["purchases"], places=4)
+        self.assertIsNone(before["warehouses"])
+        # The main warehouse and cold storage (the mock keeps all its stock in the main one):
+        # COGS is the same as counting every warehouse, from their own snapshots.
+        page = c.post("/settings/cogs", data={"location": ["GDN", "CS", "NOPE"]},
+                      follow_redirects=True).get_data(as_text=True)
+        self.assertIn("COGS counts stock in Gardena Store and Cold Storage", page)
+        self.assertEqual(reports.cogs_settings()["warehouses"], ["GDN", "CS"])  # the sync ran (no scheduler here)
         kept = {r["as_at"] for r in self.app_db.query("SELECT as_at FROM ul_stock_snapshots")}
-        self.assertFalse(any(k.endswith("@GDN") for k in kept))  # the old warehouse's are gone
+        for code in ("GDN", "CS"):
+            self.assertIn(snapshot_key(TODAY.replace(day=1).isoformat(), code), kept)
+        both = reports.cogs(TODAY)
+        self.assertAlmostEqual(both["cogs"], before["cogs"], places=4)
+        self.assertEqual(set(both["opening_by"]), {"GDN", "CS"})
+        self.assertEqual(both["closing_by"]["CS"], 0)
+        page = c.get("/cogs").get_data(as_text=True)
+        for text in ("in Gardena Store and Cold Storage", "Inventory by location", "Locations counted",
+                     'name="location" value="CS" checked'):
+            self.assertIn(text, page)
+
+        # Narrowing your own view: stock in the location left out counts as used, for you only.
+        mine = c.get("/cogs?location=CS").get_data(as_text=True)
+        self.assertIn("This view counts stock in Cold Storage only", mine)
+        cold = reports.cogs(TODAY, warehouses=["CS"])
+        self.assertEqual((cold["opening"], cold["closing"]), (0, 0))
+        self.assertAlmostEqual(cold["cogs"], cold["purchases"], places=4)
+        self.assertEqual(reports.cogs_settings()["warehouses"], ["GDN", "CS"])  # nobody else's changed
+
+        # A location added later is counted once its history has downloaded.
+        store.set_state("cogs_warehouse", json.dumps(["GDN", "CS", "TOR"]))
+        ext["store_client"].clear_cache()
+        self.assertEqual(reports.cogs_settings()["pending"], ["GDN", "CS", "TOR"])
+        self.assertIn("once their stock", c.get("/cogs").get_data(as_text=True))
+        ext["syncer"].sync()
+        self.assertEqual(reports.cogs_settings()["warehouses"], ["GDN", "CS", "TOR"])
+        # A setting saved before locations were a list (one code) still counts.
+        store.set_state("cogs_warehouse", "GDN")
+        ext["store_client"].clear_cache()
+        self.assertEqual(reports.cogs_settings()["warehouses"], ["GDN"])
+        ext["syncer"].sync()
+        kept = {r["as_at"] for r in self.app_db.query("SELECT as_at FROM ul_stock_snapshots")}
+        self.assertFalse(any(k.endswith(("@CS", "@TOR")) for k in kept))  # the others' are gone
         # Every page still reads from the copy.
         logged = len(self.app_db.query("SELECT id FROM unleashed_api_log"))
         for path in ("/", "/cogs", f"/cogs?month={add_months(TODAY.replace(day=1), -1):%Y-%m}"):
@@ -2015,7 +2038,7 @@ class TeamAccountTests(unittest.TestCase):
     def test_every_page_belongs_to_a_tab_or_is_general(self):
         import dashboard
         settings = {"dash.connection", "dash.api_log", "dash.team", "dash.team_add", "dash.team_update",
-                    "dash.profiles", "dash.profiles_save", "dash.profiles_delete"}
+                    "dash.profiles", "dash.profiles_save", "dash.profiles_delete", "dash.cogs_setup"}
         for rule in self.app.url_map.iter_rules():
             if rule.endpoint.split(".")[0] not in ("dash", "maint"):
                 continue
@@ -2065,25 +2088,30 @@ class TeamAccountTests(unittest.TestCase):
         admin.post(f"/maintenance/tasks/{task_id}/delete")
         self.assertIsNone(self.app.extensions["maintenance"].task(task_id, dt.date.today()))
 
-    def test_finance_users_set_up_cogs_by_store(self):
+    def test_cogs_settings_are_for_admins_and_finance_users_filter_locations(self):
         admin = self._admin_client()
         temp = self._add(admin, "David", "david@yeems.test")  # Standard: Finance, Warehouse, Production
         david = self.app.test_client()
         self._sign_in(david, "david@yeems.test", temp)
         self._choose_password(david, temp, "david-own-password")
         page = david.get("/cogs").get_data(as_text=True)
-        self.assertIn("Stores and stock on hand", page)
-        self.assertIn('name="store" value="GDN-POS"', page)
-        david.post("/cogs/settings", data={"store": ["GDN-POS"], "warehouse": ""})
+        self.assertIn("By store", page)
+        self.assertIn("by an admin, under Settings → COGS", page)
+        self.assertNotIn('href="/settings/cogs"', page)
+        # The settings change everyone's COGS, so they're behind Settings, for admins.
+        self.assertEqual(david.get("/settings/cogs").status_code, 403)
+        self.assertEqual(david.post("/settings/cogs", data={"store": ["GDN-POS"]}).status_code, 403)
+        self.assertEqual(self.app.extensions["unleashed"]["reports"].cogs_settings()["stores"], [])
+        self.assertIn(">COGS<", admin.get("/settings/cogs").get_data(as_text=True))
+        admin.post("/settings/cogs", data={"store": ["GDN-POS"]})
         self.assertEqual(self.app.extensions["unleashed"]["reports"].cogs_settings()["stores"], ["GDN-POS"])
-        # Without Finance, neither the page nor the change.
+        self.assertIn("Gardena POS (daily sales)", david.get("/cogs").get_data(as_text=True))
+        # Without Finance, not even the page.
         temp = self._add(admin, "Mechanic Mo", "mo@yeems.test", profile="Maintenance technician")
         mo = self.app.test_client()
         self._sign_in(mo, "mo@yeems.test", temp)
         self._choose_password(mo, temp, "mo-own-password1")
         self.assertEqual(mo.get("/cogs").status_code, 403)
-        self.assertEqual(mo.post("/cogs/settings", data={"store": []}).status_code, 403)
-        self.assertEqual(self.app.extensions["unleashed"]["reports"].cogs_settings()["stores"], ["GDN-POS"])
 
     def test_people_who_only_report_problems(self):
         admin = self._admin_client()

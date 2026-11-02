@@ -158,7 +158,8 @@ _TABS = [
 ]
 _AREA_LABELS = dict(AREAS)
 _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "Team"),
-                              ("dash.profiles", "Access profiles"), ("dash.api_log", "API log")])
+                              ("dash.profiles", "Access profiles"), ("dash.cogs_setup", "COGS"),
+                              ("dash.api_log", "API log")])
 # Pages (and form posts) that belong to another page's tab.
 _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
@@ -169,7 +170,6 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_procedure": "dash.production_boms",
             "dash.production_picture": "dash.production_orders",
             "dash.production_check": "dash.production_orders",
-            "dash.cogs_settings_save": "dash.cogs_page",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -657,7 +657,11 @@ def cogs_page():
     if month > r.today:
         month = month_start(r.today)
     settings = r.cogs_settings()
-    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") == "store"))
+    # The locations Settings → COGS counts; anyone can narrow this view to some of them.
+    locations = settings["warehouses"] or []
+    picked = [w for w in request.args.getlist("location") if w in locations] or locations
+    view = picked or None
+    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") == "store"), warehouses=view)
     split = r.cogs_by_store(c)
     if _wants_csv():
         if request.args.get("by") == "store":
@@ -680,49 +684,55 @@ def cogs_page():
             ("COGS for day", lambda x: round(x["cogs_day"], 2)),
             ("COGS to date", lambda x: round(x["cogs_to_date"], 2)),
         ], c.get("daily", []))
-    history = r.cogs_history(12, by_store=bool(settings["stores"]))
+    history = r.cogs_history(12, by_store=bool(settings["stores"]), warehouses=view)
     bars = [(h["month"].strftime("%b"), h["cogs"],
              f'{month_name(h["month"])} · COGS {money(h["cogs"])}'
              + (" (month to date)" if h["is_current"] else "")) for h in history]
+    names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
-        "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month), history=history, split=split,
-        settings=settings,
-        warehouse_name=r.warehouse_name(c["warehouse"]) if c["warehouse"] else None,
-        pending_name=r.warehouse_name(settings["pending"]) if settings["pending"] else None,
-        warehouses=r.warehouses(),
-        customers=sorted(r.customers(), key=lambda x: (x.get("CustomerCode") not in settings["stores"],
-                                                       (x.get("CustomerName") or "").lower())),
+        "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
+        settings=settings, locations=locations, picked=picked, names=names,
+        narrowed=bool(locations) and set(picked) != set(locations),
+        warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
+        pending_name=r.warehouse_names(settings["pending"]) if settings["pending"] else None,
         chart=_cogs_chart(c.get("daily", []), month),
         history_chart=charts.bar_chart(bars, "COGS by month, last 12 months"),
         month=month, csv_url=_csv_url(),
     )
 
 
-@bp.post("/cogs/settings")
-def cogs_settings_save():
-    """Which customers are stores, and which warehouse's stock on hand COGS counts. For
-    anyone who opens Finance (the COGS page's tab), as require_access checks."""
+@bp.route("/settings/cogs", methods=["GET", "POST"])
+@admin_only
+def cogs_setup():
+    """For everyone's COGS: the locations (warehouses) whose stock on hand is inventory, and
+    the customers that are stores."""
     r = reports()
     store = _ext()["store"]
-    back = redirect(url_for("dash.cogs_page", month=request.form.get("month") or None) + "#by-store")
-    warehouse = request.form.get("warehouse") or ""
-    if warehouse and warehouse not in {w.get("WarehouseCode") for w in r.warehouses()}:
-        flash("That warehouse isn't in Unleashed any more. Nothing was changed.", "warn")
-        return back
-    customers = {c.get("CustomerCode") for c in r.customers()}
-    stores = [code for code in dict.fromkeys(request.form.getlist("store")) if code in customers]
-    moved = warehouse != (store.get_state(COGS_WAREHOUSE) or "")
-    store.set_state(COGS_STORES, json.dumps(stores))
-    store.set_state(COGS_WAREHOUSE, warehouse)
-    _ext()["store_client"].clear_cache()
-    flash(f"Saved: {len(stores)} store{'s' if len(stores) != 1 else ''}.", "ok")
-    if moved and warehouse:
-        syncing = _ext()["syncer"] is not None
-        flash(f"COGS will count stock on hand in {r.warehouse_name(warehouse)} once its stock history has "
-              f"downloaded{', with the sync starting now' if syncing else ' with the next sync'}. Until then it "
-              "counts every warehouse.", "ok")
-        _sync_soon()
-    return back
+    warehouses, customers = r.warehouses(), r.customers()
+    if request.method == "POST":
+        codes = {w.get("WarehouseCode") for w in warehouses}
+        locations = [w for w in dict.fromkeys(request.form.getlist("location")) if w in codes]
+        known = {c.get("CustomerCode") for c in customers}
+        stores = [code for code in dict.fromkeys(request.form.getlist("store")) if code in known]
+        store.set_state(COGS_WAREHOUSE, json.dumps(locations) if locations else "")
+        store.set_state(COGS_STORES, json.dumps(stores))
+        _ext()["store_client"].clear_cache()
+        flash(f"Saved. COGS counts stock in {r.warehouse_names(locations) if locations else 'every warehouse'}, "
+              f"with {len(stores)} store{'s' if len(stores) != 1 else ''}.", "ok")
+        pending = r.cogs_settings()["pending"]
+        if pending:
+            syncing = _ext()["syncer"] is not None
+            flash(f"COGS switches to those locations once their stock history has downloaded"
+                  f"{', with the sync starting now' if syncing else ' with the next sync'}. Until then it counts "
+                  "every warehouse.", "ok")
+            _sync_soon()
+        return redirect(url_for("dash.cogs_setup"))
+    settings = r.cogs_settings()
+    chosen = settings["pending"] or settings["warehouses"] or []
+    return render_template(
+        "dash/cogs_setup.html", settings=settings, chosen=chosen, warehouses=warehouses,
+        customers=sorted(customers, key=lambda x: (x.get("CustomerCode") not in settings["stores"],
+                                                   (x.get("CustomerName") or "").lower())))
 
 
 @bp.get("/stock-on-hand")

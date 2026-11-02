@@ -7,6 +7,7 @@ history window, and the stock snapshots the reports need. Incremental sync
 days plus any day a changed document touched, so backdated edits are caught.
 """
 import datetime as dt
+import json
 import os
 import socket
 import sys
@@ -20,7 +21,7 @@ from .reports import (COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES, a
                       month_start)
 from .store import (ALL_DATES, COGS_WAREHOUSE, COGS_WAREHOUSE_READY, CURRENT, DOCUMENT_ENDPOINTS,
                     OPTIONAL_ENDPOINTS, REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns,
-                    snapshot_key, utc_now)
+                    snapshot_key, utc_now, warehouse_codes)
 
 LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it lapse
 # Sync state: the earliest day whose stock snapshots a check outside a sync found changed.
@@ -199,11 +200,11 @@ class Syncer:
                 changed_dates.append(dt.date.fromisoformat(store.get_state(RECHECK_FROM)))
             if changed_dates:
                 recheck_from = min(recheck_from, min(changed_dates))
-            # All stock, and the warehouse COGS counts (if it counts just one).
-            cogs_warehouse = store.get_state(COGS_WAREHOUSE) or None
-            store.delete_warehouse_snapshots(keep=cogs_warehouse)
+            # All stock, and each warehouse COGS counts (if it counts some, not all).
+            cogs_warehouses = warehouse_codes(store.get_state(COGS_WAREHOUSE))
+            store.delete_warehouse_snapshots(keep=set(cogs_warehouses))
             fetched = 0
-            for warehouse in (None, cogs_warehouse) if cogs_warehouse else (None,):
+            for warehouse in [None] + cogs_warehouses:
                 if full:
                     store.delete_snapshots(keep=required_iso, warehouse=warehouse)
                     todo = required
@@ -217,8 +218,8 @@ class Syncer:
                 self._step(run, f"Current stock on hand{' in ' + warehouse if warehouse else ''}")
                 self.fetch_snapshot(CURRENT, warehouse)
                 fetched += len(todo) + 1
-            if cogs_warehouse:
-                store.set_state(COGS_WAREHOUSE_READY, cogs_warehouse)  # COGS can count it now
+            if cogs_warehouses:  # COGS can count them now
+                store.set_state(COGS_WAREHOUSE_READY, json.dumps(cogs_warehouses))
             store.set_state(RECHECK_FROM, "")
             counts["stock snapshots"] = fetched
 

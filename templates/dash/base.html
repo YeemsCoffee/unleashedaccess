@@ -17,7 +17,7 @@
       <a class="brand-home" href="{{ url_for('dash.overview') }}" aria-label="Yeems Core home">
         <span class="brand-logo" aria-hidden="true">{% include "brand/logo.svg" %}</span>
         <strong class="brand-name">Yeems Core</strong></a>
-      {% if shows_unleashed or signed_out %}<span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
+      {% if (shows_unleashed or signed_out) and unleashed_mode != 'live' %}<span class="mode mode-{{ unleashed_mode }}" title="Where data comes from">
         {{ {'mock': 'Mock API (simulated data)', 'live': 'Live Unleashed API', 'viewer': 'Shared Unleashed data (view only)'}[unleashed_mode] }}
       </span>{% endif %}
     </div>

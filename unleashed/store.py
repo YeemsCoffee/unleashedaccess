@@ -30,18 +30,27 @@ UNWINDOWED_ENDPOINTS = {"Assemblies"}
 ALL_DATES = "all"  # the stored window of an unwindowed endpoint
 CURRENT = "current"
 # Settings kept with the copy, since they name things in this Unleashed account: the
-# warehouse whose stock on hand COGS uses ("" for all of them), and the customers that
-# are stores (a JSON list of customer codes). Stock snapshots are kept for that warehouse;
-# COGS switches to it once a sync has fetched them (COGS_WAREHOUSE_READY).
+# warehouses whose stock on hand COGS counts (a JSON list of codes; none for all of
+# them), and the customers that are stores (a JSON list of customer codes). Stock
+# snapshots are kept for each of those warehouses; COGS switches to them once a sync has
+# fetched them all (COGS_WAREHOUSE_READY: the warehouses it fetched).
 COGS_WAREHOUSE, COGS_WAREHOUSE_READY, COGS_STORES = "cogs_warehouse", "cogs_warehouse_ready", "cogs_stores"
 
 
+def warehouse_codes(value):
+    """The warehouses a setting names: a JSON list, or (as saved before lists) one code."""
+    if not value:
+        return []
+    return json.loads(value) if value.startswith("[") else [value]
+
+
 def cogs_settings(store):
-    """{"warehouse": the code COGS counts stock in now (None: all), "pending": one chosen
-    whose stock history hasn't downloaded yet, "stores": [customer codes]}."""
-    chosen = store.get_state(COGS_WAREHOUSE) or None
-    ready = chosen and store.get_state(COGS_WAREHOUSE_READY) == chosen
-    return {"warehouse": chosen if ready else None, "pending": None if ready else chosen,
+    """{"warehouses": the codes COGS counts stock in now (None: every warehouse),
+    "pending": ones chosen whose stock history hasn't all downloaded yet (None if not),
+    "stores": [customer codes]}."""
+    chosen = warehouse_codes(store.get_state(COGS_WAREHOUSE))
+    ready = bool(chosen) and set(chosen) <= set(warehouse_codes(store.get_state(COGS_WAREHOUSE_READY)))
+    return {"warehouses": chosen if ready else None, "pending": chosen if chosen and not ready else None,
             "stores": json.loads(store.get_state(COGS_STORES) or "[]")}
 
 
@@ -262,11 +271,11 @@ class LocalStore:
         gone = [(snapshot_key(d, warehouse),) for d in self.snapshot_dates(warehouse) if d not in keep]
         self.db.executemany("DELETE FROM ul_stock_snapshots WHERE as_at = ?", gone)
 
-    def delete_warehouse_snapshots(self, keep=None):
-        """Drop every warehouse's snapshots but `keep`'s (when COGS uses another one)."""
+    def delete_warehouse_snapshots(self, keep=()):
+        """Drop the snapshots of every warehouse not in `keep` (COGS doesn't count it now)."""
         rows = self.db.query("SELECT as_at FROM ul_stock_snapshots WHERE as_at LIKE ?", ("%@%",))
         self.db.executemany("DELETE FROM ul_stock_snapshots WHERE as_at = ?",
-                            [(r["as_at"],) for r in rows if r["as_at"].split("@", 1)[1] != keep])
+                            [(r["as_at"],) for r in rows if r["as_at"].split("@", 1)[1] not in keep])
 
     # ------------------------------------------------------------ sync runs
 
@@ -397,8 +406,8 @@ class LocalStoreClient:
 
     def _stock(self, params):
         warehouse = params.get("warehouseCode") or None
-        if warehouse and warehouse != self._memo(("state", COGS_WAREHOUSE),
-                                                 lambda: self.store.get_state(COGS_WAREHOUSE) or None):
+        if warehouse and warehouse not in self._memo(
+                ("state", COGS_WAREHOUSE), lambda: set(warehouse_codes(self.store.get_state(COGS_WAREHOUSE)))):
             return self._live("StockOnHand", params, "Per-warehouse stock isn't in the stored copy")
         as_at = params.get("asAtDate")
         key = CURRENT if not as_at or as_at[:10] >= self.today_fn().isoformat() else as_at[:10]

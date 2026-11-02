@@ -329,6 +329,10 @@ td.wrap { white-space: normal; min-width: 280px; }
 .cogs-setup .block { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-secondary); }
 .cogs-setup select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--surface-1); color: var(--text-primary); max-width: 100%; }
+.loc-filter { border: 1px solid var(--line); border-radius: 10px; padding: 2px 10px 6px; margin: 0; background: var(--surface-1);
+  display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: center; }
+.loc-filter legend { font-size: 12px; color: var(--text-secondary); padding: 0 4px; }
+.filters .loc-filter label { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text-primary); }
 .store-picks { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; padding: 8px 10px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface-1); }
 .store-picks label { display: flex; gap: 8px; align-items: baseline; color: var(--text-primary); font-size: 14px; }
