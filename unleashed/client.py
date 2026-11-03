@@ -70,19 +70,27 @@ def format_date(d):
     return d.isoformat() if d else None
 
 
+# The time of day a date is sent at (see body_date).
+BODY_DATE_TIME = "23:00:00"
+
+
 def body_date(d):
-    """A date (or "YYYY-MM-DD") as Unleashed takes it in a request body. Noon, not midnight:
-    Unleashed reads the time as UTC and keeps the date in the account's time zone, so
-    midnight became the day before in Pacific time (an expiry of Nov 3 was kept as Nov 2).
-    Noon is the same day anywhere within 11 hours of UTC."""
-    return f"{d.isoformat() if isinstance(d, dt.date) else d}T12:00:00"
+    """A date (or "YYYY-MM-DD") as Unleashed takes it in a request body.
+
+    Unleashed reads the time it's given in some time zone and keeps the date that is in the
+    account's (Pacific). Midnight came back as the day before (an expiry of Nov 3 kept as
+    Nov 2), and so did noon (Nov 10 kept as Nov 9): Unleashed, a New Zealand company, reads
+    the time as New Zealand time, and noon there is the evening before in California.
+    11 pm is the same day in Pacific time whether Unleashed reads it as UTC, New Zealand
+    or Pacific time, all year round."""
+    return f"{d.isoformat() if isinstance(d, dt.date) else d}T{BODY_DATE_TIME}"
 
 
 def writable(value):
     """`value` (a document as Unleashed returned it) with every "/Date(ms)/" in the
-    "2026-07-15T12:00:00" form: Unleashed rejects its own date format in a request body
+    "2026-07-15T23:00:00" form: Unleashed rejects its own date format in a request body
     ("... is not a valid value for DateTime"). A date (midnight UTC, as Unleashed gives
-    dates) goes back at noon (body_date), so sending it back doesn't move it a day."""
+    dates) goes back as body_date sends dates, so sending it back doesn't move it a day."""
     if isinstance(value, dict):
         return {k: writable(v) for k, v in value.items()}
     if isinstance(value, list):

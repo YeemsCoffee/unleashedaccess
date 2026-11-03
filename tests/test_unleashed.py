@@ -99,11 +99,25 @@ class ReportsTests(unittest.TestCase):
         finally:
             set_business_timezone(None)
 
+    def test_a_date_sent_to_unleashed_stays_on_its_day_however_it_reads_the_time(self):
+        """Unleashed keeps the Pacific date of the time it's sent, read in UTC, New Zealand or
+        Pacific time: midnight and noon both came back as the day before."""
+        from zoneinfo import ZoneInfo
+        from unleashed.client import body_date
+        pacific = ZoneInfo("America/Los_Angeles")
+        day = dt.date(2026, 1, 1)
+        while day.year == 2026:  # every day, both sides of each daylight-saving change
+            sent = dt.datetime.fromisoformat(body_date(day))
+            for zone in ("UTC", "Pacific/Auckland", "America/Los_Angeles"):
+                kept = sent.replace(tzinfo=ZoneInfo(zone)).astimezone(pacific).date()
+                self.assertEqual(kept, day, f"{day} read as {zone}")
+            day += dt.timedelta(days=1)
+
     def test_dates_sent_back_to_unleashed_are_in_the_form_it_accepts(self):
         doc = {"AssembleBy": "/Date(1793059200000)/", "Quantity": 2, "Comments": "/Date( in a note",
                "AssemblyLines": [{"LastModifiedOn": "/Date(1793080800500+1300)/", "Product": None}]}
-        self.assertEqual(writable(doc), {  # a date goes back at noon, so it stays the same day
-            "AssembleBy": "2026-10-27T12:00:00", "Quantity": 2, "Comments": "/Date( in a note",
+        self.assertEqual(writable(doc), {  # a date goes back as body_date sends it, so it stays the same day
+            "AssembleBy": "2026-10-27T23:00:00", "Quantity": 2, "Comments": "/Date( in a note",
             "AssemblyLines": [{"LastModifiedOn": "2026-10-27T06:00:00", "Product": None}]})
         self.assertEqual(doc["AssembleBy"], "/Date(1793059200000)/")  # a copy; the original is unchanged
 

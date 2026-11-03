@@ -294,14 +294,19 @@ def _date_arg(name):
     return dt.date.fromisoformat(v[:10]) if v else None
 
 
-# The mock account is in Pacific time. Like the real one, it reads a date-time sent to it
-# as UTC and keeps the date it is there: "2026-11-03T00:00:00" is 4 pm on Nov 2.
-ACCOUNT_UTC_OFFSET = dt.timedelta(hours=-8)
+# Like the real account: a date-time sent to it is read as New Zealand time (Unleashed's
+# home), and the date kept is the one that is in the account's zone, Pacific. So
+# "2026-11-10T12:00:00" is the evening of Nov 9 in California, and is kept as Nov 9.
+SENT_TIME_ZONE, ACCOUNT_TIME_ZONE = "Pacific/Auckland", "America/Los_Angeles"
 
 
 def _body_date(v):
-    """A date sent in a request body: "2026-07-15T12:00:00"."""
-    return (dt.datetime.fromisoformat(v[:19]) + ACCOUNT_UTC_OFFSET).date() if v else None
+    """A date sent in a request body: "2026-07-15T23:00:00"."""
+    if not v:
+        return None
+    from zoneinfo import ZoneInfo
+    sent = dt.datetime.fromisoformat(v[:19]).replace(tzinfo=ZoneInfo(SENT_TIME_ZONE))
+    return sent.astimezone(ZoneInfo(ACCOUNT_TIME_ZONE)).date()
 
 
 def _ms_date_in(value):
