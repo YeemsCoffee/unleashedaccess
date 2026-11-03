@@ -60,10 +60,13 @@ class Syncer:
         return last < utc_now(-self.full_every_days * 86400)
 
     def required_snapshot_dates(self, today=None):
-        """Month ends for the history window, plus every day of last month and this month."""
+        """Month ends and starts for the history window (the stock at the end of a month is as at
+        its last day, or the next one's first: Reports._as_at_end), plus every day of last month
+        and this month."""
         today = today or self.today_fn()
         first = month_start(today)
         dates = {add_months(first, -i) - dt.timedelta(days=1) for i in range(self.history_months)}
+        dates |= {add_months(first, -i) for i in range(self.history_months)}
         day = add_months(first, -1)
         while day < today:
             dates.add(day)

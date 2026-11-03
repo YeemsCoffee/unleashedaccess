@@ -128,6 +128,11 @@
     found that puts value there; then each product whose stock at the end isn't what this month's documents add up to.</p>
   {% set f = why.findings %}
   <ul class="plain-list">
+    {% if timing.verdict and timing.verdict != settings.stock_as_at %}<li>! <strong>Timing:</strong> checked against the last
+      {{ timing.days }} days, Unleashed's stock "as at" a date is the <strong>{{ timing.verdict }}</strong> of that day, not the
+      {{ settings.stock_as_at }}. Read the wrong way, a day's sales land in the wrong month (one month negative here, the next
+      positive). {% if is_admin %}Change it in <a href="{{ url_for('dash.cogs_setup') }}">Settings → COGS</a>.{% else %}An admin can
+      change it in Settings → COGS.{% endif %}</li>{% endif %}
     {% for o in f.partly_received %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> was received
       only in part. COGS counts its whole value, so {{ o.value|money }} not received counts as used.</li>{% endfor %}
     {% for o in f.elsewhere %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> went to

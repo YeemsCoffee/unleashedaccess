@@ -165,6 +165,47 @@ class ReportsTests(unittest.TestCase):
         # 100 + 31 received − 8 into production − 50 sold − 5 written off = 68 should be there; 30 is.
         self.assertEqual((milk["expected"], milk["closing"], milk["gap"]), (68.0, 30.0, 38.0))
 
+    def test_which_part_of_the_day_unleashed_stock_shows_is_worked_out(self):
+        today = dt.date(2026, 11, 3)
+
+        def sold(day):  # more at weekends
+            return 10.0 + 15.0 * (day.weekday() >= 5)
+
+        def end_of(day):  # stock at the end of a day
+            return 5000.0 - sum(sold(dt.date(2026, 9, 1) + dt.timedelta(days=i)) for i in range((day - dt.date(2026, 9, 1)).days + 1))
+
+        class StartOfDay(Reports):
+            """An account whose stock as at a date is the stock at its start."""
+            settings = {"warehouses": None, "pending": None, "stores": [], "stock_as_at": "end"}
+
+            def cogs_settings(self):
+                return self.settings
+
+            def _inventory(self, as_at, warehouses=None):
+                return (end_of(today) if as_at is None else end_of(as_at - dt.timedelta(days=1))), None
+
+            def received_purchases(self, start, end):
+                return []
+
+            def _completed_sales(self, start, end, warehouses=None):
+                days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
+                return [{"cost": sold(d), "completed_date": d, "order_date": d} for d in days]
+
+            def stock_adjustments(self, start, end):
+                return {"rows": []}
+
+        r = StartOfDay(None, today_fn=lambda: today)
+        timing = r.stock_timing()
+        self.assertEqual((timing["verdict"], timing["start"]), ("start", 0))
+        self.assertGreater(timing["end"], 0)
+        october = dt.date(2026, 10, 1)
+        october_sales = sum(sold(october + dt.timedelta(days=i)) for i in range(31))
+        wrong = r.cogs(october)["cogs"]  # read as the end of the day: Sep 30's sales in, Oct 31's out
+        self.assertAlmostEqual(wrong, october_sales + sold(dt.date(2026, 9, 30)) - sold(dt.date(2026, 10, 31)))
+        r.settings = dict(r.settings, stock_as_at="start")
+        self.assertAlmostEqual(r.cogs(october)["cogs"], october_sales)  # every October sale, once
+        self.assertAlmostEqual(r.cogs(october)["cogs"], r.cogs_reconciliation(october)["total"])
+
     def test_current_month_runs_through_today(self):
         c = self.reports.cogs(TODAY, daily=True)
         self.assertTrue(c["is_current"])
@@ -1509,6 +1550,17 @@ class StoreSyncTests(unittest.TestCase):
         self.assertEqual(store.get_state("dates_read_as"), "America/Los_Angeles")
         self.assertEqual(store.recompute_dates("America/Los_Angeles"), 0)  # once, not on every start
         self._app(SYNC_ON_STARTUP="off")  # back to UTC for the tests after this one
+
+    def test_the_mock_stock_is_the_end_of_the_day(self):
+        app = self._app()
+        reports = app.extensions["unleashed"]["reports"]
+        self.assertEqual(reports.stock_timing()["verdict"], "end")
+        page = app.test_client().get("/settings/cogs").get_data(as_text=True)
+        self.assertIn("✓ Checked against the last", page)
+        self.assertIn('name="stock_as_at" value="end" checked', page)
+        app.test_client().post("/settings/cogs", data={"stock_as_at": "start"})
+        self.assertEqual(reports.cogs_settings()["stock_as_at"], "start")
+        self.assertIn("Choose it above and save", app.test_client().get("/settings/cogs").get_data(as_text=True))
 
     def test_orders_completed_or_deleted_in_unleashed_catch_up(self):
         app = self._app()

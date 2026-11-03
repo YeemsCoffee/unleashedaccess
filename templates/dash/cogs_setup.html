@@ -20,6 +20,25 @@
   </section>
 
   <section class="card">
+    <h2>Unleashed's stock "as at" a date</h2>
+    <p class="muted">COGS takes the stock at the end of last month and now. Depending on how Unleashed counts, its stock
+      "as at Oct 31" is the stock at the end of Oct 31, or at its start (before that day's sales and receipts). Read the
+      wrong way, a day's sales land in the wrong month: one month's "not on an order or write-off" goes negative and the
+      next one's positive.</p>
+    <label class="check-field"><input type="radio" name="stock_as_at" value="end" {{ 'checked' if settings.stock_as_at == 'end' }}>
+      The end of that day</label>
+    <label class="check-field"><input type="radio" name="stock_as_at" value="start" {{ 'checked' if settings.stock_as_at == 'start' }}>
+      The start of that day (so the end of a day is as at the next one)</label>
+    {% if timing.verdict %}<p class="recon {{ 'recon-ok' if timing.verdict == settings.stock_as_at else 'recon-warn' }}">
+      {{ '✓' if timing.verdict == settings.stock_as_at else '!' }} Checked against the last {{ timing.days }} days: Unleashed's
+      stock matches the documents when read as the <strong>{{ timing.verdict }}</strong> of the day
+      ({{ timing[timing.verdict]|money }} of daily change unexplained, against {{ timing['start' if timing.verdict == 'end' else 'end']|money }}
+      the other way).{{ '' if timing.verdict == settings.stock_as_at else ' Choose it above and save.' }}</p>
+    {% elif timing.days %}<p class="muted small">Checked against the last {{ timing.days }} days: too close to tell
+      ({{ timing.end|money }} unexplained read as the end of the day, {{ timing.start|money }} as the start).</p>{% endif %}
+  </section>
+
+  <section class="card">
     <h2>Customers that are stores</h2>
     <p class="muted">A store's COGS is what was sent to it on completed sales orders, at Unleashed's average landed cost
       when it went out (not the price on the order).</p>

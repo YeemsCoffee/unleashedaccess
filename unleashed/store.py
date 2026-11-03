@@ -35,6 +35,9 @@ CURRENT = "current"
 # snapshots are kept for each of those warehouses; COGS switches to them once a sync has
 # fetched them all (COGS_WAREHOUSE_READY: the warehouses it fetched).
 COGS_WAREHOUSE, COGS_WAREHOUSE_READY, COGS_STORES = "cogs_warehouse", "cogs_warehouse_ready", "cogs_stores"
+# Which part of a day Unleashed's stock "as at" that date shows: "end" (Core's first
+# assumption) or "start" (it leaves out that day's sales and receipts).
+COGS_STOCK_AS_AT = "cogs_stock_as_at"
 
 
 def warehouse_codes(value):
@@ -51,7 +54,8 @@ def cogs_settings(store):
     chosen = warehouse_codes(store.get_state(COGS_WAREHOUSE))
     ready = bool(chosen) and set(chosen) <= set(warehouse_codes(store.get_state(COGS_WAREHOUSE_READY)))
     return {"warehouses": chosen if ready else None, "pending": chosen if chosen and not ready else None,
-            "stores": json.loads(store.get_state(COGS_STORES) or "[]")}
+            "stores": json.loads(store.get_state(COGS_STORES) or "[]"),
+            "stock_as_at": store.get_state(COGS_STOCK_AS_AT) or "end"}
 
 
 def snapshot_key(as_at, warehouse=None):
