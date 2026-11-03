@@ -658,7 +658,8 @@ def cogs_page():
         month = month_start(r.today)
     settings = r.cogs_settings()
     view = settings["warehouses"]
-    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") in ("store", "sent")), warehouses=view)
+    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") in ("store", "sent", "unexplained")),
+               warehouses=view)
     split = r.cogs_by_store(c)
     # The store picker: the stores Settings → COGS names, or every customer until it names some.
     customers = {x.get("CustomerCode"): x.get("CustomerName") or x.get("CustomerCode") for x in r.customers()}
@@ -667,6 +668,14 @@ def cogs_page():
     store = request.args.get("store") if request.args.get("store") in dict(store_options) else None
     sent = r.sent_to(c, store) if store else None
     if _wants_csv():
+        if request.args.get("by") == "unexplained":
+            return _csv(f"cogs-not-on-an-order-{month:%Y-%m}", [
+                ("Product Code", "product_code"), ("Description", "description"),
+                ("Opening", lambda x: round(x["opening"], 2)), ("Received", lambda x: round(x["received"], 2)),
+                ("Production", lambda x: round(x["production"], 2)), ("Sent or sold", lambda x: round(x["sold"], 2)),
+                ("Written off", lambda x: round(x["written_off"], 2)), ("Should be", lambda x: round(x["expected"], 2)),
+                ("Is", lambda x: round(x["closing"], 2)), ("Difference", lambda x: round(x["gap"], 2)),
+            ], r.unexplained(c)["products"])
         if request.args.get("by") == "sent" and sent:
             return _csv(f"sent-to-{store}-{month:%Y-%m}", [
                 ("Product Code", "product_code"), ("Description", "description"),
@@ -699,7 +708,7 @@ def cogs_page():
     names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
-        settings=settings, names=names, store_options=store_options, store=store, sent=sent,
+        settings=settings, names=names, store_options=store_options, store=store, sent=sent, why=r.unexplained(c),
         store_name=dict(store_options).get(store),
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
         pending_name=r.warehouse_names(settings["pending"]) if settings["pending"] else None,

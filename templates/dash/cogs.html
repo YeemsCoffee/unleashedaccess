@@ -109,8 +109,8 @@
     <tr class="row-total"><td>Sent to stores</td><td></td><td class="num">{{ split.sent|money }}</td><td class="num">{{ split.sent_share|pct }}</td></tr>
     <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}</td><td class="num">{{ split.other_share|pct }}</td></tr>
     <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
-    <tr><td>Not on an order or write-off
-        <div class="muted small">Usage not recorded, production losses, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
+    <tr><td>Not on an order or write-off <a class="small" href="#unexplained">What's in this →</a>
+        <div class="muted small">Usage not recorded, production costs, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
       <td></td><td class="num">{{ split.rest|money }}</td><td class="num">{{ split.rest_share|pct }}</td></tr>
     </tbody>
     <tfoot><tr><td>COGS</td><td></td><td class="num">{{ split.cogs|money }}</td><td class="num">{{ '100.0%' if split.cogs > 0 else '—' }}</td></tr></tfoot>
@@ -119,6 +119,47 @@
   <p class="muted">No stores chosen yet. Each store's COGS is what was sent to it on sales orders, at cost.</p>
   {% endif %}
   <p class="muted small">Stores and the locations counted are set {% if is_admin %}in <a href="{{ url_for('dash.cogs_setup') }}">Settings → COGS</a>{% else %}by an admin, under Settings → COGS{% endif %}.</p>
+</section>
+
+<section class="card" id="unexplained">
+  <div class="card-head"><h2>What's in "not on an order or write-off"</h2>
+    {% if why.products %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), format='csv', by='unexplained') }}">Export CSV</a>{% endif %}</div>
+  <p class="muted">{{ split.rest|money }} of COGS isn't on a completed sales order or a stock write-off. First, what Core
+    found that puts value there; then each product whose stock at the end isn't what this month's documents add up to.</p>
+  {% set f = why.findings %}
+  <ul class="plain-list">
+    {% for o in f.partly_received %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> was received
+      only in part. COGS counts its whole value, so {{ o.value|money }} not received counts as used.</li>{% endfor %}
+    {% for o in f.elsewhere %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> went to
+      {{ names.get(o.warehouse, o.warehouse) }}, which COGS doesn't count as inventory, so its {{ o.value|money }} counts as used
+      straight away. Add that location in Settings → COGS if its stock should count.</li>{% endfor %}
+    {% if f.production_added %}<li>Production orders added {{ f.production_added|money }} of labour or other costs to what they made
+      ({% for o in f.production_orders %}<a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a>{{ ', ' if not loop.last }}{% endfor %}).
+      That value is in stock without a purchase, so it lowers this figure.</li>{% endif %}
+    {% if split.rest|abs < 0.5 and not why.products %}<li class="muted">Nothing to explain: all of COGS is on completed sales
+      orders and write-offs.</li>
+    {% elif not f.partly_received and not f.elsewhere and not f.production_added %}<li class="muted">None of the usual document
+      causes (part-received purchase orders, deliveries to a location COGS doesn't count, production costs). What's left is
+      stock that changed without a document: used but not on a sales order, waste or a stocktake not entered, or moved out.</li>{% endif %}
+  </ul>
+  {% if why.products %}
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th>Product</th><th class="num wide-only">Opening</th><th class="num wide-only">Received</th>
+      <th class="num wide-only">Production</th><th class="num wide-only">Sent or sold</th><th class="num wide-only">Written off</th>
+      <th class="num">Should be</th><th class="num">Is</th><th class="num">Difference</th></tr></thead>
+    <tbody>{% for p in why.products[:25] %}
+    <tr><td>{{ p.description or p.product_code }}<div class="muted small">{{ p.product_code }}</div></td>
+      <td class="num wide-only">{{ p.opening|money }}</td><td class="num wide-only">{{ p.received|money }}</td>
+      <td class="num wide-only">{{ p.production|money }}</td><td class="num wide-only">{{ p.sold|money }}</td>
+      <td class="num wide-only">{{ p.written_off|money }}</td><td class="num">{{ p.expected|money }}</td>
+      <td class="num">{{ p.closing|money }}</td><td class="num"><strong>{{ p.gap|money }}</strong></td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td>All products{% if why.products|length > 25 %} ({{ why.products|length - 25 }} more in the CSV){% endif %}</td>
+      <td class="wide-only" colspan="5"></td><td></td><td></td><td class="num">{{ why.gap|money }}</td></tr></tfoot>
+  </table></div>
+  <p class="muted small">Difference = should be − is. Above zero: value left with no record (used without a sales order, waste or a
+    stocktake not entered, moved to a location COGS doesn't count, part-received orders). Below zero: value appeared (stock
+    received without a purchase order, returns, production costs, cost corrections).</p>
+  {% endif %}
 </section>
 
 <section class="card">

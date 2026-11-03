@@ -129,6 +129,42 @@ class ReportsTests(unittest.TestCase):
             self.assertAlmostEqual(c["cogs"], recon["total"], delta=1.0, msg=str(month))
             self.assertGreater(c["shipping"], 0)
 
+    def test_unexplained_cogs_names_its_causes(self):
+        month, through = dt.date(2026, 10, 1), dt.date(2026, 10, 31)
+
+        class Stub(Reports):
+            def stock_on_hand(self, as_at=None, warehouse=None):
+                value = {"WH": 100.0, "CS": 0.0}[warehouse] if as_at == dt.date(2026, 9, 30) else \
+                    {"WH": 30.0, "CS": 0.0}[warehouse]
+                return {"rows": [{"product_code": "MILK", "description": "Milk", "value": value}]}
+
+            def _completed_sales(self, start, end, warehouses=None):
+                return [{"lines": [{"product_code": "MILK", "cost": 50.0}]}]
+
+            def stock_adjustments(self, start, end):
+                return {"rows": [{"product_code": "MILK", "warehouse": "WH", "value_change": -5.0}]}
+
+            def assemblies(self, start=None, end=None, product=None):
+                return [{"completed": True, "completed_date": dt.date(2026, 10, 9), "number": "ASM-1",
+                         "product_code": "LATTE", "cost": 8.0, "supplier_costs": 2.5,
+                         "lines": [{"product_code": "MILK", "cost": 8.0}]}]
+
+        received = [
+            {"number": "PO-1", "goods": 20.0, "shipping": 2.0, "total": 22.0, "warehouse": "WH",
+             "lines": [{"product_code": "MILK", "qty": 10, "received_qty": 6, "unit_price": 2.0, "line_total": 20.0}]},
+            {"number": "PO-2", "goods": 9.0, "shipping": 0.0, "total": 9.0, "warehouse": "KTOWN",
+             "lines": [{"product_code": "MILK", "qty": 3, "received_qty": 3, "unit_price": 3.0, "line_total": 9.0}]}]
+        cogs = {"month": month, "through": through, "prior_end": dt.date(2026, 9, 30), "is_current": False,
+                "warehouses": ["WH", "CS"], "received": received}
+        why = Stub(None, today_fn=lambda: dt.date(2026, 11, 5)).unexplained(cogs)
+        f = why["findings"]
+        self.assertEqual(f["partly_received"], [{"number": "PO-1", "value": 8.0}])  # 4 not received, at $2
+        self.assertEqual(f["elsewhere"], [{"number": "PO-2", "warehouse": "KTOWN", "value": 9.0}])
+        self.assertEqual((f["production_added"], f["production_orders"]), (2.5, [{"number": "ASM-1", "value": 2.5}]))
+        milk = next(p for p in why["products"] if p["product_code"] == "MILK")
+        # 100 + 31 received − 8 into production − 50 sold − 5 written off = 68 should be there; 30 is.
+        self.assertEqual((milk["expected"], milk["closing"], milk["gap"]), (68.0, 30.0, 38.0))
+
     def test_current_month_runs_through_today(self):
         c = self.reports.cogs(TODAY, daily=True)
         self.assertTrue(c["is_current"])
@@ -1550,6 +1586,14 @@ class StoreSyncTests(unittest.TestCase):
         self.assertTrue(csv_text.startswith("Store,Customer code,Orders,Cost of what was sent,Share of COGS"))
         self.assertIn("Gardena POS (daily sales),GDN-POS,", csv_text)
         self.assertIn(f"COGS,,,{round(cogs['cogs'], 2)},1", csv_text)
+
+        # What "not on an order or write-off" is made of: the product differences add up to it.
+        why = reports.unexplained(cogs)
+        self.assertAlmostEqual(why["gap"], split["rest"], places=4)
+        for text in ('id="unexplained"', 'href="#unexplained">What\'s in this', "Nothing to explain"):
+            self.assertIn(text, page)
+        csv_text = c.get(f"/cogs?month={month:%Y-%m}&format=csv&by=unexplained").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Product Code,Description,Opening,Received,Production,Sent or sold"))
 
         # Picking one store: what was sent to it, by product and order.
         page = c.get(f"/cogs?month={month:%Y-%m}").get_data(as_text=True)

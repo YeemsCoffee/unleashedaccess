@@ -246,6 +246,7 @@ class Reports:
             "completed_date": parse_date(i.get("CompletedDate")),
             "supplier_code": supplier.get("SupplierCode"),
             "supplier_name": supplier.get("SupplierName"),
+            "warehouse": _warehouse_code(i.get("Warehouse") or i.get("DeliveryWarehouse")),
             "goods": goods, "shipping": shipping, "tax": _first(i.get("BCTaxTotal"), i.get("TaxTotal")),
             "total": goods + shipping, "lines": lines, "cost_lines": cost_lines,
         }
@@ -420,6 +421,10 @@ class Reports:
             "batches": made_batches or pending, "batches_pending": not made_batches and bool(pending),
             "comments": i.get("Comments"), "lines": lines, "cost": cost,
             "unit_cost": cost / qty if qty else 0, "estimated": any(l["estimated"] for l in lines),
+            # What Unleashed adds to the made product's value beyond its components (labour etc.).
+            "supplier_costs": _first(i.get("SupplierCostsSubTotal"),
+                                     sum(_first(c.get("BCSubTotal"), c.get("SubTotal"), c.get("Amount"), 0) or 0
+                                         for c in i.get("SupplierCosts") or [])) or 0,
         }
 
     def bills_of_materials(self):
@@ -632,6 +637,62 @@ class Reports:
                 "other_share": share(other["cost"]), "written_off": written_off,
                 "written_off_share": share(written_off), "rest": rest, "rest_share": share(rest),
                 "cogs": total}
+
+    def unexplained(self, cogs):
+        """Where "not on an order or write-off" (cogs_by_store's rest) comes from: for each
+        product, the stock value the month's documents say it should have (opening +
+        received ± production − sold − written off) against what it has, and the things
+        that are known to put value there. Σ product gaps − production value added = rest."""
+        start, through, warehouses = cogs["month"], cogs["through"], cogs["warehouses"]
+        products = defaultdict(lambda: {"opening": 0.0, "received": 0.0, "production": 0.0, "sold": 0.0,
+                                        "written_off": 0.0, "closing": 0.0, "description": None})
+
+        def stock(as_at, key):
+            for w in warehouses or [None]:
+                for r in self.stock_on_hand(as_at=as_at, warehouse=w)["rows"]:
+                    p = products[r["product_code"]]
+                    p[key] += r["value"] or 0
+                    p["description"] = p["description"] or r["description"]
+
+        stock(cogs["prior_end"], "opening")
+        stock(None if cogs["is_current"] else through, "closing")
+        findings = {"partly_received": [], "elsewhere": [], "production_added": 0.0, "production_orders": []}
+        if through >= start:
+            for o in cogs["received"]:
+                goods = o["goods"] or 1
+                for l in o["lines"]:
+                    products[l["product_code"]]["received"] += l["line_total"] + o["shipping"] * l["line_total"] / goods
+                if not o["lines"] and o["shipping"]:  # costs with no goods to put them on
+                    products["(shipping on orders without goods)"]["received"] += o["shipping"]
+                short = sum((l["qty"] - l["received_qty"]) * (l["unit_price"] or 0) for l in o["lines"]
+                            if l["received_qty"] is not None and l["received_qty"] < l["qty"] - 1e-9)
+                if short > 0.005:
+                    findings["partly_received"].append({"number": o["number"], "value": short})
+                if warehouses and o.get("warehouse") and o["warehouse"] not in warehouses:
+                    findings["elsewhere"].append({"number": o["number"], "warehouse": o["warehouse"],
+                                                  "value": o["total"]})
+            for o in self._completed_sales(start, through, warehouses):
+                for l in o["lines"]:
+                    products[l["product_code"]]["sold"] += l["cost"]
+            for r in self.stock_adjustments(start, through)["rows"]:
+                if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
+                    products[r["product_code"]]["written_off"] -= r["value_change"] or 0
+            for a in self.assemblies(start, through):
+                if not a["completed"] or not start <= a["completed_date"] <= through:
+                    continue
+                for l in a["lines"]:
+                    products[l["product_code"]]["production"] -= l["cost"]
+                products[a["product_code"]]["production"] += a["cost"]
+                if a["supplier_costs"]:
+                    findings["production_added"] += a["supplier_costs"]
+                    findings["production_orders"].append({"number": a["number"], "value": a["supplier_costs"]})
+        rows = []
+        for code, p in products.items():
+            expected = p["opening"] + p["received"] + p["production"] - p["sold"] - p["written_off"]
+            rows.append(dict(p, product_code=code, expected=expected, gap=expected - p["closing"]))
+        rows.sort(key=lambda r: -abs(r["gap"]))
+        return {"products": [r for r in rows if abs(r["gap"]) >= 0.5], "gap": sum(r["gap"] for r in rows),
+                "findings": findings}
 
     def sent_to(self, cogs, customer):
         """What went to `customer` (a store) in `cogs`'s month (a cogs() result): its completed
