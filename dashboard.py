@@ -657,13 +657,21 @@ def cogs_page():
     if month > r.today:
         month = month_start(r.today)
     settings = r.cogs_settings()
-    # The locations Settings → COGS counts; anyone can narrow this view to some of them.
-    locations = settings["warehouses"] or []
-    picked = [w for w in request.args.getlist("location") if w in locations] or locations
-    view = picked or None
-    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") == "store"), warehouses=view)
+    view = settings["warehouses"]
+    c = r.cogs(month, daily=not (_wants_csv() and request.args.get("by") in ("store", "sent")), warehouses=view)
     split = r.cogs_by_store(c)
+    # The store picker: the stores Settings → COGS names, or every customer until it names some.
+    customers = {x.get("CustomerCode"): x.get("CustomerName") or x.get("CustomerCode") for x in r.customers()}
+    store_options = [(code, customers.get(code, code)) for code in settings["stores"]] or \
+        sorted(customers.items(), key=lambda x: (x[1] or "").lower())
+    store = request.args.get("store") if request.args.get("store") in dict(store_options) else None
+    sent = r.sent_to(c, store) if store else None
     if _wants_csv():
+        if request.args.get("by") == "sent" and sent:
+            return _csv(f"sent-to-{store}-{month:%Y-%m}", [
+                ("Product Code", "product_code"), ("Description", "description"),
+                ("Qty", lambda x: round(x["qty"], 4)), ("Cost", lambda x: round(x["cost"], 2)),
+            ], sent["products"])
         if request.args.get("by") == "store":
             rest = [{"name": "Other customers", "code": "", "orders": split["other_orders"],
                      "cost": split["other_customers"], "share": split["other_share"]},
@@ -691,8 +699,8 @@ def cogs_page():
     names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
-        settings=settings, locations=locations, picked=picked, names=names,
-        narrowed=bool(locations) and set(picked) != set(locations),
+        settings=settings, names=names, store_options=store_options, store=store, sent=sent,
+        store_name=dict(store_options).get(store),
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
         pending_name=r.warehouse_names(settings["pending"]) if settings["pending"] else None,
         chart=_cogs_chart(c.get("daily", []), month),

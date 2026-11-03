@@ -1516,6 +1516,23 @@ class StoreSyncTests(unittest.TestCase):
         self.assertIn("Gardena POS (daily sales),GDN-POS,", csv_text)
         self.assertIn(f"COGS,,,{round(cogs['cogs'], 2)},1", csv_text)
 
+        # Picking one store: what was sent to it, by product and order.
+        page = c.get(f"/cogs?month={month:%Y-%m}").get_data(as_text=True)
+        self.assertIn('<option value="WHSL-01" >Mock Wholesale Cafe</option>', page)
+        self.assertNotIn('value="CATER-01"', page)  # only the stores Settings names
+        sent = reports.sent_to(cogs, "WHSL-01")
+        mine = [o for o in sales if o["customer_code"] == "WHSL-01"]
+        self.assertEqual(len(sent["orders"]), len(mine))
+        self.assertAlmostEqual(sent["cost"], sum(o["cost"] for o in mine), places=6)
+        self.assertAlmostEqual(sum(p["cost"] for p in sent["products"]), sent["cost"], places=6)
+        page = c.get(f"/cogs?month={month:%Y-%m}&store=WHSL-01").get_data(as_text=True)
+        self.assertIn(f"Sent to Mock Wholesale Cafe, {month:%B %Y}", page)
+        self.assertIn(f"{len(mine)} completed orders", page)
+        self.assertIn(mine[0]["number"], page)
+        csv_text = c.get(f"/cogs?month={month:%Y-%m}&store=WHSL-01&format=csv&by=sent").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Product Code,Description,Qty,Cost"))
+        self.assertNotIn('id="sent"', c.get(f"/cogs?month={month:%Y-%m}&store=NOPE").get_data(as_text=True))
+
     def test_cogs_counts_stock_in_the_locations_chosen(self):
         for code, name in (("CS", "Cold Storage"), ("TOR", "Torrance Store")):
             self.ds.warehouses.append({"Guid": f"wh-{code}", "WarehouseCode": code, "WarehouseName": name,
@@ -1540,17 +1557,12 @@ class StoreSyncTests(unittest.TestCase):
         self.assertEqual(set(both["opening_by"]), {"GDN", "CS"})
         self.assertEqual(both["closing_by"]["CS"], 0)
         page = c.get("/cogs").get_data(as_text=True)
-        for text in ("in Gardena Store and Cold Storage", "Inventory by location", "Locations counted",
-                     'name="location" value="CS" checked'):
+        for text in ("in Gardena Store and Cold Storage", "Inventory by location"):
             self.assertIn(text, page)
 
-        # Narrowing your own view: stock in the location left out counts as used, for you only.
-        mine = c.get("/cogs?location=CS").get_data(as_text=True)
-        self.assertIn("This view counts stock in Cold Storage only", mine)
-        cold = reports.cogs(TODAY, warehouses=["CS"])
+        cold = reports.cogs(TODAY, warehouses=["CS"])  # stock outside the locations counted is used
         self.assertEqual((cold["opening"], cold["closing"]), (0, 0))
         self.assertAlmostEqual(cold["cogs"], cold["purchases"], places=4)
-        self.assertEqual(reports.cogs_settings()["warehouses"], ["GDN", "CS"])  # nobody else's changed
 
         # A location added later is counted once its history has downloaded.
         store.set_state("cogs_warehouse", json.dumps(["GDN", "CS", "TOR"]))

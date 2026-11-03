@@ -633,6 +633,25 @@ class Reports:
                 "written_off_share": share(written_off), "rest": rest, "rest_share": share(rest),
                 "cogs": total}
 
+    def sent_to(self, cogs, customer):
+        """What went to `customer` (a store) in `cogs`'s month (a cogs() result): its completed
+        sales orders, and their lines by product, at Unleashed's average landed cost when they
+        went (not the price on the order)."""
+        start, through = cogs["month"], cogs["through"]
+        orders = [o for o in self._completed_sales(start, through, cogs["warehouses"])
+                  if o["customer_code"] == customer] if through >= start else []
+        products = {}
+        for o in orders:
+            for l in o["lines"]:
+                p = products.setdefault(l["product_code"], {"product_code": l["product_code"],
+                                                            "description": l["description"], "qty": 0.0, "cost": 0.0})
+                p["qty"] += l["qty"] or 0
+                p["cost"] += l["cost"] or 0
+        cost = sum(o["cost"] for o in orders)
+        return {"orders": sorted(orders, key=lambda o: (o["completed_date"] or o["order_date"], o["number"])),
+                "products": sorted(products.values(), key=lambda p: (-p["cost"], p["product_code"] or "")),
+                "cost": cost, "share": cost / cogs["cogs"] if cogs["cogs"] > 0 else None}
+
     def cogs_history(self, months=12, by_store=False, warehouses=None):
         first = add_months(month_start(self.today), -(months - 1))
 

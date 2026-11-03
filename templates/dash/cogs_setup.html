@@ -17,7 +17,6 @@
       <label><input type="checkbox" name="location" value="{{ w.WarehouseCode }}" {{ 'checked' if w.WarehouseCode in chosen }}>
         {{ w.WarehouseName or w.WarehouseCode }} <span class="muted small">{{ w.WarehouseCode }}</span></label>{% else %}
       <p class="muted">No warehouses in Unleashed yet.</p>{% endfor %}</div>
-    <p class="muted small">On the COGS page, anyone can narrow their own view to some of these locations.</p>
   </section>
 
   <section class="card">

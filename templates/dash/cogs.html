@@ -5,13 +5,37 @@
   <h1>Cost of goods sold</h1>
   <form method="get" class="filters">
     <label>Month <input type="month" name="month" value="{{ month.strftime('%Y-%m') }}"></label>
-    {% if locations|length > 1 %}<fieldset class="loc-filter"><legend>Locations counted</legend>
-      {% for code in locations %}<label><input type="checkbox" name="location" value="{{ code }}" {{ 'checked' if code in picked }}> {{ names[code] }}</label>{% endfor %}
-    </fieldset>{% endif %}
+    {% if store_options %}<label>Store <select name="store"><option value="">All stores</option>
+      {% for code, name in store_options %}<option value="{{ code }}" {{ 'selected' if code == store }}>{{ name }}</option>{% endfor %}</select></label>{% endif %}
     <button class="btn btn-primary">Show</button>
     <a class="btn" href="{{ csv_url }}">Export CSV</a>
   </form>
 </div>
+
+{% if sent is not none %}
+<section class="card" id="sent">
+  <div class="card-head"><h2>Sent to {{ store_name }}, {{ c.month|month_name }}{{ ' to date' if c.is_current }}</h2>
+    {% if sent.products %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), store=store, format='csv', by='sent') }}">Export CSV</a>{% endif %}</div>
+  <div class="hero-value">{{ sent.cost|money }}</div>
+  <div class="hero-delta">{{ sent.orders|length }} completed order{{ 's' if sent.orders|length != 1 }}{% if sent.share is not none %} · {{ sent.share|pct }} of COGS{% endif %} ·
+    at Unleashed's average landed cost when it went out (not the price on the order)</div>
+  {% if sent.products %}
+  <div class="table-wrap"><table class="maint-wrap">
+    <thead><tr><th class="wide-only">Product</th><th>Description</th><th class="num">Qty</th><th class="num">Cost</th></tr></thead>
+    <tbody>{% for p in sent.products %}
+    <tr><td class="wide-only">{{ p.product_code }}</td><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.qty|qty }}</td><td class="num">{{ p.cost|money }}</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td class="wide-only"></td><td>Total</td><td></td><td class="num">{{ sent.cost|money }}</td></tr></tfoot>
+  </table></div>
+  <details><summary>The {{ sent.orders|length }} order{{ 's' if sent.orders|length != 1 }}</summary>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Order</th><th>Completed</th><th class="num">Cost</th></tr></thead>
+      <tbody>{% for o in sent.orders %}
+      <tr><td><a href="{{ url_for('dash.sales_detail', number=o.number) }}">{{ o.number }}</a></td><td>{{ (o.completed_date or o.order_date)|d }}</td><td class="num">{{ o.cost|money }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  {% else %}<p class="muted">Nothing was sent to {{ store_name }} on a completed sales order this month.</p>{% endif %}
+</section>
+{% endif %}
 
 <section class="hero card">
   <div class="hero-label">{{ c.month|month_name }}{{ ' · running through ' ~ (c.through|d) if c.is_current else ' · full month' }}</div>
@@ -29,9 +53,6 @@
     <div class="f-result"><span class="f-label">COGS</span><span class="f-val">{{ c.cogs|money }}</span></div>
   </div>
   {% if warehouse_name %}<p class="muted small">Inventory is the stock on hand in {{ warehouse_name }}: stock that leaves {{ 'it' if c.warehouses|length == 1 else 'them' }} counts as used, wherever it goes.</p>{% endif %}
-  {% if narrowed %}<p class="recon recon-warn">! This view counts stock in {{ warehouse_name }} only, so stock in the other
-    locations counts as used. Everyone else sees COGS counting all {{ locations|length }} locations
-    (<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m')) }}">show that</a>).</p>{% endif %}
   {% if pending_name %}<p class="recon recon-warn">! COGS will count stock on hand in {{ pending_name }} once {{ 'its' if settings.pending|length == 1 else 'their' }} stock
     history has downloaded with the next sync. Until then it counts every warehouse.</p>{% endif %}
   {% set diff = c.cogs - recon.total %}
@@ -74,7 +95,7 @@
 
 <section class="card" id="by-store">
   <div class="card-head"><h2>By store</h2>
-    {% if split.stores %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), format='csv', by='store', location=picked if narrowed else None) }}">Export CSV</a>{% endif %}</div>
+    {% if split.stores %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), format='csv', by='store', store=store) }}">Export CSV</a>{% endif %}</div>
   {% if split.stores %}
   <p class="muted">A store's COGS is what was sent to it on completed sales orders, at Unleashed's average landed cost
     when it went out (not the price on the order). What wasn't sent to a store is underneath, so the rows add up to COGS.</p>
@@ -145,7 +166,7 @@
     <thead><tr><th>Month</th><th class="num">Opening inventory</th><th class="num">Purchases incl. shipping</th><th class="num">Closing inventory</th><th class="num">COGS</th><th class="num">Sales</th><th class="num">COGS % of sales</th></tr></thead>
     <tbody>
     {% for h in history|reverse %}
-    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m'), location=picked if narrowed else None) }}">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
+    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m'), store=store) }}">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
       <td class="num">{{ h.opening|money }}</td><td class="num">{{ h.purchases|money }}</td>
       <td class="num">{{ h.closing|money }}</td><td class="num"><strong>{{ h.cogs|money }}</strong></td>
       <td class="num">{{ h.revenue|money }}</td><td class="num">{{ h.cogs_pct|pct }}</td></tr>
@@ -160,7 +181,7 @@
     <thead><tr><th>Month</th>{% for s in split.stores %}<th class="num">{{ s.name }}</th>{% endfor %}<th class="num">Not sent to a store</th><th class="num">COGS</th></tr></thead>
     <tbody>
     {% for h in history|reverse %}
-    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m'), location=picked if narrowed else None) }}#by-store">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
+    <tr><td><a href="{{ url_for('dash.cogs_page', month=h.month.strftime('%Y-%m'), store=store) }}#by-store">{{ h.month|month_name }}</a>{{ ' (to date)' if h.is_current }}</td>
       {% for s in split.stores %}{% set row = h.by_store.stores|selectattr('code', 'equalto', s.code)|first %}
       <td class="num">{{ row.cost|money if row else '—' }}</td>{% endfor %}
       <td class="num">{{ (h.cogs - h.by_store.sent)|money }}</td><td class="num"><strong>{{ h.cogs|money }}</strong></td></tr>

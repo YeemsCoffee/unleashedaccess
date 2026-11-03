@@ -182,9 +182,7 @@ This applies to everyone's COGS. Stock that leaves those locations counts as
 used, wherever it goes. The sync keeps each location's stock history too, and
 COGS switches to a new choice once a sync has downloaded it (until then it
 counts every warehouse, and the page says so). The COGS page shows each
-location's inventory at the start of the month and now, and anyone can untick
-locations in **Locations counted** to narrow their own view (stock in the
-locations left out then counts as used, for that view only).
+location's inventory at the start of the month and now.
 
 **By store.** Stores are Unleashed customers that stock is sent to on sales
 orders; an admin ticks which customers are stores under Settings → COGS. A store's
@@ -199,7 +197,10 @@ COGS = sent to each store (cost of completed sales orders to it)
      + not on an order or write-off (usage not recorded, production losses, …)
 ```
 
-The last 12 months table gets a column per store, and **Export CSV** in the By
+**Store** at the top of the COGS page picks one store (any customer until stores
+are chosen in Settings) and shows what was sent to it that month: the total at
+cost, its share of COGS, each product's quantity and cost (with CSV), and the
+orders. The last 12 months table gets a column per store, and **Export CSV** in the By
 store section downloads the split.
 
 ## Production
