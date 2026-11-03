@@ -57,7 +57,7 @@
 <section class="card">
   <h2>Where it's been</h2>
   <ul class="plain-list">{% for m in item.moves %}
-    <li><span class="nowrap">{{ m.on_date|d }}</span> · {{ {'installed': 'Installed at', 'dismantled': 'Taken out of', 'retired': 'Retired'}[m.action] }} {{ m.location or '' }}{% if m.note %} <span class="muted">({{ m.note }})</span>{% endif %} <span class="muted small">{{ m.by_name or '' }}</span></li>
+    <li><span class="nowrap">{{ m.on_date|d }}</span> · {{ {'installed': 'Installed at', 'dismantled': 'Taken out of', 'retired': 'Retired'}[m.action] }} {{ m.location or ('a deleted location' if m.location_id else '') }}{% if m.note %} <span class="muted">({{ m.note }})</span>{% endif %} <span class="muted small">{{ m.by_name or '' }}</span></li>
   {% else %}<li class="muted">Not installed anywhere yet.</li>{% endfor %}</ul>
 </section>
 

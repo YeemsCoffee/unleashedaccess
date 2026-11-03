@@ -25,10 +25,7 @@
     <a class="btn" href="{{ url_for('maint.request_new', location=loc.id) }}">Report a problem</a>
     {% endif %}
     <a class="btn btn-quiet" href="{{ url_for('maint.history', location=loc.id, start='2000-01-01') }}">History →</a>
-    {% if can_delete and not children %}
-    <form method="post" action="{{ url_for('maint.location_delete', location_id=loc.id) }}"
-          onsubmit='return confirm({{ ("Delete " ~ loc.name ~ "?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>
-    {% endif %}
+    {% if can_delete %}<a class="btn btn-quiet" href="#delete">Delete…</a>{% endif %}
   </div>
 </section>
 
@@ -81,4 +78,24 @@
     <div class="run-actions"><button class="btn btn-primary">Copy</button></div>
   </form>
 </section>
+
+{% if can_delete and contents %}{% set c = contents %}
+<section class="card card-danger" id="delete">
+  <h2>Delete {{ loc.name }}</h2>
+  <p class="muted">Admins only. This can't be undone.</p>
+  <ul class="plain-list delete-list">
+    <li><strong>Deleted:</strong> {{ loc.name }}{% if c.below %} and the {{ c.below }} location{{ 's' if c.below != 1 }} under it{% endif %}{% if c.tasks %},
+      with {{ c.tasks }} task{{ 's' if c.tasks != 1 }} and their history of being done{% endif %}.</li>
+    {% if c.equipment %}<li><strong>Moved to storage, not deleted:</strong> {{ c.equipment|length }} piece{{ 's' if c.equipment|length != 1 }} of equipment
+      ({{ c.equipment|map(attribute='name')|join(', ') }}), with {{ 'its' if c.equipment|length == 1 else 'their' }} tasks. Install {{ 'it' if c.equipment|length == 1 else 'them' }} somewhere else later.</li>{% endif %}
+    {% if c.requests or c.orders %}<li><strong>Kept as history:</strong>
+      {% if c.requests %}{{ c.requests }} request{{ 's' if c.requests != 1 }}{% endif %}{% if c.requests and c.orders %} and {% endif %}{% if c.orders %}{{ c.orders }} work order{{ 's' if c.orders != 1 }}{% endif %},
+      {% if c.history_to %}now shown under {{ c.history_to.label }}{% else %}now with no location (their equipment, if any, stays on them){% endif %}.</li>{% endif %}
+  </ul>
+  <form method="post" action="{{ url_for('maint.location_delete', location_id=loc.id) }}" class="maint-form"
+        onsubmit='return confirm({{ ("Delete " ~ loc.name ~ (" and everything under it" if c.below else "") ~ "? This can't be undone.")|tojson }})'>
+    <div class="run-actions"><button class="btn btn-danger">Delete {{ loc.name }}{{ ' and everything under it' if c.below }}</button></div>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

@@ -1020,10 +1020,10 @@ class MaintenanceTests(unittest.TestCase):
                                                           if l["path"] == "Gardena › Kitchen")})
         page = self.c.get("/maintenance/locations").get_data(as_text=True)
         self.assertIn("La Marzocco", page)
-        self.c.post(f"/maintenance/locations/{gardena}/delete")
-        self.assertIn(gardena, {l["id"] for l in self.store.locations()})  # has locations under it
         self.c.post(f"/maintenance/locations/{espresso['id']}/delete")
         self.assertNotIn(espresso["id"], {l["id"] for l in self.store.locations()})
+        self.c.post(f"/maintenance/locations/{gardena}/delete")  # and everything under it
+        self.assertEqual([l["path"] for l in self.store.locations()], ["Kitchen"])
 
     def test_tasks_come_due_and_move_on_when_done(self):
         self._location("Gardena")
@@ -1087,8 +1087,11 @@ class MaintenanceTests(unittest.TestCase):
         self.c.post(f"/maintenance/tasks/{grinder}/delete")
         self.assertIsNone(self.store.task(grinder, TODAY))
         self.assertEqual(self.store.completions(task_id=grinder), [])
-        self.assertIn("has tasks", self.c.post(f"/maintenance/locations/{kitchen}/delete",
-                                               follow_redirects=True).get_data(as_text=True))
+        left = self.store.tasks(TODAY, kitchen)
+        self.assertTrue(left)
+        self.assertIn("Deleted Kitchen with", self.c.post(f"/maintenance/locations/{kitchen}/delete",
+                                                          follow_redirects=True).get_data(as_text=True))
+        self.assertTrue(all(self.store.task(t["id"], TODAY) is None for t in left))
 
     def test_files_are_kept_with_their_task(self):
         import io
@@ -1363,6 +1366,39 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertEqual([o["text"] for o in self.store.tasklist(self._new_id(res))["operations"]], ["Drain", "Refill"])
         res = self.c.post("/maintenance/tasklists/new", data={"name": "Huge", "rows": "1000000000", "op-text-0": "One"})
         self.assertEqual(len(self.store.tasklist(self._new_id(res))["operations"]), 1)
+
+    def test_deleting_a_location_takes_its_branch_and_keeps_history(self):
+        gar, kit, esp = self._store_tree()
+        bar = self._location("Bar", gar, code="GAR-BAR")
+        machine = self._new_id(self._post("/maintenance/equipment/new", name="Espresso machine", location_id=str(esp)))
+        self._post("/maintenance/tasks/new", name="Descale", frequency_days="30", next_due=TODAY.isoformat(),
+                   equipment_id=str(machine))
+        self._post("/maintenance/tasks/new", name="Mop kitchen", frequency_days="1", next_due=TODAY.isoformat(),
+                   location_id=str(kit))
+        req = self._new_id(self._post("/maintenance/requests/new", title="Leak under sink", location_id=str(kit)))
+        order = self._new_id(self._post("/maintenance/orders/new", title="Fix sink", location_id=str(esp),
+                                        due_date="2026-07-20"))
+        page = self.c.get(f"/maintenance/locations/{kit}").get_data(as_text=True)
+        self.assertIn("Delete Kitchen and everything under it", page)
+        self.assertIn("Moved to storage, not deleted:</strong> 1 piece of equipment", page)
+        self.assertIn("now shown under GAR · Gardena", page)
+        c = self.store.location_contents(kit)
+        self.assertEqual((c["below"], c["tasks"], c["requests"], c["orders"]), (1, 1, 1, 1))
+
+        msg = self.c.post(f"/maintenance/locations/{kit}/delete", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Deleted Kitchen and the 1 location under it with 1 task. Moved 1 piece of equipment to storage.", msg)
+        self.assertEqual({l["id"] for l in self.store.locations()}, {gar, bar})
+        item = self.store.equipment(machine)
+        self.assertEqual((item["status"], item["location_id"]), ("storage", None))
+        self.assertEqual([t["name"] for t in self.store.tasks(TODAY, equipment_id=machine)], ["Descale"])
+        self.assertEqual(self.store.request(req)["location"], "GAR · Gardena")
+        self.assertEqual(self.store.order(order, TODAY)["location"], "GAR · Gardena")
+        self.assertIn("a deleted location", self.c.get(f"/maintenance/equipment/{machine}").get_data(as_text=True))
+
+        # At the top level the history is kept with no location.
+        self.c.post(f"/maintenance/locations/{gar}/delete")
+        self.assertEqual(self.store.locations(), [])
+        self.assertIsNone(self.store.request(req)["location"])
 
     def test_requests_become_work_orders_with_costs(self):
         gar, kit, esp = self._store_tree()

@@ -166,19 +166,52 @@ class Maintenance(Assets, Work):
                         conn.execute("UPDATE maint_locations SET code = ? WHERE id = ?", (renamed, child["id"]))
         return location_id
 
-    def delete_location(self, location_id):
+    def location_contents(self, location_id):
+        """What deleting `location_id` takes with it: the locations under it, the tasks on
+        them, the equipment installed there (which goes to storage), and the requests and
+        work orders (kept as history, moved to the location above, or to none at the top)."""
         location = self.location(location_id)
         if location is None:
-            return
-        for sql, why in (("SELECT 1 FROM maint_locations WHERE parent_id = ?", "has locations under it. Move or delete them"),
-                         ("SELECT 1 FROM maint_tasks WHERE location_id = ?", "has tasks. Move or delete them"),
-                         ("SELECT 1 FROM maint_equipment WHERE location_id = ?", "has equipment installed. Move it"),
-                         ("SELECT 1 FROM maint_requests WHERE location_id = ?", "has requests, kept for their history. Keep it"),
-                         ("SELECT 1 FROM maint_orders WHERE location_id = ?", "has work orders, kept for their history. Keep it")):
-            if self.db.query(sql, (location_id,)):
-                raise MaintenanceError(f"{location['name']} {why} first." if "Keep it" not in why
-                                       else f"{location['name']} {why}.")
-        self.db.execute("DELETE FROM maint_locations WHERE id = ?", (location_id,))
+            return None
+        ids = sorted(self.under(location_id))
+        marks = ", ".join("?" * len(ids))
+        equipment = self.db.query(f"SELECT id, name FROM maint_equipment WHERE location_id IN ({marks})"
+                                  " ORDER BY lower(name)", ids)
+        # An equipment's tasks go to storage with it; the rest are deleted.
+        tasks = self.db.query(f"SELECT COUNT(*) AS n FROM maint_tasks WHERE location_id IN ({marks}) AND"
+                              f" (equipment_id IS NULL OR equipment_id NOT IN"
+                              f" (SELECT id FROM maint_equipment WHERE location_id IN ({marks})))", ids + ids)[0]["n"]
+        count = lambda table: self.db.query(f"SELECT COUNT(*) AS n FROM {table} WHERE location_id IN ({marks})",
+                                            ids)[0]["n"]
+        parent = self.location(location["parent_id"]) if location["parent_id"] is not None else None
+        return {"location": location, "below": len(ids) - 1, "tasks": tasks, "equipment": equipment,
+                "requests": count("maint_requests"), "orders": count("maint_orders"),
+                "history_to": parent}
+
+    def delete_location(self, location_id, by=None, today=None):
+        """Delete a location and everything under it, with their tasks. Equipment installed
+        there goes to storage (with its tasks), and requests and work orders stay as history,
+        on the location above (none, for a top-level one). Returns location_contents."""
+        contents = self.location_contents(location_id)
+        if contents is None:
+            return None
+        location, parent = contents["location"], contents["history_to"]
+        today = today or dt.date.today()
+        for item in contents["equipment"]:
+            self.move_equipment(item["id"], "storage", None, today,
+                                f"{location['label']} was deleted", by, today)
+        ids = self.under(location_id)
+        marks = ", ".join("?" * len(ids))
+        for row in self.db.query(f"SELECT id FROM maint_tasks WHERE location_id IN ({marks})", list(ids)):
+            self.delete_task(row["id"])
+        depth = {l["id"]: l["depth"] for l in self.locations() if l["id"] in ids}
+        with self.db.connect() as conn:
+            for table in ("maint_requests", "maint_orders"):
+                conn.execute(f"UPDATE {table} SET location_id = ? WHERE location_id IN ({marks})",
+                             (parent["id"] if parent else None, *ids))
+            for lid in sorted(ids, key=lambda i: -depth.get(i, 0)):  # deepest first
+                conn.execute("DELETE FROM maint_locations WHERE id = ?", (lid,))
+        return contents
 
     def copy_location(self, source_id, form, by, today):
         """Copy a location and everything under it (a template, or a store set up already)

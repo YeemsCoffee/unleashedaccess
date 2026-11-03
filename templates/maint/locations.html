@@ -56,6 +56,7 @@
       <td class="row-actions">
         <a class="btn btn-quiet" href="{{ url_for('maint.locations', parent=l.id) }}" title="Add a location under {{ l.name }}">+ Under</a>
         <a class="btn btn-quiet" href="{{ url_for('maint.locations', edit=l.id) }}">Edit</a>
+        {% if can_delete %}<a class="btn btn-quiet" href="{{ url_for('maint.location', location_id=l.id) }}#delete">Delete</a>{% endif %}
       </td></tr>
     {% else %}<tr><td colspan="6" class="muted">{{ 'Nothing matches.' if q else 'No locations yet.' }}</td></tr>{% endfor %}</tbody>
   </table></div>

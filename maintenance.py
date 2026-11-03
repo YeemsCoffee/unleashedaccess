@@ -369,7 +369,8 @@ def location(location_id):
         tasks=store.tasks(today, location_id), requests=store.requests("active", location_id=location_id),
         orders=store.orders("active", location_id=location_id, today=today),
         done=store.work_done(location_id=location_id)[:10], locations=store.locations(),
-        blocked=within, can_delete=is_admin())
+        blocked=within, can_delete=is_admin(),
+        contents=store.location_contents(location_id) if is_admin() else None)
 
 
 @bp.post("/locations/<int:location_id>/copy")
@@ -390,8 +391,17 @@ def location_delete(location_id):
         flash("Only admins can delete locations.", "warn")
     else:
         try:
-            _store().delete_location(location_id)
-            flash("Deleted the location.", "ok")
+            gone = _store().delete_location(location_id, dashboard._person(), _today())
+            if gone:
+                parts = [f"{gone['location']['name']}"
+                         + (f" and the {gone['below']} location{'s' if gone['below'] != 1 else ''} under it"
+                            if gone['below'] else "")]
+                if gone["tasks"]:
+                    parts.append(f"{gone['tasks']} task{'s' if gone['tasks'] != 1 else ''}")
+                moved = len(gone["equipment"])
+                flash("Deleted " + " with ".join(parts) + "."
+                      + (f" Moved {moved} piece{'s' if moved != 1 else ''} of equipment to storage." if moved else ""),
+                      "ok")
         except MaintenanceError as e:
             flash(str(e), "warn")
             return redirect(url_for("maint.location", location_id=location_id))
