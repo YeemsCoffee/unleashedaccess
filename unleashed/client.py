@@ -40,14 +40,30 @@ def sign(query_string, api_key):
     return base64.b64encode(digest).decode()
 
 
+_business_tz = None
+
+
+def set_business_timezone(tz):
+    """The time zone dates are counted in (a tzinfo, or None for UTC): see parse_date."""
+    global _business_tz
+    _business_tz = tz
+
+
 def parse_date(value):
-    """'/Date(1690848000000)/' -> datetime.date (UTC). Passes through None."""
+    """'/Date(1690848000000)/' -> datetime.date. Passes through None.
+
+    Unleashed gives a plain date (an order date) as midnight UTC, which is that date. A
+    moment (when an order was completed) has its time, so its date is the one in the
+    business's time zone: 7 pm on Nov 2 in Pacific time is Nov 3 in UTC, and is Nov 2."""
     if not value:
         return None
     m = _DATE_RE.match(value)
     if not m:
         return dt.date.fromisoformat(value[:10])
-    return dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc).date()
+    moment = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc)
+    if _business_tz is not None and moment.time() != dt.time(0):
+        moment = moment.astimezone(_business_tz)
+    return moment.date()
 
 
 def format_date(d):

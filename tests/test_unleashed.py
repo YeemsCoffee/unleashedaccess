@@ -13,7 +13,7 @@ from unleashed.client import (UnleashedClient, UnleashedError, WsgiTransport, pa
                               writable)
 from unleashed.mock_server import MOCK_API_ID, MOCK_API_KEY, create_mock_app  # noqa: E402
 from unleashed.reports import Reports, add_months, month_end  # noqa: E402
-from unleashed.store import snapshot_key  # noqa: E402
+from unleashed.store import LocalStore, snapshot_key  # noqa: E402
 
 TODAY = dt.date(2026, 7, 15)
 # Tests finish the first sync before serving and never start the background thread.
@@ -86,6 +86,18 @@ class ReportsTests(unittest.TestCase):
     def test_parse_date(self):
         self.assertEqual(parse_date("/Date(1784073600000)/"), dt.date(2026, 7, 15))
         self.assertIsNone(parse_date(None))
+
+    def test_a_moment_counts_on_its_day_in_the_business_time_zone(self):
+        from zoneinfo import ZoneInfo
+        from unleashed.client import set_business_timezone
+        evening = "/Date(1793674800000)/"  # Nov 3 2026, 03:00 UTC: 7 pm on Nov 2 in Los Angeles
+        self.assertEqual(parse_date(evening), dt.date(2026, 11, 3))  # no time zone set: UTC
+        set_business_timezone(ZoneInfo("America/Los_Angeles"))
+        try:
+            self.assertEqual(parse_date(evening), dt.date(2026, 11, 2))
+            self.assertEqual(parse_date("/Date(1793664000000)/"), dt.date(2026, 11, 3))  # a plain date stays
+        finally:
+            set_business_timezone(None)
 
     def test_dates_sent_back_to_unleashed_are_in_the_form_it_accepts(self):
         doc = {"AssembleBy": "/Date(1793059200000)/", "Quantity": 2, "Comments": "/Date( in a note",
@@ -1438,6 +1450,15 @@ class StoreSyncTests(unittest.TestCase):
                      "/production/boms/BOM-CB", "/production/usage", "/production/orders/ASM-00000001"):
             self.assertEqual(c.get(path).status_code, 200, path)
         self.assertEqual(len(self._api_log()), before)
+
+    def test_stored_dates_are_worked_out_again_in_the_business_time_zone(self):
+        self._app()  # synced, dates read in UTC
+        store = LocalStore(self.app_db)
+        self.assertEqual(store.get_state("dates_read_as"), "UTC")
+        self._app(SYNC_ON_STARTUP="off", TIMEZONE="America/Los_Angeles")
+        self.assertEqual(store.get_state("dates_read_as"), "America/Los_Angeles")
+        self.assertEqual(store.recompute_dates("America/Los_Angeles"), 0)  # once, not on every start
+        self._app(SYNC_ON_STARTUP="off")  # back to UTC for the tests after this one
 
     def test_orders_completed_or_deleted_in_unleashed_catch_up(self):
         app = self._app()

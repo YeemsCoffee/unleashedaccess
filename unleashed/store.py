@@ -193,6 +193,21 @@ class LocalStore:
                 " data = excluded.data, synced_at = excluded.synced_at", rows)
         return len(rows), [dt.date.fromisoformat(x) for x in dates]
 
+    def recompute_dates(self, key):
+        """Work out each stored document's dates again when how dates are read has changed
+        (`key` names the way: the business's time zone). Returns how many were looked at."""
+        if self.get_state("dates_read_as") == key:
+            return 0
+        rows = self.db.query("SELECT kind, guid, data FROM ul_documents")
+        updates = []
+        for r in rows:
+            _, _, doc_date, _, effective = document_columns(r["kind"], json.loads(r["data"]))
+            updates.append((doc_date, effective, r["kind"], r["guid"]))
+        self.db.executemany("UPDATE ul_documents SET doc_date = ?, effective_date = ? WHERE kind = ? AND guid = ?",
+                            updates)
+        self.set_state("dates_read_as", key)
+        return len(rows)
+
     def document_statuses(self, endpoint):
         """[(guid, number, status)] for every stored document of `endpoint`."""
         return [(r["guid"], r["number"], r["status"]) for r in self.db.query(

@@ -17,7 +17,7 @@ from accounts import AccountError, check_new_password, temporary_password
 from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_PICTURES, MAX_STEPS, SENT, ProductionRuns, RunError,
                              check_batches, parse_batches)
 from unleashed import charts
-from unleashed.client import HttpTransport, UnleashedClient, UnleashedError
+from unleashed.client import HttpTransport, UnleashedClient, UnleashedError, set_business_timezone
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
                                month_end, month_start)
@@ -1417,6 +1417,7 @@ def init_app(app):
     if cfg["TIMEZONE"]:
         from zoneinfo import ZoneInfo
         display_tz = ZoneInfo(cfg["TIMEZONE"])
+    set_business_timezone(display_tz)  # a moment Unleashed gives counts on its day here
     if cfg.get("TODAY"):
         today_fn = lambda: cfg["TODAY"]  # noqa: E731
     elif display_tz:
@@ -1436,6 +1437,7 @@ def init_app(app):
             store.ensure_source(source, mode, allow_reset=cfg["ALLOW_DATABASE_RESET"])
         except SourceMismatch as e:
             source_error, client = str(e), None  # read what's there, but never sync into it
+    store.recompute_dates(cfg["TIMEZONE"] or "UTC")
 
     syncer = scheduler = None
     if client is not None:
