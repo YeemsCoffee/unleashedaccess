@@ -17,7 +17,7 @@
     <div><dt>Assigned to</dt><dd>{{ task.assignee_name or 'No one' }}</dd></div>
     <div><dt>Last done</dt><dd>{{ task.last_completed|local if task.last_completed else 'Not yet' }}</dd></div>
     <div><dt>Times done</dt><dd>{{ task.times_done }}</dd></div>
-    {% if task.tasklist %}<div><dt>Task list</dt><dd><a href="{{ url_for('maint.tasklist', tasklist_id=task.tasklist.id) }}">{{ task.tasklist.name }}</a></dd></div>{% endif %}
+    {% if task.steps %}<div><dt>Steps</dt><dd>{{ task.steps|length }}{% if task.step_minutes %}, about {{ task.step_minutes }} minutes{% endif %}</dd></div>{% endif %}
     {% if task.part_name %}<div><dt>Part</dt><dd>{{ task.part_name }}{% if task.vendor_part_number %} ({{ task.vendor_part_number }}){% endif %}</dd></div>{% endif %}
     {% if task.vendor %}<div><dt>Vendor</dt><dd>{{ task.vendor }}</dd></div>{% endif %}
     {% if task.lead_time_days %}<div><dt>Lead time</dt><dd>{{ task.lead_time_days }} day{{ 's' if task.lead_time_days != 1 }}</dd></div>{% endif %}
@@ -46,10 +46,10 @@
 <section class="card" id="record">
   <h2>Record work</h2>
   <form method="post" action="{{ url_for('maint.task_complete', task_id=task.id) }}" class="maint-form">
-    {% if task.tasklist %}
+    {% if task.steps %}
     <div class="checklist">
-      <div class="muted small">{{ task.tasklist.name }}{% if task.tasklist.minutes %}: about {{ task.tasklist.minutes }} minutes{% endif %}</div>
-      {% for op in task.tasklist.operations %}
+      <div class="muted small">Steps{% if task.step_minutes %}: about {{ task.step_minutes }} minutes{% endif %}</div>
+      {% for op in task.steps %}
       <label class="check-field"><input type="checkbox" name="op-{{ loop.index0 }}" value="1"> <span>{{ loop.index }}. {{ op.text }}{% if op.minutes %} <span class="muted small nowrap">({{ op.minutes }} min)</span>{% endif %}</span></label>
       {% endfor %}
     </div>

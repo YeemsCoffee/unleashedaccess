@@ -419,6 +419,8 @@ td.wrap { white-space: normal; min-width: 280px; }
 .maint-form textarea, .maint-form .text-input.wide { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--surface-1); color: var(--text-primary); width: 100%; box-sizing: border-box; resize: vertical; }
 .maint-form .check-field { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.maint-form .block select { font: inherit; font-size: 14px; padding: 6px 9px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); max-width: 420px; }
 .upload-form { margin-top: 12px; align-items: center; }
 .history-item { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .history-item:last-child { border-bottom: 0; }

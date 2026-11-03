@@ -67,7 +67,6 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Maintenance → Requests | Problems reported (a machine down, a leak), with priority and status; each request's details, files, and the work order made from it |
 | Maintenance → Work orders | Work to do, by priority: assigned, started, completed with findings or cancelled; labor, parts and service costs; files |
 | Maintenance → Tasks | Tasks by functional location (a location includes the ones under it) or equipment, filtered by status or person, or found by name; each task's details, checklist, recording work, files and history |
-| Maintenance → Task lists | Reusable lists of steps with minutes, ticked off when a task that uses one is recorded |
 | Maintenance → Equipment | Machines with make, model, serial number and warranty, where each is installed, its moves, counters and readings, tasks, files and maintenance cost |
 | Maintenance → Locations | The functional location tree with codes: find, add, change, copy (templates), delete; each location's master data, what's under it, equipment, open work, tasks and work done |
 | Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, open work orders, and work done. Click a day to add a task due then; drag a task's due date to another day to move it (with a mouse or a finger) |
@@ -131,13 +130,14 @@ The maintenance scheduler, brought into Core and kept in its database (the
   or both, whichever comes first. A usage task's due date is estimated from the
   usage rate. Dates are in the business's time zone (`TIMEZONE`). A task is
   overdue once its date has passed; one being worked on can be marked in progress.
-  Each can be assigned to someone who can open Maintenance, use a **task list**,
+  Each can be assigned to someone who can open Maintenance, have **steps**,
   and have a part with its vendor, part number and lead time: the part shows under
   **Parts to order** from the date it should be ordered (due date less the lead
   time), a week ahead.
-- **Task lists** are the steps for a kind of job (a burr clean: unplug, remove the
-  burrs, vacuum, reassemble), each with minutes, kept apart from the tasks that
-  use them so one list serves many machines. Recording the work ticks them off.
+- **Steps** are written on the task itself when adding or editing it (a burr clean:
+  unplug, remove the burrs, vacuum, reassemble), each with optional minutes; rows
+  are added with **+ Add a step**, and a new task can start from another task's
+  steps. Recording the work ticks them off.
 - **Recording work** (completed, or skipped with a reason) keeps who did it, when,
   how long, labor hours, parts used and their cost, the steps done, the counter
   reading and notes. A time-based task moves on by whole intervals from the date
@@ -580,10 +580,10 @@ unleashedaccess/
 ├── access.py           # access profiles: the tabs each kind of account opens
 ├── production_runs.py  # operating procedures (with step pictures) and what's recorded at each step
 ├── maintenance.py      # the Maintenance tab: overview, tasks, locations, calendar, history
-├── maintenance_views.py # Maintenance pages: equipment, counters, files, task lists, requests, work orders
+├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
 ├── maintenance_assets.py # equipment, its moves, counters and readings, files
-├── maintenance_work.py # task lists, requests, work orders and their costs
+├── maintenance_work.py # requests, work orders and their costs
 ├── maintenance_common.py # maintenance form parsing, codes, priorities, file types
 ├── run.py              # entry point (loads .env)
 ├── envfile.py          # minimal .env loader

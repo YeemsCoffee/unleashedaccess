@@ -3,7 +3,7 @@ import re
 
 DUE_SOON_DAYS = 7
 MAX_FILE_BYTES = 16 * 1024 * 1024
-MAX_OPERATIONS = 100  # steps in a task list
+MAX_OPERATIONS = 100  # steps on a task
 # What can be attached, and the type each is served as.
 FILE_TYPES = {
     "pdf": "application/pdf", "txt": "text/plain", "png": "image/png", "jpg": "image/jpeg",
@@ -112,3 +112,15 @@ def code(value):
     if len(value) > 40 or not CODE_RE.match(value):
         raise MaintenanceError("Codes use letters, numbers and - . _ / (40 at most), e.g. GAR-KIT-ESP.")
     return value
+
+
+def form_steps(form):
+    """A task's steps from the form's op-text-N / op-minutes-N rows ("rows" of them, the
+    page adds rows without saving): [{"text", "minutes"}], empty rows left out."""
+    steps = []
+    for i in range(min(whole(form.get("rows"), "Rows") or 0, MAX_OPERATIONS)):
+        step = text(form, f"op-text-{i}", 300)
+        if step:
+            steps.append({"text": step, "minutes": whole(form.get(f"op-minutes-{i}"), f"Minutes for “{step}”",
+                                                          minimum=0)})
+    return steps

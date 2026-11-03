@@ -8,13 +8,15 @@ only report problems (Maintenance requests) see the Requests page. Equipment, ta
 request and work order pages are in maintenance_views.py.
 """
 import datetime as dt
+import json
 
 from flask import (Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template,
                    request, url_for)
 
 import dashboard
 from dashboard import _csv, _csv_url, _wants_csv, current_user, is_admin
-from maintenance_common import CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MaintenanceError, fmt_number
+from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_OPERATIONS, MaintenanceError,
+                                fmt_number)
 from maintenance_store import COMPLETION_STATUSES, Maintenance
 
 bp = Blueprint("maint", __name__, url_prefix="/maintenance")
@@ -162,7 +164,7 @@ def tasks():
             ("Assigned to", "assignee_name"), ("Next due", lambda t: t["next_due"].isoformat() if t["next_due"] else ""),
             ("Every (days)", lambda t: t["frequency_days"] or ""),
             ("Every (usage)", lambda t: f"{fmt_number(t['usage']['interval'])} {t['usage']['unit']}".strip() if t["usage"] else ""),
-            ("Task list", "tasklist_name"), ("Part", "part_name"), ("Vendor", "vendor"),
+            ("Steps", lambda t: len(t["steps"]) or ""), ("Part", "part_name"), ("Vendor", "vendor"),
             ("Vendor part number", "vendor_part_number"), ("Lead time (days)", "lead_time_days"),
             ("Order parts by", lambda t: t["order_by"].isoformat() if t["order_by"] else ""),
             ("Last completed", lambda t: (t["last_completed"] or "")[:10]), ("Times done", "times_done"),
@@ -191,12 +193,31 @@ def _form_options():
             counters.append({"id": c["id"], "label": f"{item['name']} · {c['name']}" + (f" ({c['unit']})" if c["unit"] else ""),
                              "equipment_id": item["id"]})
     return {"locations": store.locations(), "equipment": equipment, "counters": counters,
-            "tasklists": store.tasklists(), "people": _people()}
+            "people": _people()}
 
 
 def _task_form(task=None, form=None, error=None):
-    return render_template("maint/task_form.html", task=task, form=form or {}, error=error, today=_today(),
-                           return_to=_return_to(), **_form_options()), 400 if error else 200
+    form = form or {}
+    if hasattr(form, "getlist"):  # the steps as typed, to show again
+        steps = [{"text": form.get(f"op-text-{i}", ""), "minutes": form.get(f"op-minutes-{i}", "")}
+                 for i in range(min(form.get("rows", 0, type=int), MAX_OPERATIONS))]
+    else:
+        steps = list((task or {}).get("steps") or [])
+    steps += [{"text": "", "minutes": ""}] * max(1, 3 - len(steps))
+    # Other tasks' steps, to start from: each distinct set once.
+    sources, seen = [], set()
+    for t in _store().tasks(_today(), include_templates=True):
+        key = json.dumps([s["text"] for s in t["steps"]])
+        if t["steps"] and key not in seen and (task is None or t["id"] != task["id"]):
+            seen.add(key)
+            sources.append({"label": f"{t['name']}" + (f" · {t['equipment_name'] or t['location']}"
+                                                       if t["equipment_name"] or t["location"] else "")
+                                     + f" ({len(t['steps'])} step{'s' if len(t['steps']) != 1 else ''})",
+                            "steps": t["steps"]})
+    sources.sort(key=lambda s: s["label"].lower())
+    return render_template("maint/task_form.html", task=task, form=form, error=error, today=_today(),
+                           return_to=_return_to(), steps=steps, step_sources=sources,
+                           max_steps=MAX_OPERATIONS, **_form_options()), 400 if error else 200
 
 
 @bp.route("/tasks/new", methods=["GET", "POST"])
@@ -230,7 +251,7 @@ def task_edit(task_id):
     if request.method == "GET":
         form = {k: found[k] for k in ("name", "location_id", "frequency_days", "assigned_to", "part_name",
                                       "vendor", "vendor_part_number", "lead_time_days", "instructions",
-                                      "in_progress", "equipment_id", "tasklist_id", "counter_id", "usage_interval",
+                                      "in_progress", "equipment_id", "counter_id", "usage_interval",
                                       "last_reading")}
         form["frequency_days"] = found["frequency_days"] or ""
         form["next_due"] = found["stored_due"] if found["frequency_days"] else ""

@@ -1333,39 +1333,74 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertEqual((t["time_due"], t["usage"]["due_at"]), (TODAY + dt.timedelta(days=90), 35300))
         self.assertFalse(t["movable"] and t["usage"]["projected"] and t["usage"]["projected"] < t["time_due"])
 
-    def test_task_lists_are_ticked_off_when_work_is_recorded(self):
-        res = self.c.post("/maintenance/tasklists/new", data={
-            "name": "Grinder burr clean", "rows": "4", "op-text-0": "Unplug and empty the hopper", "op-minutes-0": "2",
-            "op-text-1": "Remove and brush the burrs", "op-minutes-1": "10", "op-text-2": "", "op-text-3": "Reassemble"})
-        tasklist = self._new_id(res)
-        found = self.store.tasklist(tasklist)
-        self.assertEqual(([o["text"] for o in found["operations"]], found["minutes"]),
-                         (["Unplug and empty the hopper", "Remove and brush the burrs", "Reassemble"], 12))
+    def test_steps_are_written_on_the_task_and_ticked_off(self):
         task = self._new_id(self._post("/maintenance/tasks/new", name="Burr clean", frequency_days="7",
-                                       next_due=TODAY.isoformat(), tasklist_id=str(tasklist)))
+                                       next_due=TODAY.isoformat(), rows="4",
+                                       **{"op-text-0": "Unplug and empty the hopper", "op-minutes-0": "2",
+                                          "op-text-1": "Remove and brush the burrs", "op-minutes-1": "10",
+                                          "op-text-2": "", "op-text-3": "Reassemble"}))
+        t = self.store.task(task, TODAY)
+        self.assertEqual(([o["text"] for o in t["steps"]], t["step_minutes"]),
+                         (["Unplug and empty the hopper", "Remove and brush the burrs", "Reassemble"], 12))
         page = self.c.get(f"/maintenance/tasks/{task}").get_data(as_text=True)
         self.assertIn('name="op-2"', page)
+        self.assertIn("about 12 minutes", page)
         self._post(f"/maintenance/tasks/{task}/complete", status="completed", **{"op-0": "1", "op-2": "1"},
                    parts_cost="12.50", labor_hours="0.25")
         c = self.store.task(task, TODAY)["completions"][0]
         self.assertEqual([s["done"] for s in c["steps"]], [True, False, True])
         self.assertIn("2 of 3 steps", self.c.get(f"/maintenance/tasks/{task}").get_data(as_text=True))
-        self.assertIn("1 task uses Grinder burr clean", self.c.post(f"/maintenance/tasklists/{tasklist}/delete",
-                                                            follow_redirects=True).get_data(as_text=True))
         history = self.store.work_done()
         self.assertEqual((history[0]["cost"], history[0]["labor_hours"]), (12.5, 0.25))
 
-    def test_steps_can_be_added_to_a_task_list_without_saving_first(self):
-        page = self.c.get("/maintenance/tasklists/new").get_data(as_text=True)
+        # Editing shows the steps to change; a new task can start from them.
+        edit = self.c.get(f"/maintenance/tasks/{task}/edit").get_data(as_text=True)
+        self.assertIn('value="Remove and brush the burrs"', edit)
+        self.assertNotIn("Start from another task", edit)  # only itself has steps
+        self._post(f"/maintenance/tasks/{task}/edit", name="Burr clean", frequency_days="7", next_due=TODAY.isoformat(),
+                   rows="1", **{"op-text-0": "Just brush them"})
+        self.assertEqual([o["text"] for o in self.store.task(task, TODAY)["steps"]], ["Just brush them"])
+        new = self.c.get("/maintenance/tasks/new").get_data(as_text=True)
+        self.assertIn("Start from another task", new)
+        self.assertIn("Burr clean (1 step)", new)
+        # No steps is fine.
+        plain = self._new_id(self._post("/maintenance/tasks/new", name="Mop", frequency_days="1", next_due=TODAY.isoformat()))
+        self.assertEqual(self.store.task(plain, TODAY)["steps"], [])
+
+    def test_steps_can_be_added_to_a_task_without_saving_first(self):
+        page = self.c.get("/maintenance/tasks/new").get_data(as_text=True)
         for text in ("+ Add a step", 'id="op-template"', 'name="op-text-__I__"', 'aria-label="Step __N__"',
                      'name="rows" value="3"', 'data-max="100"'):
             self.assertIn(text, page)
+        self.assertNotIn("Task lists", self.c.get("/maintenance/").get_data(as_text=True))
+        self.assertEqual(self.c.get("/maintenance/tasklists").status_code, 301)
         # A fourth step, added on the page; the count sent is capped however large it is.
-        res = self.c.post("/maintenance/tasklists/new", data={
-            "name": "Descale", "rows": "4", "op-text-0": "Drain", "op-text-3": "Refill", "op-minutes-3": "5"})
-        self.assertEqual([o["text"] for o in self.store.tasklist(self._new_id(res))["operations"]], ["Drain", "Refill"])
-        res = self.c.post("/maintenance/tasklists/new", data={"name": "Huge", "rows": "1000000000", "op-text-0": "One"})
-        self.assertEqual(len(self.store.tasklist(self._new_id(res))["operations"]), 1)
+        res = self._post("/maintenance/tasks/new", name="Descale", frequency_days="90", next_due=TODAY.isoformat(),
+                         rows="4", **{"op-text-0": "Drain", "op-text-3": "Refill", "op-minutes-3": "5"})
+        self.assertEqual([o["text"] for o in self.store.task(self._new_id(res), TODAY)["steps"]], ["Drain", "Refill"])
+        res = self._post("/maintenance/tasks/new", name="Huge", frequency_days="1", next_due=TODAY.isoformat(),
+                         rows="1000000000", **{"op-text-0": "One"})
+        self.assertEqual(len(self.store.task(self._new_id(res), TODAY)["steps"]), 1)
+        # A mistake elsewhere on the form keeps the steps typed.
+        bad = self.c.post("/maintenance/tasks/new", data={"name": "", "rows": "1", "op-text-0": "Keep me"})
+        self.assertIn('value="Keep me"', bad.get_data(as_text=True))
+
+    def test_task_lists_from_before_become_each_tasks_own_steps(self):
+        import json as _json
+        from maintenance_store import migrate
+        db = self.store.db
+        listed = db.query("INSERT INTO maint_tasklists (name, operations, updated_by, updated_at) VALUES"
+                          " ('Burr clean', ?, 'x', '2026-01-01') RETURNING id",
+                          (_json.dumps([{"text": "Unplug", "minutes": 2}, {"text": "Brush", "minutes": None}]),))[0]["id"]
+        a = self._new_id(self._post("/maintenance/tasks/new", name="Grinder 1", frequency_days="7", next_due=TODAY.isoformat()))
+        b = self._new_id(self._post("/maintenance/tasks/new", name="Grinder 2", frequency_days="7", next_due=TODAY.isoformat()))
+        db.execute("UPDATE maint_tasks SET tasklist_id = ?", (listed,))
+        migrate(db)
+        migrate(db)  # again, as every start does
+        for task in (a, b):
+            t = self.store.task(task, TODAY)
+            self.assertEqual(([o["text"] for o in t["steps"]], t["step_minutes"], t["tasklist_id"]),
+                             (["Unplug", "Brush"], 2, None))
 
     def test_deleting_a_location_takes_its_branch_and_keeps_history(self):
         gar, kit, esp = self._store_tree()

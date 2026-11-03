@@ -7,7 +7,7 @@ from dashboard import _csv, _csv_url, _wants_csv, is_admin
 from maintenance import (_download, _form_options, _me, _people, _return_to, _store, _today, _upload, bp,
                          can_manage)
 from maintenance_assets import EQUIPMENT_STATUSES
-from maintenance_common import MAX_OPERATIONS, PRIORITIES, MaintenanceError, date, fmt_number, number
+from maintenance_common import PRIORITIES, MaintenanceError, date, fmt_number, number
 from maintenance_work import COST_KINDS, ORDER_STATUSES, REQUEST_STATUSES
 
 
@@ -201,63 +201,11 @@ def file_delete(file_id):
     return redirect(_object_page(*owner) if owner else url_for("maint.overview"))
 
 
-# ---------------------------------------------------------------- task lists
-
+# Task lists were a tab of their own; their steps are on each task now.
 @bp.get("/tasklists")
-def tasklists():
-    return render_template("maint/tasklists.html", rows=_store().tasklists())
-
-
-def _tasklist_form(found=None, form=None, error=None):
-    if form is not None and hasattr(form, "getlist"):  # typed rows, to show again
-        count = form.get("rows", 0, type=int)
-        operations = [{"text": form.get(f"op-text-{i}", ""), "minutes": form.get(f"op-minutes-{i}", "")}
-                      for i in range(min(count, MAX_OPERATIONS))]
-        values = {"name": form.get("name", ""), "description": form.get("description", "")}
-    else:
-        operations = list((found or {}).get("operations", []))
-        values = {"name": (found or {}).get("name", ""), "description": (found or {}).get("description") or ""}
-    operations += [{"text": "", "minutes": ""}] * 3
-    return render_template("maint/tasklist_form.html", found=found, values=values, operations=operations,
-                           max_operations=MAX_OPERATIONS, error=error), 400 if error else 200
-
-
-@bp.route("/tasklists/new", methods=["GET", "POST"])
-def tasklist_new():
-    if request.method == "GET":
-        return _tasklist_form()
-    try:
-        new_id = _store().save_tasklist(None, request.form, dashboard._person())
-    except MaintenanceError as e:
-        return _tasklist_form(form=request.form, error=str(e))
-    flash(f"Added the task list {' '.join(request.form.get('name', '').split())}.", "ok")
-    return redirect(url_for("maint.tasklist", tasklist_id=new_id))
-
-
-@bp.route("/tasklists/<int:tasklist_id>", methods=["GET", "POST"])
-def tasklist(tasklist_id):
-    found = _store().tasklist(tasklist_id)
-    if found is None:
-        abort(404)
-    if request.method == "GET":
-        return _tasklist_form(found)
-    try:
-        _store().save_tasklist(tasklist_id, request.form, dashboard._person())
-    except MaintenanceError as e:
-        return _tasklist_form(found, request.form, str(e))
-    flash("Saved the task list. Tasks using it follow the new steps.", "ok")
-    return redirect(url_for("maint.tasklist", tasklist_id=tasklist_id))
-
-
-@bp.post("/tasklists/<int:tasklist_id>/delete")
-def tasklist_delete(tasklist_id):
-    try:
-        _store().delete_tasklist(tasklist_id)
-        flash("Deleted the task list.", "ok")
-    except MaintenanceError as e:
-        flash(str(e), "warn")
-        return redirect(url_for("maint.tasklist", tasklist_id=tasklist_id))
-    return redirect(url_for("maint.tasklists"))
+@bp.get("/tasklists/<path:rest>")
+def tasklists(rest=None):
+    return redirect(url_for("maint.tasks"), 301)
 
 
 # ---------------------------------------------------------------- requests

@@ -152,7 +152,7 @@ _TABS = [
     # A page can need a narrower area than its tab: requests are open to people who only
     # report problems.
     ("maintenance", [("maint.overview", "Overview"), ("maint.requests", "Requests", "maint_requests"),
-                     ("maint.orders", "Work orders"), ("maint.tasks", "Tasks"), ("maint.tasklists", "Task lists"),
+                     ("maint.orders", "Work orders"), ("maint.tasks", "Tasks"),
                      ("maint.equipment_list", "Equipment"), ("maint.locations", "Locations"),
                      ("maint.calendar", "Calendar"), ("maint.history", "History")]),
 ]
@@ -184,8 +184,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "maint.equipment_edit": "maint.equipment_list", "maint.equipment_move": "maint.equipment_list",
             "maint.equipment_delete": "maint.equipment_list", "maint.counter_add": "maint.equipment_list",
             "maint.reading_add": "maint.equipment_list", "maint.counter_delete": "maint.equipment_list",
-            "maint.tasklist": "maint.tasklists", "maint.tasklist_new": "maint.tasklists",
-            "maint.tasklist_delete": "maint.tasklists",
+            "maint.tasklists": "maint.tasks",
             # Requesters add photos to their requests and see them; the pages check other files.
             "maint.request": "maint.requests", "maint.request_new": "maint.requests",
             "maint.file_add": "maint.requests", "maint.file": "maint.requests", "maint.file_delete": "maint.requests",

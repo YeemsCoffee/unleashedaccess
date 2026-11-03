@@ -25,7 +25,7 @@ import json
 import math
 
 from maintenance_assets import Assets
-from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, MaintenanceError, checked_file, code, date,
+from maintenance_common import (CRITICALITIES, form_steps, DUE_SOON_DAYS, MaintenanceError, checked_file, code, date,
                                 fmt_number, long_text, number, text, whole)
 from maintenance_work import Work
 from unleashed.store import utc_now
@@ -37,7 +37,7 @@ NEW_COLUMNS = {
     "maint_locations": {"code": "TEXT", "site": "TEXT", "cost_center": "TEXT", "work_center": "TEXT",
                         "criticality": "TEXT", "is_template": "INTEGER"},
     "maint_tasks": {"equipment_id": "INTEGER", "tasklist_id": "INTEGER", "counter_id": "INTEGER",
-                    "usage_interval": "REAL", "last_reading": "REAL"},
+                    "usage_interval": "REAL", "last_reading": "REAL", "steps": "TEXT"},
     "maint_completions": {"parts_cost": "REAL", "reading": "REAL", "checklist": "TEXT"},
 }
 
@@ -45,6 +45,11 @@ NEW_COLUMNS = {
 def migrate(db):
     for table, columns in NEW_COLUMNS.items():
         db.ensure_columns(table, columns)
+    # Steps used to live in shared task lists; each task now has its own copy.
+    lists = {r["id"]: r["operations"] for r in db.query("SELECT id, operations FROM maint_tasklists")}
+    for t in db.query("SELECT id, tasklist_id FROM maint_tasks WHERE tasklist_id IS NOT NULL"):
+        db.execute("UPDATE maint_tasks SET steps = COALESCE(steps, ?), tasklist_id = NULL WHERE id = ?",
+                   (lists.get(t["tasklist_id"]), t["id"]))
 
 
 class Maintenance(Assets, Work):
@@ -258,10 +263,10 @@ class Maintenance(Assets, Work):
                         self.db.execute(
                             "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to,"
                             " in_progress, part_name, vendor, vendor_part_number, lead_time_days, instructions,"
-                            " tasklist_id, created_by, created_at) VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            " steps, created_by, created_at) VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (t["name"], new_ids[t["location_id"]], t["frequency_days"] or 1, first_due.isoformat(),
                              t["part_name"], t["vendor"], t["vendor_part_number"], t["lead_time_days"],
-                             t["instructions"], t["tasklist_id"], by, utc_now()))
+                             t["instructions"], t["steps"], by, utc_now()))
                         copied += 1
         except MaintenanceError:
             # Undo the part copied so far, so a clash doesn't leave half a store behind.
@@ -285,7 +290,6 @@ class Maintenance(Assets, Work):
             "equipment": {r["id"]: r for r in self.db.query("SELECT id, name, status FROM maint_equipment")},
             "counters": {r["id"]: dict(r, **states.get(r["id"], {}))
                          for r in self.db.query("SELECT id, name, unit, equipment_id FROM maint_counters")},
-            "tasklists": {r["id"]: r["name"] for r in self.db.query("SELECT id, name FROM maint_tasklists")},
         }
 
     _TASK_SQL = ("SELECT t.*, u.name AS assignee_name,"
@@ -321,7 +325,6 @@ class Maintenance(Assets, Work):
         task["completions"] = self.completions(task_id=task_id)
         for c in task["completions"]:
             c["steps"] = json.loads(c["checklist"]) if c.get("checklist") else []
-        task["tasklist"] = self.tasklist(task["tasklist_id"]) if task["tasklist_id"] else None
         return task
 
     def save_task(self, task_id, form, assignable, by, today=None):
@@ -359,20 +362,18 @@ class Maintenance(Assets, Work):
                 raise MaintenanceError("Choose a counter on the task's equipment.")
             given = number(form.get("last_reading"), "Last done at", maximum=1e12)
             last_reading = given if given is not None else self.counter_states().get(counter_id, {}).get("value", 0)
-        tasklist_id = whole(form.get("tasklist_id"), "Task list")
-        if tasklist_id is not None and self.tasklist(tasklist_id) is None:
-            raise MaintenanceError("That task list doesn't exist any more.")
+        steps = form_steps(form)
         assigned_to = whole(form.get("assigned_to"), "Assigned to")
         if assigned_to is not None and assigned_to not in assignable:
             raise MaintenanceError("Assign it to someone who can open Maintenance.")
         values = (name, location_id, frequency, next_due.isoformat(), assigned_to,
                   1 if form.get("in_progress") else 0, text(form, "part_name", 150), text(form, "vendor", 100),
                   text(form, "vendor_part_number", 100), lead_time, long_text(form, "instructions"),
-                  equipment_id, tasklist_id, counter_id, usage)
+                  equipment_id, json.dumps(steps) if steps else None, counter_id, usage)
         if task_id is None:
             return self.db.query(
                 "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to, in_progress,"
-                " part_name, vendor, vendor_part_number, lead_time_days, instructions, equipment_id, tasklist_id,"
+                " part_name, vendor, vendor_part_number, lead_time_days, instructions, equipment_id, steps,"
                 " counter_id, usage_interval, last_reading, created_by, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 values + (last_reading, by, utc_now()))[0]["id"]
@@ -381,7 +382,7 @@ class Maintenance(Assets, Work):
         self.db.execute(
             "UPDATE maint_tasks SET name = ?, location_id = ?, frequency_days = ?, next_due = ?, assigned_to = ?,"
             " in_progress = ?, part_name = ?, vendor = ?, vendor_part_number = ?, lead_time_days = ?, instructions = ?,"
-            " equipment_id = ?, tasklist_id = ?, counter_id = ?, usage_interval = ?, last_reading = ? WHERE id = ?",
+            " equipment_id = ?, steps = ?, counter_id = ?, usage_interval = ?, last_reading = ? WHERE id = ?",
             values + (last_reading, task_id))
         return task_id
 
@@ -427,7 +428,7 @@ class Maintenance(Assets, Work):
             elif reading is None:
                 reading = task["usage"]["current"]
         steps = [{"text": op["text"], "done": bool(form.get(f"op-{i}"))}
-                 for i, op in enumerate(task["tasklist"]["operations"])] if task["tasklist"] else []
+                 for i, op in enumerate(task["steps"])]
         stored_due = dt.date.fromisoformat(task["stored_due"])
         if task["frequency_days"] and task["counter_id"]:
             following = today + dt.timedelta(days=task["frequency_days"])  # both clocks start again
@@ -626,7 +627,8 @@ def _task(row, ctx):
     item = ctx["equipment"].get(row["equipment_id"])
     task["equipment_name"] = item["name"] if item else None
     task["equipment_status"] = item["status"] if item else None
-    task["tasklist_name"] = ctx["tasklists"].get(row["tasklist_id"])
+    task["steps"] = json.loads(row["steps"]) if row.get("steps") else []
+    task["step_minutes"] = sum(op.get("minutes") or 0 for op in task["steps"])
     task["stored_due"] = row["next_due"]
     task["frequency_days"] = row["frequency_days"] or 0
     time_due = dt.date.fromisoformat(row["next_due"]) if task["frequency_days"] else None

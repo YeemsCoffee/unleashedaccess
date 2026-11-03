@@ -7,9 +7,8 @@ or rejected. Completing the work order closes the request with its findings; can
 it opens the request again. Cost lines can change until the order is completed.
 """
 import datetime as dt
-import json
 
-from maintenance_common import (MAX_OPERATIONS, PRIORITIES, PRIORITY_FOR_CRITICALITY, MaintenanceError, date,
+from maintenance_common import (PRIORITIES, PRIORITY_FOR_CRITICALITY, MaintenanceError, date,
                                 long_text, number, text, whole)
 from unleashed.store import utc_now
 
@@ -19,51 +18,6 @@ COST_KINDS = {"labor": "Labor", "part": "Parts", "service": "Service", "other": 
 
 
 class Work:
-    # ------------------------------------------------------------ task lists
-
-    def tasklists(self):
-        uses = {r["tasklist_id"]: r["n"] for r in self.db.query(
-            "SELECT tasklist_id, COUNT(*) AS n FROM maint_tasks WHERE tasklist_id IS NOT NULL GROUP BY tasklist_id")}
-        rows = [_tasklist(r, uses.get(r["id"], 0)) for r in self.db.query("SELECT * FROM maint_tasklists")]
-        return sorted(rows, key=lambda r: r["name"].lower())
-
-    def tasklist(self, tasklist_id):
-        return next((t for t in self.tasklists() if t["id"] == tasklist_id), None)
-
-    def save_tasklist(self, tasklist_id, form, by):
-        """Create a task list (`tasklist_id` None) or change one: a name, a description and
-        operations from the form's op-text-N / op-minutes-N rows. Returns its id."""
-        name = text(form, "name", 100)
-        if not name:
-            raise MaintenanceError("Give the task list a name, e.g. Grinder burr clean.")
-        same = [t for t in self.tasklists() if t["name"].lower() == name.lower() and t["id"] != tasklist_id]
-        if same:
-            raise MaintenanceError(f"There's already a task list called {same[0]['name']}.")
-        operations = []
-        for i in range(min(whole(form.get("rows"), "Rows") or 0, MAX_OPERATIONS)):
-            step = text(form, f"op-text-{i}", 300)
-            if step:
-                operations.append({"text": step, "minutes": whole(form.get(f"op-minutes-{i}"), f"Minutes for “{step}”",
-                                                                   minimum=0)})
-        if not operations:
-            raise MaintenanceError("Add at least one step.")
-        values = (name, long_text(form, "description", 2000), json.dumps(operations), by, utc_now())
-        if tasklist_id is None:
-            return self.db.query("INSERT INTO maint_tasklists (name, description, operations, updated_by, updated_at)"
-                                 " VALUES (?, ?, ?, ?, ?) RETURNING id", values)[0]["id"]
-        if self.tasklist(tasklist_id) is None:
-            raise MaintenanceError("That task list doesn't exist any more.")
-        self.db.execute("UPDATE maint_tasklists SET name = ?, description = ?, operations = ?, updated_by = ?,"
-                        " updated_at = ? WHERE id = ?", values + (tasklist_id,))
-        return tasklist_id
-
-    def delete_tasklist(self, tasklist_id):
-        found = self.tasklist(tasklist_id)
-        if found and found["uses"]:
-            raise MaintenanceError(f"{found['uses']} task{'s use' if found['uses'] != 1 else ' uses'} {found['name']}. "
-                                   "Change them first.")
-        self.db.execute("DELETE FROM maint_tasklists WHERE id = ?", (tasklist_id,))
-
     # ------------------------------------------------------------ requests
 
     def requests(self, status=None, location_id=None, equipment_id=None, reported_by_id=None):
@@ -348,11 +302,3 @@ class Work:
             raise MaintenanceError(f"{found['number']} is {found['status_label'].lower()}; reopen it to change its costs.")
         self.db.execute("DELETE FROM maint_order_costs WHERE id = ?", (cost_id,))
         return rows[0]["order_id"]
-
-
-def _tasklist(row, uses):
-    t = dict(row)
-    t["operations"] = json.loads(row["operations"])
-    t["minutes"] = sum(op.get("minutes") or 0 for op in t["operations"])
-    t["uses"] = uses
-    return t

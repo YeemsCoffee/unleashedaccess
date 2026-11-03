@@ -106,7 +106,7 @@
 })();
 
 /* Rows added without saving first, from the page's <template>s: steps on a maintenance
-   task list, and steps and their fields on an operating procedure. In a template, __I__
+   task, and steps and their fields on an operating procedure. In a template, __I__
    becomes the new row's number (from 0), __N__ its position (from 1) and __J__ a field's
    number; the hidden count beside them says how many rows the form sends. */
 function fromTemplate(id, values) {
@@ -126,14 +126,38 @@ function fromTemplate(id, values) {
   var max = +count.dataset.max;
   add.hidden = false;
   add.disabled = +count.value >= max;
-  add.addEventListener("click", function () {
+  function addRow() {
     var i = +count.value;
-    if (i >= max) return;
+    if (i >= max) return null;
     var row = fromTemplate("op-template", { __I__: i, __N__: i + 1 });
     list.appendChild(row);
     count.value = i + 1;
     add.disabled = i + 1 >= max;
-    row.querySelector("input").focus();
+    return row;
+  }
+  add.addEventListener("click", function () {
+    var row = addRow();
+    if (row) row.querySelector("input").focus();
+  });
+  // A task's form can start from another task's steps: they replace any typed so far.
+  var copy = document.querySelector("[data-copy-steps]"), data = document.getElementById("step-sources");
+  if (!copy || !data) return;
+  var sources = JSON.parse(data.textContent);
+  copy.addEventListener("change", function () {
+    var steps = sources[+copy.value];
+    if (!steps) return;
+    var typed = Array.prototype.some.call(list.querySelectorAll("input[name^='op-text-']"),
+                                          function (el) { return el.value.trim(); });
+    if (typed && !confirm("Replace the steps typed here with these?")) { copy.value = ""; return; }
+    list.innerHTML = "";
+    count.value = 0;
+    steps.concat([{ text: "", minutes: null }]).forEach(function (op) {
+      var row = addRow();
+      if (!row) return;
+      row.querySelector("input[name^='op-text-']").value = op.text;
+      row.querySelector("input[name^='op-minutes-']").value = op.minutes == null ? "" : op.minutes;
+    });
+    copy.value = "";
   });
 })();
 
