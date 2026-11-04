@@ -8,7 +8,9 @@ import datetime as dt
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from .client import parse_date
+from zoneinfo import ZoneInfo
+
+from .client import business_timezone, has_time, parse_date, parse_moment
 
 RECEIVED_PO_STATUSES = ("Receipted", "Costed", "Complete")
 OPEN_PO_STATUSES = ("Parked", "Placed")
@@ -27,8 +29,32 @@ INACTIVE_ASSEMBLY_STATUSES = ("deleted",)
 ASSEMBLY_LINE_UNIT_COST_FIELDS = ("AverageLandedPriceAtTimeOfAssembly", "AverageLandedPrice",
                                   "UnitCost", "AverageCost", "AvgCost", "Cost")
 ASSEMBLY_LINE_TOTAL_FIELDS = ("TotalCost", "LineTotal", "LineCost", "TotalLineCost")
-# A sales order completed in a month may have been placed a few days before it.
-SALE_LOOKBACK_DAYS = 7
+# Without the stored copy (which finds documents by when they moved stock), a sales order
+# or production order completed in a month is looked for among those dated this long before.
+SALE_LOOKBACK_DAYS = 120
+# What Unleashed's stock "as at" a date can be: the stock at the end of that day, or its
+# start, in the business's time zone, UTC or New Zealand time (Unleashed's home). key ->
+# (label, time zone (None: the business's), "end" or "start").
+STOCK_CUTOFFS = {
+    "end": ("The end of that day", None, "end"),
+    "start": ("The start of that day", None, "start"),
+    "utc_end": ("The end of that day in UTC", "UTC", "end"),
+    "utc_start": ("The start of that day in UTC", "UTC", "start"),
+    "nz_end": ("The end of that day in New Zealand time", "Pacific/Auckland", "end"),
+    "nz_start": ("The start of that day in New Zealand time", "Pacific/Auckland", "start"),
+}
+
+
+def stock_cutoff(key, day):
+    """The moment Unleashed's stock "as at" `day` shows, read as `key` (STOCK_CUTOFFS)."""
+    _, zone, part = STOCK_CUTOFFS.get(key) or STOCK_CUTOFFS["end"]
+    tz = business_timezone() if zone is None else ZoneInfo(zone)
+    return dt.datetime.combine(day + dt.timedelta(days=1 if part == "end" else 0), dt.time(0), tzinfo=tz)
+
+
+def end_of_day(day):
+    """The moment `day` ends in the business's time zone."""
+    return dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0), tzinfo=business_timezone())
 
 
 def month_start(d):
@@ -244,6 +270,8 @@ class Reports:
             "order_date": parse_date(i.get("OrderDate")),
             "required_date": parse_date(i.get("RequiredDate")),
             "received_date": parse_date(i.get("ReceivedDate") or i.get("CompletedDate")),
+            "received_at": parse_moment(i.get("ReceivedDate") or i.get("CompletedDate")),
+            "received_timed": has_time(i.get("ReceivedDate") or i.get("CompletedDate")),
             "completed_date": parse_date(i.get("CompletedDate")),
             "supplier_code": supplier.get("SupplierCode"),
             "supplier_name": supplier.get("SupplierName"),
@@ -320,6 +348,8 @@ class Reports:
             "guid": i.get("Guid"), "number": i["OrderNumber"], "status": i.get("OrderStatus"),
             "order_date": parse_date(i.get("OrderDate")),
             "completed_date": parse_date(i.get("CompletedDate")),
+            "completed_at": parse_moment(i.get("CompletedDate") or i.get("OrderDate")),
+            "completed_timed": has_time(i.get("CompletedDate")),
             "warehouse": _warehouse_code(i.get("Warehouse")),
             "customer_code": customer.get("CustomerCode"),
             "customer_name": customer.get("CustomerName"),
@@ -341,6 +371,8 @@ class Reports:
                 prod = l.get("Product") or {}
                 rows.append({"number": a["AdjustmentNumber"],
                              "date": parse_date(a.get("AdjustmentDate")),
+                             "at": parse_moment(a.get("AdjustmentDate")),
+                             "timed": has_time(a.get("AdjustmentDate")),
                              "warehouse": _warehouse_code(a.get("Warehouse")),
                              "reason": a.get("AdjustmentReason"), "status": a.get("Status"),
                              "product_code": prod.get("ProductCode"),
@@ -417,6 +449,8 @@ class Reports:
             "product_code": prod.get("ProductCode"), "description": prod.get("ProductDescription"),
             "qty": qty, "date": date, "due": parse_date(i.get("AssembleBy")) or date,
             "completed_date": (parse_date(i.get("CompletedDate")) or date) if completed else None,
+            "completed_at": parse_moment(i.get("CompletedDate") or i.get("AssemblyDate")) if completed else None,
+            "completed_timed": has_time(i.get("CompletedDate")),
             "from_warehouse": source.get("WarehouseName") or source.get("WarehouseCode"),
             "to_warehouse": destination.get("WarehouseName") or destination.get("WarehouseCode"),
             "batches": made_batches or pending, "batches_pending": not made_batches and bool(pending),
@@ -465,16 +499,14 @@ class Reports:
                     rows.append(_txn(o["received_date"], "Purchase", o["number"],
                                      o["supplier_name"], l, qty, value))
         if doc_type in (None, "Production"):
-            for a in self.assemblies(start, end):
-                if not a["completed"] or not start <= a["completed_date"] <= end:
-                    continue
+            for a in self._completed_assemblies(start, end):
                 for l in a["lines"]:  # components used, then the product made
                     rows.append(_txn(a["completed_date"], "Production", a["number"],
                                      f"Used for {a['product_code']}", l, -l["consumed"], -l["cost"]))
                 rows.append(_txn(a["completed_date"], "Production", a["number"], "Made", a,
                                  a["qty"], a["cost"]))
         if doc_type in (None, "Sale"):
-            for o in self.sales_orders(start, end, status="Completed"):
+            for o in self._completed_sales(start, end):
                 for l in o["lines"]:
                     rows.append(_txn(o["completed_date"] or o["order_date"], "Sale", o["number"],
                                      o["customer_name"], l, -l["qty"], -l["cost"]))
@@ -517,7 +549,9 @@ class Reports:
 
         Inventory is the stock on hand in `warehouses`, by default the COGS warehouses
         (cogs_settings), or in every warehouse when none are chosen: stock that leaves them
-        counts as used. `through` caps the period (default: today for the current month,
+        counts as used. It's the stock at midnight in the business's time zone: Unleashed's
+        stock as at the nearest date, moved to midnight with the documents in between
+        (_stock_at_end). `through` caps the period (default: today for the current month,
         month end for past months)."""
         today = self.today
         start = month_start(month or today)
@@ -526,13 +560,14 @@ class Reports:
         prior_end = start - dt.timedelta(days=1)
         if warehouses is None:
             warehouses = self.cogs_settings()["warehouses"]
+        is_current = through >= today
+        flows = self._flows(prior_end, through, warehouses)
 
-        opening, opening_by = self._inventory(self._as_at_end(prior_end), warehouses)
+        opening, opening_by = self._stock_at_end(prior_end, warehouses, flows)
         received = self.received_purchases(start, through) if through >= start else []
         goods = sum(o["goods"] for o in received)
         shipping = sum(o["shipping"] for o in received)
-        is_current = through >= today
-        closing, closing_by = self._inventory(None if is_current else self._as_at_end(through), warehouses)
+        closing, closing_by = self._stock_at_end(None if is_current else through, warehouses, flows)
         cogs = opening + goods + shipping - closing
 
         result = {
@@ -544,44 +579,207 @@ class Reports:
             "opening_by": opening_by, "closing_by": closing_by,
         }
         if daily and through >= start:
-            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses)
+            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses, flows)
         return result
 
+    # ------------------------------------------------------------ stock at a moment
+
+    def _snapshot_for(self, day):
+        """(date to ask Unleashed's stock "as at", the moment that stock is at) for the stock
+        at the end of `day`: the date whose stock is nearest that moment (cogs_settings
+        "stock_as_at", STOCK_CUTOFFS). (None, None): the stock now, when the nearest date is
+        today or later (its stock is only had as it is now)."""
+        key = self.cogs_settings().get("stock_as_at") or "end"
+        target = end_of_day(day)
+        best = min((day + dt.timedelta(days=k) for k in (-1, 0, 1, 2)),
+                   key=lambda d: abs((stock_cutoff(key, d) - target).total_seconds()))
+        if best >= self.today:
+            return None, None
+        return best, stock_cutoff(key, best)
+
+    def _flows(self, first_day, last_day, warehouses=None):
+        """Every document's stock movement from the day before `first_day` to now (or two
+        days after `last_day`), in `warehouses`: [{"at", "product_code", "qty", "value",
+        "warehouse", "kind", "number"}]. Enough to move a stock snapshot to any moment
+        between."""
+        start = first_day - dt.timedelta(days=2)
+        end = min(last_day + dt.timedelta(days=3), self.today)
+        if end < start:
+            return []
+        moves = []
+
+        def here(warehouse):
+            return not warehouses or not warehouse or warehouse in warehouses
+
+        for o in self.received_purchases(start, end):
+            if not here(o.get("warehouse")) or not o.get("received_at"):
+                continue
+            goods = o["goods"] or 1
+            for l in o["lines"]:
+                qty = l["received_qty"] if l["received_qty"] is not None else l["qty"]
+                moves.append({"at": o["received_at"], "timed": o.get("received_timed"),
+                              "product_code": l["product_code"], "qty": qty or 0,
+                              "value": l["line_total"] + o["shipping"] * l["line_total"] / goods,
+                              "warehouse": o.get("warehouse"), "kind": "Purchase", "number": o["number"]})
+            if not o["lines"] and o["shipping"]:
+                moves.append({"at": o["received_at"], "timed": o.get("received_timed"), "product_code": None,
+                              "qty": 0, "value": o["shipping"],
+                              "warehouse": o.get("warehouse"), "kind": "Purchase", "number": o["number"]})
+        for o in self._completed_sales(start, end, warehouses):
+            for l in o["lines"]:
+                moves.append({"at": o["completed_at"], "timed": o.get("completed_timed", True),
+                              "product_code": l["product_code"], "qty": -(l["qty"] or 0),
+                              "value": -(l["cost"] or 0), "warehouse": o["warehouse"], "kind": "Sale",
+                              "number": o["number"]})
+        for r in self.stock_adjustments(start, end)["rows"]:
+            if here(r["warehouse"]) and r.get("at"):
+                moves.append({"at": r["at"], "timed": r.get("timed"), "product_code": r["product_code"],
+                              "qty": r["qty_change"] or 0,
+                              "value": r["value_change"] or 0, "warehouse": r["warehouse"], "kind": "Adjustment",
+                              "number": r["number"]})
+        for a in self._completed_assemblies(start, end):
+            if not a.get("completed_at"):
+                continue
+            for l in a["lines"]:
+                moves.append({"at": a["completed_at"], "timed": a.get("completed_timed"),
+                              "product_code": l["product_code"], "qty": -l["consumed"],
+                              "value": -l["cost"], "warehouse": None, "kind": "Production", "number": a["number"]})
+            moves.append({"at": a["completed_at"], "timed": a.get("completed_timed"),
+                          "product_code": a["product_code"], "qty": a["qty"],
+                          "value": a["cost"] + (a["supplier_costs"] or 0), "warehouse": None, "kind": "Production",
+                          "number": a["number"]})
+        return [m for m in moves if m["at"]]
+
+    @staticmethod
+    def _between(flows, after, upto):
+        """The documents' movements from just after `after` up to `upto` (moments; None: no
+        limit)."""
+        return [m for m in flows if (after is None or m["at"] > after) and (upto is None or m["at"] <= upto)]
+
+    def _stock_at_end(self, day, warehouses=None, flows=None, by_product=False):
+        """The stock at the end of `day` (None: now) in `warehouses`: Unleashed's stock as at
+        the nearest date, with the documents between that moment and midnight added or taken
+        away. (value, {warehouse: value} or None); with `by_product`, {product code: {"qty",
+        "value", "description"}} instead."""
+        read_at = getattr(self.client, "current_stock_at", lambda: None)()  # when "now" was read
+        if day is None or day >= self.today:
+            as_at, cut, target = None, None, None
+        else:
+            as_at, cut = self._snapshot_for(day)
+            target = end_of_day(day)
+        moves = []
+        if target is None:
+            if read_at is not None:  # now: what documents moved after the stock was read
+                flows = self._flows(self.today, self.today, warehouses) if flows is None else flows
+                # Only documents with a time: one dated today with none may be before or after.
+                moves = [m for m in self._between(flows, read_at, None) if m.get("timed")]
+        else:
+            flows = self._flows(day, day, warehouses) if flows is None else flows
+            if cut is None:  # the stock as it was read today: take away what moved since midnight
+                moves = [dict(m, qty=-m["qty"], value=-m["value"]) for m in self._between(flows, target, read_at)]
+            elif cut < target:
+                moves = self._between(flows, cut, target)
+            elif cut > target:
+                moves = [dict(m, qty=-m["qty"], value=-m["value"]) for m in self._between(flows, target, cut)]
+        if by_product:
+            products = defaultdict(lambda: {"qty": 0.0, "value": 0.0, "description": None})
+            for w in warehouses or [None]:
+                for r in self.stock_on_hand(as_at=as_at, warehouse=w)["rows"]:
+                    p = products[r["product_code"]]
+                    p["qty"] += r.get("qty") or 0
+                    p["value"] += r.get("value") or 0
+                    p["description"] = p["description"] or r.get("description")
+            for m in moves:
+                p = products[m["product_code"] or "(costs with no product)"]
+                p["qty"] += m["qty"]
+                p["value"] += m["value"]
+            return products
+        value, by = self._inventory(as_at, warehouses)
+        shift = sum(m["value"] for m in moves)
+        if by is not None and moves:
+            by = dict(by)
+            for m in moves:
+                w = m["warehouse"] if m["warehouse"] in by else next(iter(by))
+                by[w] += m["value"]
+        return value + shift, by
+
     def _as_at_end(self, day):
-        """The date to ask Unleashed's stock "as at" for the stock at the end of `day` (None:
-        now). As at a date is the end of that day, or (cogs_settings "stock_as_at": "start")
-        its start, so the end of a day is as at the next one. For yesterday that would be
-        today, whose stock Core has only as it is now."""
-        if day is not None and self.cogs_settings().get("stock_as_at") == "start":
-            day += dt.timedelta(days=1)
-        return None if day is None or day >= self.today else day
+        """The date to ask Unleashed's stock "as at" for the stock nearest the end of `day`
+        (None: now). See _snapshot_for."""
+        return None if day is None or day >= self.today else self._snapshot_for(day)[0]
 
     def stock_timing(self, warehouses=None):
-        """Which part of a day Unleashed's stock "as at" that date shows, judged from the daily
-        stock of last month and this month against each day's documents (purchases received,
-        sales orders completed, write-offs). For each reading, how much of the daily change in
-        stock value the documents don't explain, summed over the days: {"end", "start",
-        "days", "verdict": "end", "start" or None (too close to tell)}."""
+        """When in the day Unleashed's stock "as at" a date is, worked out from the stock on
+        each day of last month and this month against each day's documents, product by
+        product: for each way of reading it (STOCK_CUTOFFS), the stock (at average cost) whose
+        daily change the documents don't explain. The right reading explains the most:
+        {"days", "scores": {key: $}, "verdict": key or None (too close to tell), "label",
+        "residual": $ unexplained read the best way, "residual_days": the days most of it is
+        on, with their products}."""
         today, first = self.today, add_months(month_start(self.today), -1)
         days = [first + dt.timedelta(days=i) for i in range(1, (today - first).days - 1)]
         if len(days) < 5:
-            return {"end": 0.0, "start": 0.0, "days": 0, "verdict": None}
-        stock = dict(zip([days[0] - dt.timedelta(days=1)] + days + [days[-1] + dt.timedelta(days=1)],
-                         self._map(lambda d: self._inventory(d, warehouses)[0],
-                                   [days[0] - dt.timedelta(days=1)] + days + [days[-1] + dt.timedelta(days=1)])))
-        moved = defaultdict(float)  # documents' net change in stock value, by day
-        for o in self.received_purchases(days[0], days[-1]):
-            moved[o["received_date"]] += o["goods"] + o["shipping"]
-        for o in self._completed_sales(days[0], days[-1], warehouses):
-            moved[o["completed_date"] or o["order_date"]] -= o["cost"]
-        for r in self.stock_adjustments(days[0], days[-1])["rows"]:
-            if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
-                moved[r["date"]] += r["value_change"] or 0
-        one = dt.timedelta(days=1)
-        end = sum(abs(stock[d - one] + moved[d] - stock[d]) for d in days)
-        start = sum(abs(stock[d] + moved[d] - stock[d + one]) for d in days)
-        verdict = "start" if start < end * 0.6 else "end" if end < start * 0.6 else None
-        return {"end": end, "start": start, "days": len(days), "verdict": verdict}
+            return {"days": 0, "scores": {}, "verdict": None, "label": None, "residual": 0.0,
+                    "residual_days": [], "end": 0.0, "start": 0.0}
+        dates = [days[0] - dt.timedelta(days=1)] + days
+
+        def stock(d):
+            rows = defaultdict(lambda: [0.0, 0.0, None])  # qty, value, description
+            for w in warehouses or [None]:
+                for r in self.stock_on_hand(as_at=d, warehouse=w)["rows"]:
+                    row = rows[r["product_code"]]
+                    row[0] += r["qty"] or 0
+                    row[1] += r["value"] or 0
+                    row[2] = row[2] or r["description"]
+            return rows
+
+        snaps = dict(zip(dates, self._map(stock, dates)))
+        flows = self._flows(dates[0], days[-1], warehouses)
+        unit = {}
+        for rows in snaps.values():
+            for code, (qty, value, _) in rows.items():
+                if qty and value:
+                    unit[code] = abs(value / qty)
+        names = {code: row[2] for rows in snaps.values() for code, row in rows.items()}
+
+        def gaps(key):
+            """[(day, {product: (unexplained qty, unexplained value)})] read as `key`."""
+            out = []
+            for prev, day in zip(dates, days):
+                moved = defaultdict(lambda: [0.0, 0.0])
+                for m in self._between(flows, stock_cutoff(key, prev), stock_cutoff(key, day)):
+                    moved[m["product_code"]][0] += m["qty"]
+                    moved[m["product_code"]][1] += m["value"]
+                before, after = snaps[prev], snaps[day]
+                found = {}
+                for code in set(before) | set(after) | set(moved):
+                    if code is None:
+                        continue
+                    qty = (after[code][0] if code in after else 0) - (before[code][0] if code in before else 0) \
+                        - moved[code][0]
+                    if abs(qty) > 1e-6:
+                        found[code] = (qty, qty * unit.get(code, 0))
+                out.append((day, found))
+            return out
+
+        scores = {key: sum(abs(v) for _, found in gaps(key) for _, v in found.values()) for key in STOCK_CUTOFFS}
+        ranked = sorted(STOCK_CUTOFFS, key=lambda k: scores[k])  # ties keep STOCK_CUTOFFS' order
+        best = ranked[0]
+        different = [scores[k] for k in ranked[1:] if scores[k] > scores[best] * 1.01 + 0.01]
+        verdict = best if scores[best] < 0.01 or (different and scores[best] <= 0.8 * different[0]) else None
+        residual_days = []
+        for day, found in gaps(verdict or (self.cogs_settings().get("stock_as_at") or "end")):
+            total = sum(v for _, v in found.values())
+            if found:
+                top = sorted(found.items(), key=lambda kv: -abs(kv[1][1]))[:5]
+                residual_days.append({"date": day, "value": total, "abs": sum(abs(v) for _, v in found.values()),
+                                      "products": [{"product_code": c, "description": names.get(c), "qty": q,
+                                                    "value": v} for c, (q, v) in top]})
+        residual_days.sort(key=lambda r: -r["abs"])
+        return {"days": len(days), "scores": scores, "verdict": verdict,
+                "label": STOCK_CUTOFFS[verdict][0] if verdict else None,
+                "residual": sum(r["abs"] for r in residual_days), "residual_days": residual_days[:10],
+                "end": scores["end"], "start": scores["start"]}
 
     def _inventory(self, as_at, warehouses=None):
         """(Inventory value as at a date (None: now), {warehouse: value}) in `warehouses`,
@@ -598,13 +796,12 @@ class Reports:
         named = [names.get(c, c) for c in codes]
         return f"{', '.join(named[:-1])} and {named[-1]}" if len(named) > 1 else "".join(named)
 
-    def _daily_cogs(self, start, through, opening, received, warehouses=None):
+    def _daily_cogs(self, start, through, opening, received, warehouses=None, flows=None):
         by_day = defaultdict(float)
         for o in received:
             by_day[o["received_date"]] += o["goods"] + o["shipping"]
         days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
-        closings = self._map(
-            lambda d: self._inventory(self._as_at_end(d), warehouses)[0], days)
+        closings = self._map(lambda d: self._stock_at_end(d, warehouses, flows)[0], days)
         rows, purchases = [], 0.0
         for day, closing in zip(days, closings):
             purchases += by_day[day]
@@ -615,11 +812,28 @@ class Reports:
         return rows
 
     def _completed_sales(self, start, through, warehouses=None):
-        """Sales orders completed from `start` to `through` (by completed date), shipped from
-        one of `warehouses` when some are given (an order that doesn't say counts)."""
-        orders = self.sales_orders(start - dt.timedelta(days=SALE_LOOKBACK_DAYS), through, status="Completed")
+        """Sales orders completed from `start` to `through` (by completed date, whenever they
+        were placed), shipped from one of `warehouses` when some are given (an order that
+        doesn't say counts)."""
+        if getattr(self.client, "finds_by_completion", False):
+            orders = [self._so(i) for i in self.client.get_all("SalesOrders", {
+                "orderStatus": "Completed", "completedStartDate": start.isoformat(),
+                "completedEndDate": through.isoformat()})]
+        else:
+            orders = self.sales_orders(start - dt.timedelta(days=SALE_LOOKBACK_DAYS), through, status="Completed")
         return [o for o in orders if start <= (o["completed_date"] or o["order_date"]) <= through
                 and (not warehouses or not o["warehouse"] or o["warehouse"] in warehouses)]
+
+    def _completed_assemblies(self, start, through):
+        """Production orders completed from `start` to `through`, whenever they were dated."""
+        if getattr(self.client, "finds_by_completion", False):
+            items = self.client.get_all("Assemblies", {"completedStartDate": start.isoformat(),
+                                                       "completedEndDate": through.isoformat()})
+            costs = self.unit_costs() if items else {}
+            orders = [self._assembly(i, costs) for i in items]
+        else:
+            orders = self.assemblies(start - dt.timedelta(days=SALE_LOOKBACK_DAYS), through)
+        return [a for a in orders if a["completed"] and a["completed_date"] and start <= a["completed_date"] <= through]
 
     def _write_offs(self, start, through, warehouses=None):
         """(Stock value written off by adjustments, lines without a value change), in one of
@@ -684,15 +898,16 @@ class Reports:
         products = defaultdict(lambda: {"opening": 0.0, "received": 0.0, "production": 0.0, "sold": 0.0,
                                         "written_off": 0.0, "closing": 0.0, "description": None})
 
-        def stock(as_at, key):
-            for w in warehouses or [None]:
-                for r in self.stock_on_hand(as_at=as_at, warehouse=w)["rows"]:
-                    p = products[r["product_code"]]
-                    p[key] += r["value"] or 0
-                    p["description"] = p["description"] or r["description"]
+        flows = self._flows(cogs["prior_end"], through, warehouses)
 
-        stock(self._as_at_end(cogs["prior_end"]), "opening")
-        stock(None if cogs["is_current"] else self._as_at_end(through), "closing")
+        def stock(day, key):
+            for code, row in self._stock_at_end(day, warehouses, flows, by_product=True).items():
+                p = products[code]
+                p[key] += row["value"]
+                p["description"] = p["description"] or row["description"]
+
+        stock(cogs["prior_end"], "opening")
+        stock(None if cogs["is_current"] else through, "closing")
         findings = {"partly_received": [], "elsewhere": [], "production_added": 0.0, "production_orders": []}
         if through >= start:
             for o in cogs["received"]:
@@ -714,9 +929,7 @@ class Reports:
             for r in self.stock_adjustments(start, through)["rows"]:
                 if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
                     products[r["product_code"]]["written_off"] -= r["value_change"] or 0
-            for a in self.assemblies(start, through):
-                if not a["completed"] or not start <= a["completed_date"] <= through:
-                    continue
+            for a in self._completed_assemblies(start, through):
                 for l in a["lines"]:
                     products[l["product_code"]]["production"] -= l["cost"]
                 products[a["product_code"]]["production"] += a["cost"]
@@ -755,10 +968,10 @@ class Reports:
 
         def month_row(m):
             c = self.cogs(m, warehouses=warehouses)
-            sales = self.sales_enquiry(m, min(month_end(m), self.today), status="Completed")
-            c["revenue"] = sales["revenue"]
-            c["gross_margin"] = sales["revenue"] - c["cogs"]
-            c["cogs_pct"] = c["cogs"] / sales["revenue"] if sales["revenue"] else None
+            # Revenue from the same orders COGS counts: completed in the month, whenever placed.
+            c["revenue"] = sum(o["subtotal"] for o in self._completed_sales(m, min(month_end(m), self.today)))
+            c["gross_margin"] = c["revenue"] - c["cogs"]
+            c["cogs_pct"] = c["cogs"] / c["revenue"] if c["revenue"] else None
             if by_store:
                 c["by_store"] = self.cogs_by_store(c)
             return c

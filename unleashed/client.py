@@ -66,6 +66,51 @@ def parse_date(value):
     return moment.date()
 
 
+def business_timezone():
+    """The time zone dates are counted in (set_business_timezone); UTC when none is set."""
+    return _business_tz or dt.timezone.utc
+
+
+def parse_moment(value):
+    """'/Date(ms)/' -> the moment (an aware datetime), for lining documents up with stock
+    snapshots. A plain date (midnight UTC: Unleashed gave no time) is put at noon that day in
+    the business's time zone, since when in the day isn't known. None passes through."""
+    if not value:
+        return None
+    m = _DATE_RE.match(value)
+    if m:
+        moment = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc)
+        if moment.time() != dt.time(0):
+            return moment
+        day = moment.date()
+    else:
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is not None:
+            return parsed
+        if parsed.time() != dt.time(0):
+            return parsed.replace(tzinfo=dt.timezone.utc)
+        day = parsed.date()
+    return dt.datetime.combine(day, dt.time(12), tzinfo=business_timezone())
+
+
+def has_time(value):
+    """Whether a date from Unleashed carries a time of day (so parse_moment knows the moment,
+    rather than putting it at noon)."""
+    if not value:
+        return False
+    m = _DATE_RE.match(value)
+    if m:
+        return dt.datetime.fromtimestamp(int(m.group(1)) / 1000, tz=dt.timezone.utc).time() != dt.time(0)
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None or parsed.time() != dt.time(0)
+
+
 def format_date(d):
     return d.isoformat() if d else None
 

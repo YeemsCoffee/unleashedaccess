@@ -144,7 +144,10 @@ class ReportsTests(unittest.TestCase):
             def stock_adjustments(self, start, end):
                 return {"rows": [{"product_code": "MILK", "warehouse": "WH", "value_change": -5.0}]}
 
-            def assemblies(self, start=None, end=None, product=None):
+            def _flows(self, first_day, last_day, warehouses=None):
+                return []
+
+            def _completed_assemblies(self, start, end):
                 return [{"completed": True, "completed_date": dt.date(2026, 10, 9), "number": "ASM-1",
                          "product_code": "LATTE", "cost": 8.0, "supplier_costs": 2.5,
                          "lines": [{"product_code": "MILK", "cost": 8.0}]}]
@@ -165,46 +168,109 @@ class ReportsTests(unittest.TestCase):
         # 100 + 31 received − 8 into production − 50 sold − 5 written off = 68 should be there; 30 is.
         self.assertEqual((milk["expected"], milk["closing"], milk["gap"]), (68.0, 30.0, 38.0))
 
-    def test_which_part_of_the_day_unleashed_stock_shows_is_worked_out(self):
-        today = dt.date(2026, 11, 3)
+    def test_when_unleashed_cuts_the_day_is_found_and_month_ends_are_exact(self):
+        from zoneinfo import ZoneInfo
+        import unleashed.client as client_module
+        from unleashed.client import set_business_timezone
+        from unleashed.reports import stock_cutoff
+        pacific, today = ZoneInfo("America/Los_Angeles"), dt.date(2026, 11, 3)
+        before = client_module._business_tz
+        set_business_timezone(pacific)
+        self.addCleanup(set_business_timezone, before)
+        # Sales through the day, Pacific time: after midnight, morning, afternoon, late evening.
+        sales = []
+        day = dt.date(2026, 9, 1)
+        while day < today:
+            for n, (hour, minute) in enumerate(((1, 30), (9, 0), (15, 0), (21, 30))):
+                qty = 3 + (day.toordinal() * 7 + n * 5) % 11  # varies day to day
+                at = dt.datetime.combine(day, dt.time(hour, minute), tzinfo=pacific)
+                sales.append({"number": f"SO-{len(sales)}", "completed_at": at, "completed_date": day,
+                              "order_date": day - dt.timedelta(days=20), "warehouse": None, "customer_code": "STORE",
+                              "cost": qty * 2.0, "lines": [{"product_code": "BEANS", "qty": qty, "cost": qty * 2.0}]})
+            day += dt.timedelta(days=1)
+        now = dt.datetime.combine(today, dt.time(10), tzinfo=pacific)
+        sales = [o for o in sales if o["completed_at"] <= now]
 
-        def sold(day):  # more at weekends
-            return 10.0 + 15.0 * (day.weekday() >= 5)
-
-        def end_of(day):  # stock at the end of a day
-            return 5000.0 - sum(sold(dt.date(2026, 9, 1) + dt.timedelta(days=i)) for i in range((day - dt.date(2026, 9, 1)).days + 1))
-
-        class StartOfDay(Reports):
-            """An account whose stock as at a date is the stock at its start."""
-            settings = {"warehouses": None, "pending": None, "stores": [], "stock_as_at": "end"}
+        class Account(Reports):
+            """An Unleashed account whose stock "as at" a date is at `truth`'s moment."""
+            truth = "end"
+            settings = {"warehouses": None, "pending": None, "stores": ["STORE"], "stock_as_at": "end"}
 
             def cogs_settings(self):
                 return self.settings
 
-            def _inventory(self, as_at, warehouses=None):
-                return (end_of(today) if as_at is None else end_of(as_at - dt.timedelta(days=1))), None
+            def stock_on_hand(self, as_at=None, warehouse=None, group=None, product=None):
+                cut = (self.client.read_at if self.client else now) if as_at is None else stock_cutoff(self.truth, as_at)
+                qty = 100000 - sum(o["lines"][0]["qty"] for o in sales if o["completed_at"] <= cut)
+                return {"rows": [{"product_code": "BEANS", "description": "Beans", "qty": qty, "value": qty * 2.0}]}
+
+            def inventory_value(self, as_at=None, warehouse=None):
+                return self.stock_on_hand(as_at)["rows"][0]["value"]
 
             def received_purchases(self, start, end):
                 return []
 
             def _completed_sales(self, start, end, warehouses=None):
-                days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
-                return [{"cost": sold(d), "completed_date": d, "order_date": d} for d in days]
+                return [o for o in sales if start <= o["completed_date"] <= end]
 
             def stock_adjustments(self, start, end):
                 return {"rows": []}
 
-        r = StartOfDay(None, today_fn=lambda: today)
-        timing = r.stock_timing()
-        self.assertEqual((timing["verdict"], timing["start"]), ("start", 0))
-        self.assertGreater(timing["end"], 0)
+            def _completed_assemblies(self, start, end):
+                return []
+
+            def customers(self):
+                return [{"CustomerCode": "STORE", "CustomerName": "Store"}]
+
         october = dt.date(2026, 10, 1)
-        october_sales = sum(sold(october + dt.timedelta(days=i)) for i in range(31))
-        wrong = r.cogs(october)["cogs"]  # read as the end of the day: Sep 30's sales in, Oct 31's out
-        self.assertAlmostEqual(wrong, october_sales + sold(dt.date(2026, 9, 30)) - sold(dt.date(2026, 10, 31)))
-        r.settings = dict(r.settings, stock_as_at="start")
-        self.assertAlmostEqual(r.cogs(october)["cogs"], october_sales)  # every October sale, once
-        self.assertAlmostEqual(r.cogs(october)["cogs"], r.cogs_reconciliation(october)["total"])
+        october_sales = sum(o["cost"] for o in sales if o["completed_date"].month == 10)
+        november_sales = sum(o["cost"] for o in sales if o["completed_date"].month == 11)
+        for truth in ("end", "start", "utc_end", "nz_end", "nz_start"):
+            r = Account(None, today_fn=lambda: today)
+            r.truth = truth
+            r.settings = dict(r.settings, stock_as_at="end")
+            timing = r.stock_timing()
+            self.assertEqual(timing["verdict"], truth, timing["scores"])
+            self.assertAlmostEqual(timing["scores"][truth], 0.0)
+            if truth != "end":  # read the wrong way, COGS is off and some of it "not on an order"
+                self.assertNotAlmostEqual(r.cogs(october)["cogs"], october_sales, places=2)
+                self.assertGreater(timing["scores"]["end"], 0)
+            self.assertEqual(timing["residual"], 0)  # read the right way, every day's change is explained
+            r.settings = dict(r.settings, stock_as_at=truth)
+            for month, expected in ((october, october_sales), (today, november_sales)):
+                c = r.cogs(month, daily=True)
+                self.assertAlmostEqual(c["cogs"], expected, places=6, msg=(truth, month))  # every sale, once
+                self.assertAlmostEqual(c["cogs"], r.cogs_reconciliation(month)["total"], places=6)
+                self.assertAlmostEqual(r.cogs_by_store(c)["rest"], 0.0, places=6)  # nothing unexplained
+                self.assertAlmostEqual(r.unexplained(c)["gap"], 0.0, places=6)
+                self.assertAlmostEqual(c["daily"][-1]["cogs_to_date"], expected, places=6)
+
+        class Synced:
+            """The stored copy: its stock now was read at 6:30, before the documents (to 10:00)."""
+            read_at = dt.datetime.combine(today, dt.time(6, 30), tzinfo=pacific)
+
+            def current_stock_at(self):
+                return self.read_at
+
+        r = Account(Synced(), today_fn=lambda: today)
+        r.settings = dict(r.settings, stock_as_at="end")
+        self.assertLess(r.stock_on_hand()["rows"][0]["qty"], 100000)
+        c = r.cogs(today)
+        self.assertAlmostEqual(c["cogs"], november_sales, places=6)  # the 9:00 sales today count once
+        self.assertAlmostEqual(r.cogs_by_store(c)["rest"], 0.0, places=6)
+
+    def test_orders_placed_long_before_they_are_completed_count_in_the_month_completed(self):
+        from unleashed.store import LocalStoreClient
+        store = make_app(self, UNLEASHED_MODE="mock", SYNC_ON_STARTUP="off").extensions["unleashed"]["store"]
+        when = lambda d: f"/Date({int(dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc).timestamp() * 1000)})/"
+        store.upsert_documents("SalesOrders", [
+            {"Guid": "g1", "OrderNumber": "SO-1", "OrderStatus": "Completed", "OrderDate": when(dt.date(2026, 8, 20)),
+             "CompletedDate": when(dt.date(2026, 10, 4)), "Customer": {"CustomerCode": "STORE"},
+             "SalesOrderLines": [{"Product": {"ProductCode": "BEANS"}, "OrderQuantity": 5,
+                                  "AverageLandedPriceAtTimeOfSale": 2.0}], "SubTotal": 20}])
+        r = Reports(LocalStoreClient(store, today_fn=lambda: dt.date(2026, 11, 3)), today_fn=lambda: dt.date(2026, 11, 3))
+        self.assertEqual([o["number"] for o in r._completed_sales(dt.date(2026, 10, 1), dt.date(2026, 10, 31))],
+                         ["SO-1"])  # placed six weeks before October
 
     def test_current_month_runs_through_today(self):
         c = self.reports.cogs(TODAY, daily=True)
@@ -1666,10 +1732,11 @@ class StoreSyncTests(unittest.TestCase):
     def test_the_mock_stock_is_the_end_of_the_day(self):
         app = self._app()
         reports = app.extensions["unleashed"]["reports"]
+        self.assertIsNotNone(app.extensions["unleashed"]["store_client"].current_stock_at())  # COGS lines documents up with it
         self.assertEqual(reports.stock_timing()["verdict"], "end")
         page = app.test_client().get("/settings/cogs").get_data(as_text=True)
         self.assertIn("✓ Checked against the last", page)
-        self.assertIn('name="stock_as_at" value="end" checked', page)
+        self.assertIn('name="stock_as_at" value="end" id="cut-end" checked', page)
         app.test_client().post("/settings/cogs", data={"stock_as_at": "start"})
         self.assertEqual(reports.cogs_settings()["stock_as_at"], "start")
         self.assertIn("Choose it above and save", app.test_client().get("/settings/cogs").get_data(as_text=True))

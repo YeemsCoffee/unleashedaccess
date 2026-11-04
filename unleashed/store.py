@@ -230,9 +230,15 @@ class LocalStore:
         return len(gone)
 
     def query_documents(self, endpoint, start=None, end=None, statuses=None, party=None,
-                        number=None):
+                        number=None, effective_start=None, effective_end=None):
         sql = "SELECT data FROM ul_documents WHERE kind = ?"
         args = [endpoint]
+        if effective_start:
+            sql += " AND effective_date >= ?"
+            args.append(effective_start)
+        if effective_end:
+            sql += " AND effective_date <= ?"
+            args.append(effective_end)
         if start:
             sql += " AND doc_date >= ?"
             args.append(start)
@@ -271,6 +277,14 @@ class LocalStore:
             "INSERT INTO ul_stock_snapshots (as_at, data, fetched_at) VALUES (?, ?, ?)"
             " ON CONFLICT (as_at) DO UPDATE SET data = excluded.data,"
             " fetched_at = excluded.fetched_at", (as_at, json.dumps(items), utc_now()))
+
+    def snapshot_taken_at(self, as_at, warehouse=None):
+        """When a stored snapshot was fetched (an aware UTC datetime), or None."""
+        rows = self.db.query("SELECT fetched_at FROM ul_stock_snapshots WHERE as_at = ?",
+                             (snapshot_key(as_at, warehouse),))
+        if not rows or not rows[0]["fetched_at"]:
+            return None
+        return dt.datetime.fromisoformat(str(rows[0]["fetched_at"])[:19]).replace(tzinfo=dt.timezone.utc)
 
     def snapshots_in_month(self, month, warehouse=None):
         """{as_at: rows} for every stored snapshot dated in `month` ("YYYY-MM"), in one
@@ -354,6 +368,9 @@ class LocalStoreClient:
     """
     mode = "store"
     GENERATION_CHECK_SECONDS = 2
+    # Takes completedStartDate / completedEndDate (not Unleashed's): documents by the day they
+    # moved stock (completed, received), whenever they were dated.
+    finds_by_completion = True
 
     def __init__(self, store, live=None, today_fn=dt.date.today, fetch_snapshot=None):
         self.store = store
@@ -369,6 +386,10 @@ class LocalStoreClient:
         with self._lock:
             self._cache = {}
             self._checked_at = 0.0
+
+    def current_stock_at(self):
+        """When the stored current stock on hand was read from Unleashed (None: not known)."""
+        return self._memo(("current_stock_at",), lambda: self.store.snapshot_taken_at(CURRENT))
 
     def _memo(self, key, fn):
         now = time.monotonic()
@@ -462,7 +483,9 @@ class LocalStoreClient:
         items = self.store.query_documents(
             endpoint, start=start[:10] if start else None,
             end=params["endDate"][:10] if params.get("endDate") else None,
-            statuses=statuses, party=party, number=number)
+            statuses=statuses, party=party, number=number,
+            effective_start=(params.get("completedStartDate") or "")[:10] or None,
+            effective_end=(params.get("completedEndDate") or "")[:10] or None)
         if number and not items and self.live:
             return self.live.get_all(endpoint, params)
         return items

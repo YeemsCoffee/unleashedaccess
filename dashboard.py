@@ -19,7 +19,7 @@ from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_PICTURES, MAX_STEPS, S
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError, set_business_timezone
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
-from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, add_months,
+from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, STOCK_CUTOFFS, add_months,
                                month_end, month_start)
 from unleashed.store import COGS_STOCK_AS_AT, COGS_STORES, COGS_WAREHOUSE
 
@@ -708,7 +708,7 @@ def cogs_page():
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
         settings=settings, names=names, store_options=store_options, store=store, sent=sent, why=r.unexplained(c),
-        timing=r.stock_timing(view),
+        timing=r.stock_timing(view), cutoffs=STOCK_CUTOFFS,
         store_name=dict(store_options).get(store),
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
         pending_name=r.warehouse_names(settings["pending"]) if settings["pending"] else None,
@@ -733,7 +733,7 @@ def cogs_setup():
         stores = [code for code in dict.fromkeys(request.form.getlist("store")) if code in known]
         store.set_state(COGS_WAREHOUSE, json.dumps(locations) if locations else "")
         store.set_state(COGS_STORES, json.dumps(stores))
-        if request.form.get("stock_as_at") in ("end", "start"):
+        if request.form.get("stock_as_at") in STOCK_CUTOFFS:
             store.set_state(COGS_STOCK_AS_AT, request.form["stock_as_at"])
         _ext()["store_client"].clear_cache()
         flash(f"Saved. COGS counts stock in {r.warehouse_names(locations) if locations else 'every warehouse'}, "
@@ -750,7 +750,7 @@ def cogs_setup():
     chosen = settings["pending"] or settings["warehouses"] or []
     return render_template(
         "dash/cogs_setup.html", settings=settings, chosen=chosen, warehouses=warehouses,
-        timing=r.stock_timing(settings["warehouses"]),
+        timing=r.stock_timing(settings["warehouses"]), cutoffs=STOCK_CUTOFFS,
         customers=sorted(customers, key=lambda x: (x.get("CustomerCode") not in settings["stores"],
                                                    (x.get("CustomerName") or "").lower())))
 

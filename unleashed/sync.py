@@ -149,6 +149,14 @@ class Syncer:
                     store.replace_records(endpoint, fetched[0], key)
                     counts[endpoint] = len(fetched[0])
 
+            # The stock now, read before the documents: COGS adds what they moved after it
+            # (Reports._stock_at_end). Read after them, a sale completed while the sync ran
+            # would be out of stock but on no document until the next sync.
+            cogs_warehouses = warehouse_codes(store.get_state(COGS_WAREHOUSE))
+            for warehouse in [None] + cogs_warehouses:
+                self._step(run, f"Current stock on hand{' in ' + warehouse if warehouse else ''}")
+                self.fetch_snapshot(CURRENT, warehouse)
+
             history_start = add_months(month_start(today), -self.history_months)
             changed_dates = []
             for endpoint in DOCUMENT_ENDPOINTS:
@@ -204,7 +212,6 @@ class Syncer:
             if changed_dates:
                 recheck_from = min(recheck_from, min(changed_dates))
             # All stock, and each warehouse COGS counts (if it counts some, not all).
-            cogs_warehouses = warehouse_codes(store.get_state(COGS_WAREHOUSE))
             store.delete_warehouse_snapshots(keep=set(cogs_warehouses))
             fetched = 0
             for warehouse in [None] + cogs_warehouses:
@@ -218,8 +225,6 @@ class Syncer:
                                                  or d < recheck_from.isoformat()}, warehouse=warehouse)
                     todo = [d for d in required if d >= recheck_from or d.isoformat() not in have]
                 self._fetch_snapshots(todo, run, warehouse)
-                self._step(run, f"Current stock on hand{' in ' + warehouse if warehouse else ''}")
-                self.fetch_snapshot(CURRENT, warehouse)
                 fetched += len(todo) + 1
             if cogs_warehouses:  # COGS can count them now
                 store.set_state(COGS_WAREHOUSE_READY, json.dumps(cogs_warehouses))

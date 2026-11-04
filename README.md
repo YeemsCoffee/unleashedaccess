@@ -202,6 +202,21 @@ COGS = sent to each store (cost of completed sales orders to it)
      + not on an order or write-off (usage not recorded, production losses, …)
 ```
 
+**Timing.** Opening and closing inventory are the stock at midnight (in
+`TIMEZONE`). Unleashed gives stock "as at" a date, and when in the day that is
+depends on the account: the end or start of the day here, in UTC or in New
+Zealand time. Settings → COGS checks each reading against every day of last
+month and this month, product by product (each day's change in stock against the
+sales completed, purchases received, write-offs and production orders between,
+using their times of day), and says which matches. COGS then takes the date
+nearest midnight and adds or takes away the documents in between, so every sale
+lands in the month it was completed. The current stock is read at the start of
+each sync, before the documents, and what they moved after it is added. Sales and
+production orders count in the month they're completed, however long before
+they were placed. Day-to-day stock changes no document explains are listed by
+day and product (a transfer to a location COGS doesn't count, a credit note, a
+stock count): they're what remains in "not on an order or write-off".
+
 **Store** at the top of the COGS page picks one store (any customer until stores
 are chosen in Settings) and shows what was sent to it that month: the total at
 cost, its share of COGS, each product's quantity and cost (with CSV), and the
