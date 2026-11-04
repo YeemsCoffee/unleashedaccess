@@ -39,14 +39,29 @@
 {% macro crit(c) -%}{% if c %}<span class="crit crit-{{ c }}" title="Criticality {{ criticalities[c] }}">{{ c }}</span>{% endif %}{%- endmacro %}
 
 {% macro location_options(locations, selected, blocked=(), real_only=false) -%}
-{% for l in locations if l.id not in blocked and not (real_only and l.in_template) %}<option value="{{ l.id }}" {{ 'selected' if selected|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.label }}</option>{% endfor %}
+{% for l in locations if l.id not in blocked and not (real_only and l.in_template) %}<option value="{{ l.id }}" data-parent="{{ l.parent_id or '' }}" data-name="{{ l.label }}" {{ 'selected' if selected|string == l.id|string }}>{{ '  ' * l.depth }}{{ l.label }}</option>{% endfor %}
+{%- endmacro %}
+
+{# Where a request or work order is: the location, picked a level at a time (as far down as
+   wanted), then the equipment there or under it. Without scripts, one list of everything. #}
+{% macro where_fields(locations, equipment, form, no_equipment) -%}
+  <div class="where-fields">
+    <div class="where-location"><span class="where-label" id="where-label">Location</span>
+      <select name="location_id" aria-labelledby="where-label" data-cascade data-narrows="equipment_id"><option value="">Choose…</option>{{ location_options(locations, form.location_id or '') }}</select>
+      <div class="loc-cascade" data-cascade-levels hidden></div></div>
+    <label class="where-equipment">Equipment <select name="equipment_id"><option value="">{{ no_equipment }}</option>{{ equipment_options(equipment, form.equipment_id or '') }}</select></label>
+  </div>
+  <p class="muted small" data-narrow-note>Pick the location as far down as you know it, then the equipment there, if it's about a machine.</p>
 {%- endmacro %}
 
 {% macro equipment_options(equipment, selected) -%}
-{% for e in equipment %}<option value="{{ e.id }}" {{ 'selected' if selected|string == e.id|string }}>{{ e.name }}{{ ' · ' ~ e.location if e.location else ' (' ~ e.status_label|lower ~ ')' }}</option>{% endfor %}
+{% for e in equipment %}<option value="{{ e.id }}" {{ 'selected' if selected|string == e.id|string }}{% if e.under is defined %} data-under="{{ e.under }}"{% endif %}>{{ e.name }}{{ ' · ' ~ e.location if e.location else ' (' ~ e.status_label|lower ~ ')' }}</option>{% endfor %}
 {%- endmacro %}
 
 {% macro files(list, add_url, can_add=true, can_remove=true, hint='Manuals, photos, invoices: PDF, Word, Excel, pictures or text, up to 16 MB.') %}
+{% set pictures = list|selectattr('content_type', 'in', ('image/png', 'image/jpeg', 'image/gif', 'image/webp'))|list %}
+{% if pictures %}<div class="file-pictures">{% for f in pictures %}
+  <a href="{{ url_for('maint.file', file_id=f.id, view=1) }}" target="_blank" rel="noopener"><img src="{{ url_for('maint.file', file_id=f.id, view=1) }}" alt="{{ f.filename }}" loading="lazy"></a>{% endfor %}</div>{% endif %}
 {% if list %}
 <div class="table-wrap"><table>
   <thead><tr><th>File</th><th class="num">Size</th><th class="wide-only">Added</th><th></th></tr></thead>

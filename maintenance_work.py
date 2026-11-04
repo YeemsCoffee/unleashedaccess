@@ -203,9 +203,13 @@ class Work:
         priority = whole(form.get("priority"), "Priority") or PRIORITY_FOR_CRITICALITY.get(criticality, 3)
         if priority not in PRIORITIES:
             raise MaintenanceError("Choose a priority.")
-        assigned_to = whole(form.get("assigned_to"), "Assigned to")
-        if assigned_to is not None and assigned_to not in assignable:
-            raise MaintenanceError("Assign it to someone who can open Maintenance.")
+        if "assigned_to" in form:
+            assigned_to = whole(form.get("assigned_to"), "Assigned to")
+            if assigned_to is not None and assigned_to not in assignable:
+                raise MaintenanceError("Assign it to someone who can open Maintenance.")
+        else:  # the form doesn't ask: whoever it's assigned to stays
+            kept = self.db.query("SELECT assigned_to FROM maint_orders WHERE id = ?", (order_id,)) if order_id else []
+            assigned_to = kept[0]["assigned_to"] if kept else None
         due = date(form.get("due_date"), "the date it's needed by")
         values = (title, long_text(form, "description"), location_id, equipment_id, assigned_to, priority,
                   due.isoformat() if due else None)

@@ -7,7 +7,7 @@ from dashboard import _csv, _csv_url, _wants_csv, is_admin
 from maintenance import (_download, _form_options, _me, _people, _return_to, _store, _today, _upload, bp,
                          can_manage)
 from maintenance_assets import EQUIPMENT_STATUSES
-from maintenance_common import PRIORITIES, MaintenanceError, date, fmt_number, number
+from maintenance_common import FILE_TYPES, PRIORITIES, MaintenanceError, date, fmt_number, number
 from maintenance_work import COST_KINDS, ORDER_STATUSES, REQUEST_STATUSES
 
 
@@ -231,8 +231,8 @@ def _request_form(form=None, error=None):
     options = _form_options()
     return render_template("maint/request_form.html", form=form or {}, error=error, priorities=PRIORITIES,
                            locations=[l for l in options["locations"] if not l["in_template"]],
-                           equipment=[e for e in options["equipment"] if e["status"] == "installed"]), \
-        400 if error else 200
+                           equipment=_placed([e for e in options["equipment"] if e["status"] == "installed"],
+                                             options["locations"])), 400 if error else 200
 
 
 @bp.route("/requests/new", methods=["GET", "POST"])
@@ -245,12 +245,7 @@ def request_new():
         new_id = store.create_request(request.form, dashboard._person(), _me())
     except MaintenanceError as e:
         return _request_form(request.form, str(e))
-    upload = request.files.get("file")
-    if upload and upload.filename:
-        try:
-            store.add_file("request", new_id, upload.filename, upload.read(), dashboard._person())
-        except MaintenanceError as e:
-            flash(f"The request is in, but its file wasn't: {e}", "warn")
+    _add_pictures(store, "request", new_id)
     flash(f"Reported. It's R-{new_id:05d}; you can follow it here.", "ok")
     return redirect(url_for("maint.request", request_id=new_id))
 
@@ -296,13 +291,41 @@ def orders():
                            people=_people(), csv_url=_csv_url())
 
 
+def _placed(equipment, locations):
+    """`equipment` with "under": the locations it counts as being at (where it's installed,
+    and every one above), for a location dropdown to narrow the equipment one."""
+    parents = {l["id"]: l["parent_id"] for l in locations}
+    placed = []
+    for e in equipment:
+        above, at = [], e["location_id"]
+        while at is not None and at not in above:
+            above.append(at)
+            at = parents.get(at)
+        placed.append(dict(e, under=" ".join(str(i) for i in above)))
+    return placed
+
+
 def _order_form(found=None, form=None, error=None, from_request=None):
     options = _form_options()
     return render_template("maint/order_form.html", found=found, form=form or {}, error=error, priorities=PRIORITIES,
-                           from_request=from_request, people=options["people"],
+                           from_request=from_request, file_types=_picture_types(),
                            locations=[l for l in options["locations"] if not l["in_template"]],
-                           equipment=[e for e in options["equipment"] if e["status"] != "retired"]), \
-        400 if error else 200
+                           equipment=_placed([e for e in options["equipment"] if e["status"] != "retired"],
+                                             options["locations"])), 400 if error else 200
+
+
+def _picture_types():
+    return ",".join(f".{t}" for t in sorted(FILE_TYPES) if FILE_TYPES[t].startswith("image/"))
+
+
+def _add_pictures(store, object_type, object_id):
+    """Keep the pictures sent with a new request or work order; say which weren't kept."""
+    for upload in request.files.getlist("pictures") + request.files.getlist("file"):
+        if upload and upload.filename:
+            try:
+                store.add_file(object_type, object_id, upload.filename, upload.read(), dashboard._person())
+            except MaintenanceError as e:
+                flash(f"{upload.filename} wasn't attached: {e}", "warn")
 
 
 @bp.route("/orders/new", methods=["GET", "POST"])
@@ -322,6 +345,7 @@ def order_new():
                                   request_id=request_id)
     except MaintenanceError as e:
         return _order_form(form=request.form, error=str(e), from_request=from_request)
+    _add_pictures(store, "order", new_id)
     flash(f"Made WO-{new_id:05d}.", "ok")
     return redirect(url_for("maint.order", order_id=new_id))
 

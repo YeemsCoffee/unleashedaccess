@@ -43,11 +43,14 @@
 </section>
 
 <section class="card">
-  <h2>{{ 'Found' if q else 'All locations' }}</h2>
-  <div class="table-wrap"><table class="maint-wrap">
+  <div class="card-head"><h2>{{ 'Found' if q else 'All locations' }}</h2>
+    {% if not q and shown|selectattr('children')|list %}<div class="loc-fold-all" data-fold-all hidden>
+      <button type="button" class="btn btn-quiet" data-fold="collapse">Collapse all</button>
+      <button type="button" class="btn btn-quiet" data-fold="expand">Expand all</button></div>{% endif %}</div>
+  <div class="table-wrap"><table class="maint-wrap"{% if not q %} data-loc-table{% endif %}>
     <thead><tr><th>Location</th><th class="wide-only">Cost center</th><th class="center">Crit.</th><th class="num">Equipment</th><th class="num">Tasks</th><th></th></tr></thead>
     <tbody>{% for l in shown %}
-    <tr class="{{ 'row-sub' if l.in_template }}"><td><span class="loc-indent" style="--depth: {{ 0 if q else l.depth }}"></span>{% if l.code %}<span class="loc-code">{{ l.code }}</span> {% endif %}<a href="{{ url_for('maint.location', location_id=l.id) }}">{{ l.name }}</a>
+    <tr class="{{ 'row-sub' if l.in_template }}" data-loc="{{ l.id }}" data-parent="{{ l.parent_id or '' }}"><td><span class="loc-indent" style="--depth: {{ 0 if q else l.depth }}"></span>{% if not q %}{% if l.children %}<button type="button" class="loc-toggle" data-toggle-loc aria-expanded="true" aria-label="Collapse {{ l.name }}" title="{{ l.children }} location{{ 's' if l.children != 1 }} directly under it" hidden></button>{% else %}<span class="loc-toggle-space"></span>{% endif %}{% endif %}{% if l.code %}<span class="loc-code">{{ l.code }}</span> {% endif %}<a href="{{ url_for('maint.location', location_id=l.id) }}">{{ l.name }}</a>
         {% if l.is_template %}<span class="pill">Template</span>{% endif %}
         {% if q %}<div class="muted small">{{ l.path }}</div>{% elif l.description %}<div class="muted small loc-indent-text" style="--depth: {{ l.depth }}">{{ l.description }}</div>{% endif %}</td>
       <td class="wide-only">{{ l.eff_cost_center or '' }}</td>

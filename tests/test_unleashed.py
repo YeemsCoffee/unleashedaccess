@@ -1402,6 +1402,47 @@ class MaintenancePlantTests(unittest.TestCase):
             self.assertEqual(([o["text"] for o in t["steps"]], t["step_minutes"], t["tasklist_id"]),
                              (["Unplug", "Brush"], 2, None))
 
+    def test_work_order_form_picks_location_then_equipment_and_takes_pictures(self):
+        import io
+        gar, kit, esp = self._store_tree()
+        tor = self._location("Torrance", code="TOR")
+        grinder = self._new_id(self._post("/maintenance/equipment/new", name="Grinder 2", location_id=str(esp)))
+        form = self.c.get("/maintenance/orders/new").get_data(as_text=True)
+        self.assertNotIn('name="assigned_to"', form)
+        self.assertIn("data-cascade", form)
+        self.assertIn(f'data-parent="{kit}"', form)  # the espresso station's option knows what it's under
+        self.assertIn(f'data-under="{esp} {kit} {gar}"', form)  # the grinder counts as at all three
+        self.assertIn('name="pictures" multiple', form)
+
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 40
+        res = self.c.post("/maintenance/orders/new", content_type="multipart/form-data", data={
+            "title": "Fix the drain", "location_id": str(kit), "equipment_id": "",
+            "pictures": [(io.BytesIO(png), "drain.png"), (io.BytesIO(png), "under-sink.png"),
+                         (io.BytesIO(b"nope"), "notes.exe")]}, follow_redirects=True)
+        page = res.get_data(as_text=True)
+        self.assertIn("notes.exe wasn&#39;t attached", page)
+        order = self.store.orders()[0]
+        self.assertEqual((order["location_id"], order["equipment_id"]), (kit, None))
+        files = self.store.files("order", order["id"])
+        self.assertEqual(sorted(f["filename"] for f in files), ["drain.png", "under-sink.png"])
+        self.assertIn(f'src="/maintenance/files/{files[0]["id"]}?view=1"', page)
+        shown = self.c.get(f"/maintenance/files/{files[0]['id']}?view=1")
+        self.assertEqual((shown.mimetype, shown.headers["Content-Disposition"].split(";")[0]), ("image/png", "inline"))
+        self.assertEqual(self.c.get(f"/maintenance/files/{files[0]['id']}").headers["Content-Disposition"].split(";")[0],
+                         "attachment")
+        # A "picture" that isn't one is only ever downloaded.
+        self.store.add_file("order", order["id"], "fake.png", b"<script>alert(1)</script>", "x")
+        fake = next(f for f in self.store.files("order", order["id"]) if f["filename"] == "fake.png")
+        self.assertEqual(self.c.get(f"/maintenance/files/{fake['id']}?view=1").headers["Content-Disposition"]
+                         .split(";")[0], "attachment")
+
+        # Picking equipment puts the order where it's installed; whoever it's assigned to stays on edit.
+        self.store.db.execute("UPDATE maint_orders SET assigned_to = 7 WHERE id = ?", (order["id"],))
+        self._post(f"/maintenance/orders/{order['id']}/edit", title="Fix grinder", location_id=str(tor),
+                   equipment_id=str(grinder))
+        o = self.store.order(order["id"])
+        self.assertEqual((o["location_id"], o["equipment_id"], o["assigned_to"]), (esp, grinder, 7))
+
     def test_deleting_a_location_takes_its_branch_and_keeps_history(self):
         gar, kit, esp = self._store_tree()
         bar = self._location("Bar", gar, code="GAR-BAR")

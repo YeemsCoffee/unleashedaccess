@@ -7,7 +7,7 @@ MAX_OPERATIONS = 100  # steps on a task
 # What can be attached, and the type each is served as.
 FILE_TYPES = {
     "pdf": "application/pdf", "txt": "text/plain", "png": "image/png", "jpg": "image/jpeg",
-    "jpeg": "image/jpeg", "gif": "image/gif", "heic": "image/heic", "doc": "application/msword",
+    "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "heic": "image/heic", "doc": "application/msword",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xls": "application/vnd.ms-excel",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -83,7 +83,7 @@ def checked_file(filename, data):
     if not filename:
         raise MaintenanceError("Choose a file to attach.")
     if extension not in FILE_TYPES:
-        raise MaintenanceError("Attach a PDF, Word or Excel file, a picture (PNG, JPG, GIF, HEIC) or a text file.")
+        raise MaintenanceError("Attach a PDF, Word or Excel file, a picture (PNG, JPG, GIF, WebP, HEIC) or a text file.")
     if not data:
         raise MaintenanceError(f"{filename} is empty.")
     if len(data) > MAX_FILE_BYTES:

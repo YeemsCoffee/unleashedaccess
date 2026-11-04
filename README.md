@@ -68,7 +68,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Maintenance → Work orders | Work to do, by priority: assigned, started, completed with findings or cancelled; labor, parts and service costs; files |
 | Maintenance → Tasks | Tasks by functional location (a location includes the ones under it) or equipment, filtered by status or person, or found by name; each task's details, checklist, recording work, files and history |
 | Maintenance → Equipment | Machines with make, model, serial number and warranty, where each is installed, its moves, counters and readings, tasks, files and maintenance cost |
-| Maintenance → Locations | The functional location tree with codes: find, add, change, copy (templates), delete; each location's master data, what's under it, equipment, open work, tasks and work done |
+| Maintenance → Locations | The functional location tree with codes: find, add, change, copy (templates), delete (with everything under it), collapse and expand; each location's master data, what's under it, equipment, open work, tasks and work done |
 | Maintenance → Calendar | A month of due dates, the dates each task's schedule brings, open work orders, and work done. Click a day to add a task due then; drag a task's due date to another day to move it (with a mouse or a finger) |
 | Maintenance → History | Tasks and work orders done over any dates, at a location or on equipment, by person; labor hours and cost by cost center and by equipment |
 | Settings → Connection | Data source, credential status, sync history, "Test live connection" and "Check live data" |
@@ -144,11 +144,16 @@ The maintenance scheduler, brought into Core and kept in its database (the
   it was due to the first one after today, so it keeps its schedule however late
   it was done; a usage-based one counts its next interval from the reading.
 - **Requests** (SAP's notifications) are problems reported: what's wrong, which
-  equipment or where, whether the machine is down, details and a photo. Priority is
+  equipment or where, whether the machine is down, details and photos. Priority is
   very high for a machine down, otherwise from the criticality of the equipment or
   place. A request becomes a **work order**, or is closed or rejected with a
   reason.
-- **Work orders** (`WO-00001`) are assigned, needed by a date, started and
+- **Where** a request or work order is, is picked a level at a time: the store,
+  then what's under it, and so on, stopping at any level. The equipment list then
+  shows only what's installed there or under it; picking equipment first fills in
+  where it's installed.
+- **Work orders** (`WO-00001`) have pictures added when they're made (more files
+  later on the work order, where pictures show as thumbnails), are needed by a date, started and
   completed with findings (which closes their request) or cancelled (which opens
   it again). Labor (hours × rate), parts, services and other costs are added as
   lines while the work order is open.

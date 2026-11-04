@@ -13,7 +13,7 @@
     {% if o.equipment_id %}<div><dt>Equipment</dt><dd><a href="{{ url_for('maint.equipment', equipment_id=o.equipment_id) }}">{{ o.equipment_name }}</a></dd></div>{% endif %}
     <div><dt>Where</dt><dd>{% if o.location_id %}<a href="{{ url_for('maint.location', location_id=o.location_id) }}">{{ o.location_path }}</a>{% else %}—{% endif %}</dd></div>
     {% if o.cost_center %}<div><dt>Cost center</dt><dd>{{ o.cost_center }}</dd></div>{% endif %}
-    <div><dt>Assigned to</dt><dd>{{ o.assignee_name or 'No one yet' }}</dd></div>
+    {% if o.assignee_name %}<div><dt>Assigned to</dt><dd>{{ o.assignee_name }}</dd></div>{% endif %}
     <div><dt>Needed by</dt><dd class="{{ 'due-late' if o.late }}">{{ o.due|d if o.due else '—' }}</dd></div>
     {% if o.request %}<div><dt>Request</dt><dd><a href="{{ url_for('maint.request', request_id=o.request.id) }}">{{ o.request.number }}</a> · {{ o.request.reported_by or '' }}</dd></div>{% endif %}
     <div><dt>Made</dt><dd>{{ o.created_at|local }} · {{ o.created_by or '' }}</dd></div>

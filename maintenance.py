@@ -18,6 +18,7 @@ from dashboard import _csv, _csv_url, _wants_csv, current_user, is_admin
 from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_OPERATIONS, MaintenanceError,
                                 fmt_number)
 from maintenance_store import COMPLETION_STATUSES, Maintenance
+from production_runs import picture_type
 
 bp = Blueprint("maint", __name__, url_prefix="/maintenance")
 # The same sign-in and access checks as every other tab (no waiting for the Unleashed sync).
@@ -96,9 +97,15 @@ def _upload(save):
 
 
 def _download(found):
+    """The file, to save; with ?view=1, a picture (checked from its bytes) shown in the page."""
     if found is None:
         abort(404)
     name = found["filename"].replace('"', "")
+    shown = picture_type(found["data"]) if request.args.get("view") else None
+    if shown:
+        return Response(found["data"], mimetype=shown, headers={
+            "Content-Disposition": f'inline; filename="{name}"', "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=86400", "Content-Security-Policy": "default-src 'none'"})
     return Response(found["data"], mimetype=found["content_type"], headers={
         "Content-Disposition": f'attachment; filename="{name}"', "X-Content-Type-Options": "nosniff"})
 

@@ -363,3 +363,178 @@ function fromTemplate(id, values) {
     }
   });
 })();
+
+/* Locations list: collapse a location to hide everything under it. Remembered in this
+   browser only; the list shows in full without it. */
+(function () {
+  "use strict";
+  var table = document.querySelector("[data-loc-table]");
+  if (!table) return;
+  var KEY = "yeems.locations.collapsed", rows = {}, parent = {}, collapsed;
+  table.querySelectorAll("tr[data-loc]").forEach(function (tr) {
+    rows[tr.dataset.loc] = tr;
+    parent[tr.dataset.loc] = tr.dataset.parent;
+  });
+  try { collapsed = new Set(JSON.parse(localStorage.getItem(KEY) || "[]")); } catch (e) { collapsed = new Set(); }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(Array.from(collapsed))); } catch (e) { /* not kept */ }
+  }
+  function folded(id) {  // is one of the locations above it collapsed?
+    for (var p = parent[id], seen = 0; p && seen < 100; p = parent[p], seen++) {
+      if (collapsed.has(p)) return true;
+    }
+    return false;
+  }
+  function below(id) {  // how many locations are under it, at any depth
+    return Object.keys(parent).filter(function (other) {
+      for (var p = parent[other], seen = 0; p && seen < 100; p = parent[p], seen++) { if (p === id) return true; }
+      return false;
+    }).length;
+  }
+  function apply() {
+    Object.keys(rows).forEach(function (id) {
+      var tr = rows[id], button = tr.querySelector("[data-toggle-loc]");
+      tr.hidden = folded(id);
+      if (!button) return;
+      var open = !collapsed.has(id), name = tr.querySelector("a").textContent;
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+      button.setAttribute("aria-label", (open ? "Collapse " : "Expand ") + name);
+      var count = tr.querySelector(".loc-hidden-count");
+      if (!open && !count) {
+        count = document.createElement("span");
+        count.className = "loc-hidden-count muted small";
+        var n = below(id);
+        count.textContent = "+" + n + " under it";
+        tr.querySelector("a").after(count);
+      } else if (open && count) {
+        count.remove();
+      }
+    });
+  }
+  table.addEventListener("click", function (e) {
+    var button = e.target.closest("[data-toggle-loc]");
+    if (!button) return;
+    var id = button.closest("tr").dataset.loc;
+    if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+    save();
+    apply();
+  });
+  table.querySelectorAll("[data-toggle-loc]").forEach(function (b) { b.hidden = false; });
+  var all = document.querySelector("[data-fold-all]");
+  if (all) {
+    all.hidden = false;
+    all.addEventListener("click", function (e) {
+      var which = e.target.closest("[data-fold]");
+      if (!which) return;
+      collapsed = new Set();
+      if (which.dataset.fold === "collapse") {
+        table.querySelectorAll("[data-toggle-loc]").forEach(function (b) { collapsed.add(b.closest("tr").dataset.loc); });
+      }
+      save();
+      apply();
+    });
+  }
+  // Ids no longer in the list (deleted locations) are forgotten.
+  collapsed.forEach(function (id) { if (!rows[id]) collapsed.delete(id); });
+  apply();
+})();
+
+/* A location dropdown that narrows an equipment dropdown (data-narrows="<its name>") to the
+   equipment installed there or under it. With no location chosen, all equipment shows. */
+(function () {
+  "use strict";
+  document.querySelectorAll("select[data-narrows]").forEach(function (where) {
+    var form = where.form, what = form.querySelector("select[name='" + where.dataset.narrows + "']");
+    var note = form.querySelector("[data-narrow-note]");
+    if (!what) return;
+    function narrow() {
+      var at = where.value, shown = 0;
+      Array.prototype.forEach.call(what.options, function (opt) {
+        if (!opt.value) return;
+        var here = !at || (opt.dataset.under || "").split(" ").indexOf(at) !== -1;
+        opt.hidden = !here;
+        opt.disabled = !here;
+        if (here) shown++;
+      });
+      if (what.selectedOptions[0] && what.selectedOptions[0].disabled) what.value = "";
+      if (note && at) {
+        note.textContent = shown ? shown + " piece" + (shown === 1 ? "" : "s") + " of equipment at " +
+          where.selectedOptions[0].textContent.trim() + " or under it."
+          : "No equipment installed at " + where.selectedOptions[0].textContent.trim() + ": the work order is for the location itself.";
+      }
+      what.disabled = !!at && !shown;
+    }
+    where.addEventListener("change", narrow);
+    // Picking equipment with no location chosen fills in where it's installed.
+    what.addEventListener("change", function () {
+      var opt = what.selectedOptions[0];
+      var installed = opt && opt.dataset.under ? opt.dataset.under.split(" ")[0] : "";
+      if (!where.value && installed) { where.value = installed; where.dispatchEvent(new Event("change")); }
+    });
+    narrow();
+  });
+})();
+
+/* A location dropdown (data-cascade) picked a level at a time: the top-level locations, then
+   the ones under the chosen one, and so on, stopping wherever wanted. The original dropdown,
+   hidden, keeps the deepest one chosen and is what the form sends. */
+(function () {
+  "use strict";
+  document.querySelectorAll("select[data-cascade]").forEach(function (original) {
+    var levels = original.parentNode.querySelector("[data-cascade-levels]");
+    if (!levels) return;
+    var parent = {}, name = {}, kids = {}, ours = false;
+    Array.prototype.forEach.call(original.options, function (opt) {
+      if (!opt.value) return;
+      parent[opt.value] = opt.dataset.parent || "";
+      name[opt.value] = opt.dataset.name || opt.textContent.trim();
+      (kids[parent[opt.value]] = kids[parent[opt.value]] || []).push(opt.value);
+    });
+    // A location whose parent isn't in the list is picked from the top.
+    Object.keys(parent).forEach(function (id) {
+      var p = parent[id];
+      if (p && !(p in parent)) {
+        kids[p].splice(kids[p].indexOf(id), 1);
+        (kids[""] = kids[""] || []).push(id);
+        parent[id] = "";
+      }
+    });
+    function chain(id) {  // from the top down to `id`
+      var path = [];
+      for (var at = id, n = 0; at && n < 100; at = parent[at], n++) path.unshift(at);
+      return path;
+    }
+    function build(value) {
+      var path = chain(value), above = "";
+      levels.innerHTML = "";
+      for (var depth = 0; depth < 100; depth++) {
+        var choices = kids[above] || [];
+        if (!choices.length) break;
+        var select = document.createElement("select");
+        select.dataset.depth = depth;
+        select.setAttribute("aria-label", depth ? "Under " + name[above] : "Location");
+        select.add(new Option(depth ? "Anywhere in " + name[above] : "Choose…", ""));
+        choices.forEach(function (id) { select.add(new Option(name[id], id)); });
+        select.value = path[depth] || "";
+        levels.appendChild(select);
+        if (!path[depth]) break;
+        above = path[depth];
+      }
+    }
+    levels.addEventListener("change", function (e) {
+      var depth = +e.target.dataset.depth;
+      var value = e.target.value || (depth ? levels.children[depth - 1].value : "");
+      original.value = value;
+      build(value);
+      ours = true;
+      original.dispatchEvent(new Event("change"));
+      ours = false;
+      var next = levels.children[depth + 1] || levels.children[depth];
+      if (next) next.focus();
+    });
+    original.addEventListener("change", function () { if (!ours) build(original.value); });
+    original.hidden = true;
+    levels.hidden = false;
+    build(original.value);
+  });
+})();
