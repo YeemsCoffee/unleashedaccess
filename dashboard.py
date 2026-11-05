@@ -170,6 +170,7 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_procedure": "dash.production_boms",
             "dash.production_picture": "dash.production_orders",
             "dash.production_check": "dash.production_orders",
+            "dash.cogs_unaccounted": "dash.cogs_page",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -667,14 +668,8 @@ def cogs_page():
     store = request.args.get("store") if request.args.get("store") in dict(store_options) else None
     sent = r.sent_to(c, store) if store else None
     if _wants_csv():
-        if request.args.get("by") == "unexplained":
-            return _csv(f"cogs-not-on-an-order-{month:%Y-%m}", [
-                ("Product Code", "product_code"), ("Description", "description"),
-                ("Opening", lambda x: round(x["opening"], 2)), ("Received", lambda x: round(x["received"], 2)),
-                ("Production", lambda x: round(x["production"], 2)), ("Sent or sold", lambda x: round(x["sold"], 2)),
-                ("Written off", lambda x: round(x["written_off"], 2)), ("Should be", lambda x: round(x["expected"], 2)),
-                ("Is", lambda x: round(x["closing"], 2)), ("Difference", lambda x: round(x["gap"], 2)),
-            ], r.unexplained(c)["products"])
+        if request.args.get("by") == "unexplained":  # moved to its own page
+            return redirect(url_for("dash.cogs_unaccounted", month=f"{month:%Y-%m}", format="csv"))
         if request.args.get("by") == "sent" and sent:
             return _csv(f"sent-to-{store}-{month:%Y-%m}", [
                 ("Product Code", "product_code"), ("Description", "description"),
@@ -707,8 +702,7 @@ def cogs_page():
     names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
-        settings=settings, names=names, store_options=store_options, store=store, sent=sent, why=r.unexplained(c),
-        timing=r.stock_timing(view), cutoffs=STOCK_CUTOFFS,
+        settings=settings, names=names, store_options=store_options, store=store, sent=sent,
         store_name=dict(store_options).get(store),
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
         pending_name=r.warehouse_names(settings["pending"]) if settings["pending"] else None,
@@ -716,6 +710,33 @@ def cogs_page():
         history_chart=charts.bar_chart(bars, "COGS by month, last 12 months"),
         month=month, csv_url=_csv_url(),
     )
+
+
+@bp.get("/cogs/not-on-an-order")
+def cogs_unaccounted():
+    """What's in COGS that no completed sales order or write-off explains, for a month: what
+    Core found that puts value there, each product's gap, and the purchases counted."""
+    r = reports()
+    month = _month_arg(month_start(r.today))
+    if month > r.today:
+        month = month_start(r.today)
+    settings = r.cogs_settings()
+    view = settings["warehouses"]
+    c = r.cogs(month, warehouses=view)
+    why = r.unexplained(c)
+    if _wants_csv():
+        return _csv(f"cogs-not-on-an-order-{month:%Y-%m}", [
+            ("Product Code", "product_code"), ("Description", "description"),
+            ("Opening", lambda x: round(x["opening"], 2)), ("Received", lambda x: round(x["received"], 2)),
+            ("Production", lambda x: round(x["production"], 2)), ("Sent or sold", lambda x: round(x["sold"], 2)),
+            ("Written off", lambda x: round(x["written_off"], 2)), ("Should be", lambda x: round(x["expected"], 2)),
+            ("Is", lambda x: round(x["closing"], 2)), ("Difference", lambda x: round(x["gap"], 2)),
+        ], why["products"])
+    names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
+    return render_template(
+        "dash/cogs_unaccounted.html", c=c, split=r.cogs_by_store(c), why=why, timing=r.stock_timing(view),
+        cutoffs=STOCK_CUTOFFS, settings=settings, names=names, month=month,
+        warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None)
 
 
 @bp.route("/settings/cogs", methods=["GET", "POST"])

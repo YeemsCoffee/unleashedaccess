@@ -44,7 +44,7 @@
     <div><span class="f-label">Ending inventory {{ c.prior_end|d }}</span><span class="f-val">{{ c.opening|money }}</span>
       {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
     <div class="op">+</div>
-    <div><span class="f-label">Purchases received</span><span class="f-val">{{ c.purchases|money }}</span>
+    <div><span class="f-label"><a href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#purchases">Purchases received</a></span><span class="f-val">{{ c.purchases|money }}</span>
       <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping</span></div>
     <div class="op">−</div>
     <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span>
@@ -109,7 +109,7 @@
     <tr class="row-total"><td>Sent to stores</td><td></td><td class="num">{{ split.sent|money }}</td><td class="num">{{ split.sent_share|pct }}</td></tr>
     <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}</td><td class="num">{{ split.other_share|pct }}</td></tr>
     <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
-    <tr><td>Not on an order or write-off <a class="small" href="#unexplained">What's in this →</a>
+    <tr><td>Not on an order or write-off <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a>
         <div class="muted small">Usage not recorded, production costs, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
       <td></td><td class="num">{{ split.rest|money }}</td><td class="num">{{ split.rest_share|pct }}</td></tr>
     </tbody>
@@ -117,59 +117,10 @@
   </table></div>
   {% else %}
   <p class="muted">No stores chosen yet. Each store's COGS is what was sent to it on sales orders, at cost.</p>
+  <p>Not on an order or write-off: <strong>{{ split.rest|money }}</strong>{% if split.rest_share is not none %} ({{ split.rest_share|pct }} of COGS){% endif %}
+    <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a></p>
   {% endif %}
   <p class="muted small">Stores and the locations counted are set {% if is_admin %}in <a href="{{ url_for('dash.cogs_setup') }}">Settings → COGS</a>{% else %}by an admin, under Settings → COGS{% endif %}.</p>
-</section>
-
-<section class="card" id="unexplained">
-  <div class="card-head"><h2>What's in "not on an order or write-off"</h2>
-    {% if why.products %}<a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m'), format='csv', by='unexplained') }}">Export CSV</a>{% endif %}</div>
-  <p class="muted">{{ split.rest|money }} of COGS isn't on a completed sales order or a stock write-off. First, what Core
-    found that puts value there; then each product whose stock at the end isn't what this month's documents add up to.</p>
-  {% set f = why.findings %}
-  <ul class="plain-list">
-    {% if timing.verdict and timing.verdict != settings.stock_as_at %}<li>! <strong>Timing:</strong> checked against the last
-      {{ timing.days }} days, Unleashed's stock "as at" a date is <strong>{{ timing.label|lower }}</strong>, not
-      {{ cutoffs[settings.stock_as_at][0]|lower }} as set. Read the wrong way, sales near midnight land in the wrong month (one
-      month negative here, the next positive). {% if is_admin %}Change it in <a href="{{ url_for('dash.cogs_setup') }}#timing">Settings → COGS</a>.{% else %}An admin can
-      change it in Settings → COGS.{% endif %}</li>{% endif %}
-    {% if timing.residual >= 1 %}<li>! <strong>Stock moved with no document:</strong> over the last {{ timing.days }} days,
-      {{ timing.residual|money }} of day-to-day stock changes (at average cost, in and out) isn't explained by any sale, purchase,
-      write-off or production order, most on {{ timing.residual_days[0].date|d }}. Something moves stock that Core doesn't see:
-      transfers to a location COGS doesn't count, credit notes or stock counts. {% if is_admin %}See the days and products in
-      <a href="{{ url_for('dash.cogs_setup') }}#timing">Settings → COGS</a>.{% endif %}</li>{% endif %}
-    {% for o in f.partly_received %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> was received
-      only in part. COGS counts its whole value, so {{ o.value|money }} not received counts as used.</li>{% endfor %}
-    {% for o in f.elsewhere %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> went to
-      {{ names.get(o.warehouse, o.warehouse) }}, which COGS doesn't count as inventory, so its {{ o.value|money }} counts as used
-      straight away. Add that location in Settings → COGS if its stock should count.</li>{% endfor %}
-    {% if f.production_added %}<li>Production orders added {{ f.production_added|money }} of labour or other costs to what they made
-      ({% for o in f.production_orders %}<a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a>{{ ', ' if not loop.last }}{% endfor %}).
-      That value is in stock without a purchase, so it lowers this figure.</li>{% endif %}
-    {% if split.rest|abs < 0.5 and not why.products %}<li class="muted">Nothing to explain: all of COGS is on completed sales
-      orders and write-offs.</li>
-    {% elif not f.partly_received and not f.elsewhere and not f.production_added %}<li class="muted">None of the usual document
-      causes (part-received purchase orders, deliveries to a location COGS doesn't count, production costs). What's left is
-      stock that changed without a document: used but not on a sales order, waste or a stocktake not entered, or moved out.</li>{% endif %}
-  </ul>
-  {% if why.products %}
-  <div class="table-wrap"><table class="maint-wrap">
-    <thead><tr><th>Product</th><th class="num wide-only">Opening</th><th class="num wide-only">Received</th>
-      <th class="num wide-only">Production</th><th class="num wide-only">Sent or sold</th><th class="num wide-only">Written off</th>
-      <th class="num">Should be</th><th class="num">Is</th><th class="num">Difference</th></tr></thead>
-    <tbody>{% for p in why.products[:25] %}
-    <tr><td>{{ p.description or p.product_code }}<div class="muted small">{{ p.product_code }}</div></td>
-      <td class="num wide-only">{{ p.opening|money }}</td><td class="num wide-only">{{ p.received|money }}</td>
-      <td class="num wide-only">{{ p.production|money }}</td><td class="num wide-only">{{ p.sold|money }}</td>
-      <td class="num wide-only">{{ p.written_off|money }}</td><td class="num">{{ p.expected|money }}</td>
-      <td class="num">{{ p.closing|money }}</td><td class="num"><strong>{{ p.gap|money }}</strong></td></tr>{% endfor %}</tbody>
-    <tfoot><tr><td>All products{% if why.products|length > 25 %} ({{ why.products|length - 25 }} more in the CSV){% endif %}</td>
-      <td class="wide-only" colspan="5"></td><td></td><td></td><td class="num">{{ why.gap|money }}</td></tr></tfoot>
-  </table></div>
-  <p class="muted small">Difference = should be − is. Above zero: value left with no record (used without a sales order, waste or a
-    stocktake not entered, moved to a location COGS doesn't count, part-received orders). Below zero: value appeared (stock
-    received without a purchase order, returns, production costs, cost corrections).</p>
-  {% endif %}
 </section>
 
 <section class="card">
@@ -188,25 +139,6 @@
     </table>
     </div>
   </details>
-</section>
-
-<section class="card">
-  <h2>Purchases counted in {{ c.month|month_name }} (by received date)</h2>
-  <div class="table-wrap">
-  <table>
-    <thead><tr><th>Received</th><th>Order</th><th>Supplier</th><th>Status</th><th class="num">Goods</th><th class="num">Shipping</th><th class="num">Total</th></tr></thead>
-    <tbody>
-    {% for o in c.received %}
-    <tr><td>{{ o.received_date|d }}</td><td><a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a></td>
-      <td>{{ o.supplier_name }}</td><td>{{ o.status }}</td><td class="num">{{ o.goods|money }}</td>
-      <td class="num">{{ o.shipping|money }}</td><td class="num">{{ o.total|money }}</td></tr>
-    {% else %}
-    <tr><td colspan="7" class="muted">No purchases received yet this month.</td></tr>
-    {% endfor %}
-    </tbody>
-    <tfoot><tr><td colspan="4">Total</td><td class="num">{{ c.goods|money }}</td><td class="num">{{ c.shipping|money }}</td><td class="num">{{ c.purchases|money }}</td></tr></tfoot>
-  </table>
-  </div>
 </section>
 
 <section class="card">

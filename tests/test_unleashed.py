@@ -1821,10 +1821,18 @@ class StoreSyncTests(unittest.TestCase):
         # What "not on an order or write-off" is made of: the product differences add up to it.
         why = reports.unexplained(cogs)
         self.assertAlmostEqual(why["gap"], split["rest"], places=4)
-        for text in ('id="unexplained"', 'href="#unexplained">What\'s in this', "Nothing to explain"):
-            self.assertIn(text, page)
-        csv_text = c.get(f"/cogs?month={month:%Y-%m}&format=csv&by=unexplained").get_data(as_text=True)
+        # It's on a page of its own, with the purchases counted; the COGS page links to it.
+        breakdown = f"/cogs/not-on-an-order?month={month:%Y-%m}"
+        self.assertIn(f'href="{breakdown}">What', page)
+        for text in ('id="unexplained"', "Purchases counted"):
+            self.assertNotIn(text, page)
+        own = c.get(breakdown).get_data(as_text=True)
+        for text in ('id="unexplained"', "Nothing to explain", 'id="purchases"', "Purchases counted in"):
+            self.assertIn(text, own)
+        csv_text = c.get(f"{breakdown}&format=csv").get_data(as_text=True)
         self.assertTrue(csv_text.startswith("Product Code,Description,Opening,Received,Production,Sent or sold"))
+        old_link = c.get(f"/cogs?month={month:%Y-%m}&format=csv&by=unexplained")  # still works
+        self.assertEqual(old_link.headers["Location"], f"{breakdown}&format=csv")
 
         # Picking one store: what was sent to it, by product and order.
         page = c.get(f"/cogs?month={month:%Y-%m}").get_data(as_text=True)
