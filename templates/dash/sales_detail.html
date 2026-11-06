@@ -22,7 +22,9 @@
     <a class="btn" href="{{ url_for('dash.sales_order_edit', number=so.number) }}">Edit</a>
     {% if so.status == 'Parked' %}<form method="post" action="{{ url_for('dash.sales_order_delete', number=so.number) }}"
       onsubmit='return confirm({{ ("Delete " ~ so.number ~ " in Unleashed?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>{% endif %}
-  </div>{% endif %}
+  </div>
+  {% elif so.status == 'Completed' %}
+  <div class="run-actions"><a class="btn" href="{{ url_for('dash.sales_order_credit', number=so.number) }}">Credit / return…</a></div>{% endif %}
   <div class="table-wrap"><table>
     <thead><tr><th>Product</th><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Line total</th><th class="num">Avg landed cost</th><th class="num">Line cost</th></tr></thead>
     <tbody>{% for l in so.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}{% if l.batches %}<div class="muted small">Batch {% for b in l.batches %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td><td class="num">{{ l.unit_cost|money }}</td><td class="num">{{ l.cost|money }}</td></tr>{% endfor %}</tbody>

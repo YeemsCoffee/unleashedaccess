@@ -45,7 +45,7 @@
       {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
     <div class="op">+</div>
     <div><span class="f-label"><a href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#purchases">Purchases received</a></span><span class="f-val">{{ c.purchases|money }}</span>
-      <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping</span></div>
+      <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping{% if c.returned %} − {{ c.returned|money }} sent back to suppliers{% endif %}</span></div>
     <div class="op">−</div>
     <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span>
       {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
@@ -58,7 +58,7 @@
   {% set diff = c.cogs - recon.total %}
   <p class="recon {{ 'recon-ok' if diff|abs < 1 else 'recon-warn' }}">
     {{ '✓' if diff|abs < 1 else '!' }}
-    Cross-check: cost of sales {{ recon.cost_of_sales|money }} + stock write-offs {{ recon.adjustments_out|money }}
+    Cross-check: cost of sales {{ recon.cost_of_sales|money }}{% if recon.returns_in %} − returned by customers {{ recon.returns_in|money }}{% endif %} + stock write-offs {{ recon.adjustments_out|money }}
     = {{ recon.total|money }}{% if diff|abs >= 1 %} — differs from the formula by {{ diff|money }}
     (see "COGS vs cost of sales" below){% else %} — matches the formula{% endif %}.
     {% if recon.adjustments_missing %}{{ recon.adjustments_missing }} adjustment line(s) without a value change aren't included in this cross-check.{% endif %}
@@ -104,10 +104,10 @@
     <tbody>
     {% for s in split.stores %}
     <tr><td><a href="{{ url_for('dash.sales', customer=s.code, start=c.month.isoformat(), end=c.through.isoformat(), status='Completed') }}">{{ s.name }}</a></td>
-      <td class="num">{{ s.orders }}</td><td class="num">{{ s.cost|money }}</td><td class="num">{{ s.share|pct }}</td></tr>
+      <td class="num">{{ s.orders }}</td><td class="num">{{ s.cost|money }}{% if s.returned %}<div class="muted small">after {{ s.returned|money }} sent back</div>{% endif %}</td><td class="num">{{ s.share|pct }}</td></tr>
     {% endfor %}
     <tr class="row-total"><td>Sent to stores</td><td></td><td class="num">{{ split.sent|money }}</td><td class="num">{{ split.sent_share|pct }}</td></tr>
-    <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}</td><td class="num">{{ split.other_share|pct }}</td></tr>
+    <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}{% if split.other_returned %}<div class="muted small">after {{ split.other_returned|money }} returned</div>{% endif %}</td><td class="num">{{ split.other_share|pct }}</td></tr>
     <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
     <tr><td>Not on an order or write-off <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a>
         <div class="muted small">Usage not recorded, production costs, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>

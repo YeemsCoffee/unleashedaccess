@@ -6,7 +6,7 @@
   <h1>Transaction history</h1>
   {% call range_filters(start, end, csv_url=csv_url) %}
     <label>Type <select name="type"><option value="">All</option>
-      {% for t in ('Purchase', 'Production', 'Sale', 'Adjustment') %}<option {{ 'selected' if t == doc_type }}>{{ t }}</option>{% endfor %}</select></label>
+      {% for t in ('Purchase', 'Production', 'Sale', 'Credit', 'Supplier return', 'Adjustment') %}<option {{ 'selected' if t == doc_type }}>{{ t }}</option>{% endfor %}</select></label>
     <label>Product <select name="product"><option value="">All</option>
       {% for p in products %}<option value="{{ p.ProductCode }}" {{ 'selected' if p.ProductCode == product }}>{{ p.ProductCode }}</option>{% endfor %}</select></label>
   {% endcall %}

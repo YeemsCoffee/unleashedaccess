@@ -102,6 +102,16 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   or received only once Unleashed has kept its lines (and batches), and if it didn't, the
   page says so and nothing moves. Orders in a currency other than the account's are left to
   Unleashed (they need an exchange rate).
+- **Credits and returns from customers** (a completed sales order → **Credit / return…**):
+  how much of each product is credited, at what price, why, and whether it goes back into
+  stock (with its batch for batch-tracked products). It's made as a free-entry credit note
+  (the only kind Unleashed's API makes; the order's number goes in its reference) and
+  completed straight away or left parked. Sales → **Credit notes** lists them.
+- **Returns to suppliers** (a completed purchase order → **Return to supplier…**): how much
+  of each product goes back, the price they refund, and a reason from Unleashed's list, with
+  the batches for batch-tracked products. Unleashed makes the return from the order; Core sets
+  the lines, removes the ones not going back, and completes it. Purchases → **Supplier
+  returns** lists them.
 - Purchase cost lines (freight) and orders for several warehouses' stock at once are still
   entered in Unleashed.
 
@@ -226,6 +236,11 @@ COGS = sent to each store (cost of completed sales orders to it)
      + stock written off (adjustments in the COGS warehouse)
      + not on an order or write-off (usage not recorded, production losses, …)
 ```
+
+**Returns.** Stock sent back to suppliers comes off purchases (it wasn't used), and what
+customers send back into stock comes off cost of sales, and off the store's share when a
+store sends it back. Credits that don't go back into stock (thrown away) don't change COGS:
+the stock already left. The sync copies credit notes and supplier returns with the orders.
 
 **Timing.** Opening and closing inventory are the stock at midnight (in
 `TIMEZONE`). Unleashed gives stock "as at" a date, and when in the day that is
@@ -646,6 +661,7 @@ unleashedaccess/
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
 │   ├── order_writes.py # sales and purchase orders written to Unleashed, each change read back
 │   ├── mock_orders.py  # the mock server's order writes (as Unleashed's API reference describes)
+│   ├── mock_returns.py # the mock server's credit notes and supplier returns
 │   ├── production.py   # production orders, BOM costing, material requirements, usage
 │   ├── assembly_writes.py # create production orders in Unleashed; close them out
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)

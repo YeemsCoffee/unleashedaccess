@@ -176,6 +176,11 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.purchase_order_new": "dash.purchases", "dash.purchase_order_edit": "dash.purchases",
             "dash.purchase_order_receive": "dash.purchases", "dash.purchase_order_complete": "dash.purchases",
             "dash.purchase_order_delete": "dash.purchases",
+            "dash.credit_notes": "dash.sales", "dash.credit_detail": "dash.sales", "dash.sales_order_credit": "dash.sales",
+            "dash.credit_complete": "dash.sales", "dash.credit_delete": "dash.sales",
+            "dash.supplier_returns": "dash.purchases", "dash.supplier_return_detail": "dash.purchases",
+            "dash.purchase_order_return": "dash.purchases", "dash.supplier_return_complete": "dash.purchases",
+            "dash.supplier_return_delete": "dash.purchases",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -1444,7 +1449,8 @@ def init_app(app):
     if mode == "live":
         client = live_client
     elif mode == "mock":
-        mock_app = create_mock_app(MOCK_API_ID, MOCK_API_KEY)
+        # The simulated account runs to the same day Core counts as today (TODAY, in tests).
+        mock_app = create_mock_app(MOCK_API_ID, MOCK_API_KEY, today=cfg.get("TODAY"))
         client = UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(mock_app),
                                  log_fn=log_call, cache_seconds=cfg["UNLEASHED_CACHE_SECONDS"],
                                  mode="mock")

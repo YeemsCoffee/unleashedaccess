@@ -25,7 +25,7 @@ DEFAULT_BASE_URL = "https://api.unleashedsoftware.com"
 RETRY_STATUSES = {429, 502, 503, 504}
 RETRY_WAITS = (1, 3, 8, None)
 # Reference lists Unleashed returns whole, without /{pageNumber} paging.
-UNPAGED_ENDPOINTS = {"Warehouses", "ProductGroups", "Currencies", "UnitOfMeasures"}
+UNPAGED_ENDPOINTS = {"Warehouses", "ProductGroups", "Currencies", "UnitOfMeasures", "Taxes", "SupplierReturnReasons"}
 _DATE_RE = re.compile(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/")
 
 

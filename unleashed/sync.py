@@ -28,7 +28,8 @@ LOCK_SECONDS = 15 * 60  # renewed at every step, so only a stalled sync lets it 
 RECHECK_FROM = "recheck_from"
 
 LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
-          "StockAdjustments": "stock adjustments", "Assemblies": "assemblies"}
+          "StockAdjustments": "stock adjustments", "Assemblies": "assemblies",
+          "CreditNotes": "credit notes", "SupplierReturns": "supplier returns"}
 
 
 class Syncer:

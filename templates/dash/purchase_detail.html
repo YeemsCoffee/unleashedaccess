@@ -28,7 +28,9 @@
   <div class="run-actions">
     <form method="post" action="{{ url_for('dash.purchase_order_complete', number=po.number) }}"
       onsubmit='return confirm({{ ("Complete " ~ po.number ~ "? A completed order can't be changed.")|tojson }})'><button class="btn btn-primary">Complete</button></form>
-  </div>{% endif %}
+  </div>
+  {% elif po.status == 'Complete' %}
+  <div class="run-actions"><a class="btn" href="{{ url_for('dash.purchase_order_return', number=po.number) }}">Return to supplier…</a></div>{% endif %}
   <div class="table-wrap"><table>
     <thead><tr><th>Product</th><th>Description</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Unit price</th><th class="num">Line total</th></tr></thead>
     <tbody>{% for l in po.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.received_qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>

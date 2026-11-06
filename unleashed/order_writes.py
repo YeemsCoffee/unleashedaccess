@@ -440,3 +440,189 @@ def delete_purchase_order(client, guid):
     after = _get(client, "PurchaseOrders", guid)
     if after is not None and _status(after) != "Deleted":
         raise OrderError(f"Unleashed didn't delete {current.get('OrderNumber')}.")
+
+
+# ---------------------------------------------------------------- credit notes (customer returns)
+
+def create_credit(client, credit, complete=False):
+    """Make a free-entry credit note (the only kind Unleashed's API makes), and complete it if
+    asked: lines marked "return" go back into stock then. `credit`: {"customer", "warehouse",
+    "date", "reference", "comments", "lines": [{"product_code", "qty", "price", "reason",
+    "return", "batches": [{"number", "qty", "expiry"}]}]}. Returns it as Unleashed holds it."""
+    lines = [l for l in credit["lines"] if l["qty"] > 0]
+    if not lines:
+        raise OrderError("Enter how much of at least one product is credited.")
+    for l in lines:
+        if l["price"] is None or l["price"] < 0:
+            raise OrderError(f"Enter the credit price for {l['product_code']} (0 or more).")
+        if l.get("batches") and abs(sum(b["qty"] for b in l["batches"]) - l["qty"]) > TOLERANCE:
+            raise OrderError(f"The batches for {l['product_code']} add up to {sum(b['qty'] for b in l['batches']):g}, "
+                             f"not the {l['qty']:g} coming back.")
+    customer = _one(client, "Customers", "customerCode", credit["customer"])
+    _currency(client, customer, customer.get("CustomerName") or credit["customer"])
+    body = {
+        "CreditDate": body_date(credit["date"]), "ExchangeRate": 1.0,
+        "Customer": {"CustomerCode": customer["CustomerCode"]}, "Warehouse": {"WarehouseCode": credit["warehouse"]},
+        "Reference": credit.get("reference") or None, "Comments": credit.get("comments") or None,
+        "CreditLines": [dict({"Product": {"ProductCode": l["product_code"]}, "CreditQuantity": l["qty"],
+                              "CreditPrice": l["price"], "Reason": (l.get("reason") or "Return")[:100],
+                              "Return": bool(l.get("return")), "Comments": None},
+                             **({"BatchNumbers": [{"Number": b["number"], "Quantity": b["qty"],
+                                                   "ExpiryDate": body_date(b["expiry"]) if b.get("expiry") else None}
+                                                  for b in l["batches"]]} if l.get("batches") else {}))
+                        for l in lines],
+    }
+    made = client.post("CreditNotes/FreeCredit", body)
+    guid = made.get("Guid") if isinstance(made, dict) else None
+    if not guid:
+        raise OrderError("Unleashed took the credit note but didn't say which one it is. It shows under Credit notes "
+                         "after the next sync; check it there before making it again.")
+    held = _get(client, "CreditNotes", guid) or {}
+    number = held.get("CreditNumber") or "the credit note"
+    have = sorted(((l.get("Product") or {}).get("ProductCode"), round(float(l.get("CreditQuantity") or 0), 3),
+                   round(float(l.get("CreditPrice") or 0), 3), bool(l.get("Return", l.get("ReturnToStock"))))
+                  for l in held.get("CreditLines") or [])
+    want = sorted((l["product_code"], round(l["qty"], 3), round(l["price"], 3), bool(l.get("return"))) for l in lines)
+    if have != want:
+        raise OrderError(f"Unleashed made {number} but its lines aren't as entered, so it was left parked. Open it and "
+                         "check it before completing it.")
+    return complete_credit(client, guid) if complete else held
+
+
+def complete_credit(client, guid):
+    current = _get(client, "CreditNotes", guid)
+    if current is None:
+        raise OrderError("That credit note isn't in Unleashed any more.")
+    status = current.get("CreditStatus") or current.get("Status") or ""
+    number = current.get("CreditNumber")
+    if status.lower() in ("completed", "complete"):
+        return current
+    if status != "Parked":
+        raise OrderError(f"{number} is {status.lower()}, so it can't be completed.")
+    client.post(f"CreditNotes/{guid}/Complete", {})
+    done = _get(client, "CreditNotes", guid) or {}
+    now = done.get("CreditStatus") or done.get("Status") or ""
+    if now.lower() not in ("completed", "complete"):
+        raise OrderError(f"Unleashed didn't complete {number} (it's {now.lower() or 'without a status'}). It's left "
+                         "parked: nothing went back into stock.")
+    return done
+
+
+def delete_credit(client, guid):
+    current = _get(client, "CreditNotes", guid)
+    status = (current or {}).get("CreditStatus") or (current or {}).get("Status") or ""
+    if current is None or status == "Deleted":
+        return
+    if status != "Parked":
+        raise OrderError(f"{current.get('CreditNumber')} is {status.lower()}. Only a parked credit can be deleted.")
+    client.delete(f"CreditNotes/{guid}")
+    after = _get(client, "CreditNotes", guid)
+    if after is not None and (after.get("CreditStatus") or after.get("Status")) != "Deleted":
+        raise OrderError(f"Unleashed didn't delete {current.get('CreditNumber')}.")
+
+
+# ---------------------------------------------------------------- supplier returns
+
+def _return_lines_by_product(doc):
+    """{(product code, nth time on the order): line} for a supplier return's lines."""
+    seen, out = {}, {}
+    for l in sorted(doc.get("SupplierReturnLines") or [], key=lambda l: l.get("LineNumber") or 0):
+        code = (l.get("Product") or {}).get("ProductCode")
+        n = seen.get(code, 0)
+        seen[code] = n + 1
+        out[(code, n)] = l
+    return out
+
+
+def create_supplier_return(client, po_number, ret, complete=False):
+    """Send stock from a completed purchase order back to its supplier. `ret`: {"date",
+    "reference", "comments", "lines": {(product code, nth on the order): {"qty", "price",
+    "reason", "batches": [{"number", "qty"}]}}}; lines not given aren't returned. Unleashed
+    makes the return from the order (parked), then each line's quantity, price and reason,
+    and the batches, are set and read back before it's completed (if asked)."""
+    going = {k: v for k, v in ret["lines"].items() if v["qty"] > 0}
+    if not going:
+        raise OrderError("Enter how much of at least one product goes back.")
+    for (code, _), v in going.items():
+        if v.get("batches") and abs(sum(b["qty"] for b in v["batches"]) - v["qty"]) > TOLERANCE:
+            raise OrderError(f"The batches for {code} add up to {sum(b['qty'] for b in v['batches']):g}, "
+                             f"not the {v['qty']:g} going back.")
+    made = client.post("SupplierReturns", {"PurchaseOrder": {"OrderNumber": po_number}})
+    guid = made.get("Guid") if isinstance(made, dict) else None
+    if not guid:
+        raise OrderError("Unleashed took the supplier return but didn't say which one it is. It shows under Supplier "
+                         "returns after the next sync; check it there before making it again.")
+    doc = _get(client, "SupplierReturns", guid) or {}
+    number = doc.get("SupplierReturnNumber") or "The supplier return"
+    try:
+        body = {"Comments": ret.get("comments") or None, "SupplierRef": ret.get("reference") or None,
+                "ReturnDate": body_date(ret["date"]),
+                "Warehouse": {"WarehouseCode": (doc.get("Warehouse") or {}).get("WarehouseCode")}}
+        client.put(f"SupplierReturns/{guid}", body)
+        lines = _return_lines_by_product(doc)
+        missing = [code for code, _ in going if not any(k[0] == code for k in lines)]
+        if missing:
+            raise OrderError(f"{number} has no line for {', '.join(missing)}.")
+        for key, line in lines.items():
+            v = going.get(key)
+            if v is None:
+                client.delete(f"SupplierReturns/{guid}/Lines/{line.get('Guid')}")
+                continue
+            if v["qty"] > (line.get("OrderQuantity") or 0) + TOLERANCE:
+                raise OrderError(f"{key[0]}: only {line.get('OrderQuantity'):g} were ordered.")
+            client.put(f"SupplierReturns/{guid}/Lines/{line.get('Guid')}", {
+                "PurchaseUnitReturnQuantity": v["qty"], "ReturnPrice": v["price"],
+                "ReturnCost": line.get("ReturnCost"), "ReturnReason": v.get("reason") or "Return",
+                "ReturnToSupplier": True, "Comments": line.get("Comments")})
+        batches = [{"Product": {"ProductCode": code}, "Batches": [{"BatchNumber": b["number"], "Quantity": b["qty"]}
+                                                                  for b in v["batches"]]}
+                   for (code, _), v in going.items() if v.get("batches")]
+        if batches:
+            client.post(f"SupplierReturns/{guid}/ProductTracking", {"ProductBatches": batches})
+        client.clear_cache()
+        held = client.get(f"SupplierReturns/{guid}", {"serialBatch": "true"})
+        kept = _return_lines_by_product(held)
+        for key, v in going.items():
+            line = kept.get(key) or {}
+            qty = line.get("ReturnQuantity") if line.get("ReturnQuantity") is not None else line.get("PurchaseUnitReturnQuantity")
+            if abs((qty or 0) - v["qty"]) > TOLERANCE:
+                raise OrderError(f"Unleashed didn't keep the quantity going back for {key[0]}.")
+        if batches and held.get("ProductBatches") is not None:
+            have = sorted((pb.get("Product", {}).get("ProductCode"), b.get("BatchNumber"), round(float(b.get("Quantity") or 0), 3))
+                          for pb in held.get("ProductBatches") or [] for b in pb.get("Batches") or [])
+            want = sorted((code, b["number"], round(b["qty"], 3)) for (code, _), v in going.items() for b in v.get("batches") or [])
+            if have != want:
+                raise OrderError("Unleashed didn't keep the batches going back.")
+    except (OrderError, UnleashedError) as e:
+        raise OrderError(f"{number} was made in Unleashed but left parked: {e} Open it to fix or delete it.") from e
+    return complete_supplier_return(client, guid) if complete else held
+
+
+def complete_supplier_return(client, guid):
+    current = _get(client, "SupplierReturns", guid)
+    if current is None:
+        raise OrderError("That supplier return isn't in Unleashed any more.")
+    number, status = current.get("SupplierReturnNumber"), current.get("Status") or ""
+    if status.lower() in ("completed", "complete"):
+        return current
+    if status != "Parked":
+        raise OrderError(f"{number} is {status.lower()}, so it can't be completed.")
+    client.post(f"SupplierReturns/{guid}/Complete", {})
+    done = _get(client, "SupplierReturns", guid) or {}
+    if (done.get("Status") or "").lower() not in ("completed", "complete"):
+        raise OrderError(f"Unleashed didn't complete {number} (it's {(done.get('Status') or 'without a status').lower()}). "
+                         "It's left parked: no stock left.")
+    return done
+
+
+def delete_supplier_return(client, guid):
+    current = _get(client, "SupplierReturns", guid)
+    if current is None or current.get("Status") == "Deleted":
+        return
+    if current.get("Status") != "Parked":
+        raise OrderError(f"{current.get('SupplierReturnNumber')} is {(current.get('Status') or '').lower()}. Only a "
+                         "parked return can be deleted.")
+    client.delete(f"SupplierReturns/{guid}")
+    after = _get(client, "SupplierReturns", guid)
+    if after is not None and after.get("Status") != "Deleted":
+        raise OrderError(f"Unleashed didn't delete {current.get('SupplierReturnNumber')}.")

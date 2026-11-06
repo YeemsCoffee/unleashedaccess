@@ -1,0 +1,50 @@
+{% extends "dash/base.html" %}
+{% block title %}Credit {{ so.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Credit or return from {{ so.number }}</h1>
+  <a href="{{ url_for('dash.sales_detail', number=so.number) }}">← Back</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form">
+  <p>{{ so.customer_name }}. Enter how much of each product is credited (0 for none), at what price, why, and whether it goes back
+    into stock{{ (' in ' ~ so.warehouse) if so.warehouse }}. What doesn't go back is credited only (for example, thrown away).</p>
+  <div class="filters new-order">
+    <label>Credit date <input type="date" name="date" value="{{ values.date }}" required></label>
+    <label>Reference <input name="reference" value="{{ values.reference }}" maxlength="500"></label>
+  </div>
+  {% for l in rows %}
+  <div class="receive-line">
+    <div class="receive-head"><strong>{{ l.product_code }}</strong> {{ l.description }}
+      <span class="muted small">· {{ l.qty|qty }} went out at {{ l.unit_price|money }}</span></div>
+    <div class="filters">
+      <label>Credit quantity <input class="qty-input" type="number" name="qty-{{ l.guid }}" value="{{ l.typed_qty }}" min="0" max="{{ l.qty }}" step="any" placeholder="0"></label>
+      <label>Credit price <input class="qty-input" type="number" name="price-{{ l.guid }}" value="{{ l.typed_price }}" min="0" step="any"></label>
+      <label>Reason <input name="reason-{{ l.guid }}" value="{{ l.typed_reason }}" maxlength="100"></label>
+      <label class="check-field"><input type="checkbox" name="back-{{ l.guid }}" value="1" {{ 'checked' if l.typed_back }}> Back into stock</label>
+    </div>
+    {% if l.tracked %}
+    <div data-order-batches class="receive-batches">
+      <p class="muted small">Tracked by batch: the batch it comes back as (if it goes back into stock).</p>
+      {% for b in l.batches %}
+      <div class="filters batch-row" data-order-batch>
+        <label>Batch <input name="batch-{{ l.guid }}" value="{{ b.number }}" maxlength="50"></label>
+        <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" value="{{ b.qty }}" min="0" step="any"></label>
+        <label>Expires <input type="date" name="batch-expiry-{{ l.guid }}" value="{{ b.expiry or '' }}"></label>
+      </div>{% endfor %}
+      <template data-order-batch-template><div class="filters batch-row" data-order-batch>
+        <label>Batch <input name="batch-{{ l.guid }}" maxlength="50"></label>
+        <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" min="0" step="any"></label>
+        <label>Expires <input type="date" name="batch-expiry-{{ l.guid }}"></label></div></template>
+      <button type="button" class="btn btn-quiet" data-add-order-batch>+ Another batch</button>
+    </div>{% endif %}
+  </div>
+  {% endfor %}
+  <label class="block">Comments <textarea name="comments" rows="2" maxlength="1024">{{ values.comments }}</textarea></label>
+  <label class="check-field"><input type="checkbox" name="complete" value="1" {{ 'checked' if values.complete }}> Complete it now (what's marked
+    back into stock goes back). Unticked, it's saved parked to check first.</label>
+  <div class="run-actions"><button class="btn btn-primary" {{ 'disabled' if write_problem }}>Make the credit note</button>
+    <a class="btn" href="{{ url_for('dash.sales_detail', number=so.number) }}">Cancel</a></div>
+</form>
+{% endblock %}

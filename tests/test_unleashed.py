@@ -147,6 +147,9 @@ class ReportsTests(unittest.TestCase):
             def _flows(self, first_day, last_day, warehouses=None):
                 return []
 
+            def _completed_returns(self, endpoint, start, through, warehouses=None):
+                return []
+
             def _completed_assemblies(self, start, end):
                 return [{"completed": True, "completed_date": dt.date(2026, 10, 9), "number": "ASM-1",
                          "product_code": "LATTE", "cost": 8.0, "supplier_costs": 2.5,
@@ -217,6 +220,9 @@ class ReportsTests(unittest.TestCase):
                 return {"rows": []}
 
             def _completed_assemblies(self, start, end):
+                return []
+
+            def _completed_returns(self, endpoint, start, through, warehouses=None):
                 return []
 
             def customers(self):
@@ -485,11 +491,11 @@ class OrderPageTests(unittest.TestCase):
         form = self.c.get("/sales/new").get_data(as_text=True)
         for text in ("Mock Wholesale Cafe", 'value="COF-ESP-5LB" data-price="160.0"', "+ Add a product"):
             self.assertIn(text, form)
-        self.assertIn("Choose the customer", self.c.post("/sales/new", data={"product": "COF-ESP-5LB", "qty": "1",
+        self.assertIn("Choose the customer", self.c.post("/sales/new", data={"product": "MILK-WHL-GAL", "qty": "1",
                                                                             "price": "1"}).get_data(as_text=True))
         res = self._post("/sales/new", customer="WHSL-01", warehouse="GDN", order_date=TODAY.isoformat(),
                          reference="PO 55", comments="Back door", line_guid=["", "", ""],
-                         product=["COF-ESP-5LB", "CRM-HVY-HG", ""], qty=["2", "3", ""], price=["120", "28", ""])
+                         product=["MILK-WHL-GAL", "CRM-HVY-HG", ""], qty=["2", "3", ""], price=["120", "28", ""])
         number = res.headers["Location"].rsplit("/", 1)[1]
         page = self.c.get(f"/sales/{number}").get_data(as_text=True)
         for text in ("Complete…", "Edit", "Delete", "PO 55", "Back door", "Parked"):
@@ -498,20 +504,20 @@ class OrderPageTests(unittest.TestCase):
         self.assertEqual((so["subtotal"], so["tax"], so["total"]), (324.0, 30.78, 354.78))  # 9.5% sales tax
 
         # Changing it: a quantity and price, a line added, a line removed.
-        espresso = next(l for l in so["lines"] if l["product_code"] == "COF-ESP-5LB")
+        espresso = next(l for l in so["lines"] if l["product_code"] == "MILK-WHL-GAL")  # the milk
         cream = next(l for l in so["lines"] if l["product_code"] == "CRM-HVY-HG")
-        self.assertIn('value="COF-ESP-5LB" data-price', self.c.get(f"/sales/{number}/edit").get_data(as_text=True))
+        self.assertIn('value="MILK-WHL-GAL" data-price', self.c.get(f"/sales/{number}/edit").get_data(as_text=True))
         self._post(f"/sales/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(), reference="PO 56",
                    comments="", line_guid=[espresso["guid"], cream["guid"], ""],
-                   product=["COF-ESP-5LB", "CRM-HVY-HG", "MILK-OAT-QT"], qty=["3", "3", "4"], price=["115", "28", "9.5"])
+                   product=["MILK-WHL-GAL", "CRM-HVY-HG", "MILK-OAT-QT"], qty=["3", "3", "4"], price=["115", "28", "9.5"])
         so = self.reports.sales_order(number)
         self.assertEqual(sorted((l["product_code"], l["qty"], l["unit_price"]) for l in so["lines"]),
-                         [("COF-ESP-5LB", 3, 115), ("CRM-HVY-HG", 3, 28), ("MILK-OAT-QT", 4, 9.5)])
+                         sorted([("MILK-WHL-GAL", 3, 115), ("CRM-HVY-HG", 3, 28), ("MILK-OAT-QT", 4, 9.5)]))
         self.assertEqual(so["reference"], "PO 56")
         oat = next(l for l in so["lines"] if l["product_code"] == "MILK-OAT-QT")
         self._post(f"/sales/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(),
                    line_guid=[espresso["guid"], cream["guid"], oat["guid"]],
-                   product=["COF-ESP-5LB", "CRM-HVY-HG", ""], qty=["3", "3", ""], price=["115", "28", ""])
+                   product=["MILK-WHL-GAL", "CRM-HVY-HG", ""], qty=["3", "3", ""], price=["115", "28", ""])
         self.assertEqual(len(self.reports.sales_order(number)["lines"]), 2)
 
         # Completing: the batch-tracked cream's batches, first expiring first, then the stock goes out.
@@ -521,12 +527,12 @@ class OrderPageTests(unittest.TestCase):
         bad = self.c.post(f"/sales/{number}/complete", data={f"batch-{cream['guid']}": "CRM-HVY-HG-A",
                                                               f"batch-qty-{cream['guid']}": "2"})
         self.assertIn("add up to 2, not the 3", bad.get_data(as_text=True))
-        before = self.ds.stock_as_at("COF-ESP-5LB")[0]
+        before = self.ds.stock_as_at("MILK-WHL-GAL")[0]
         self._post(f"/sales/{number}/complete", **{f"batch-{cream['guid']}": "CRM-HVY-HG-A",
                                                    f"batch-qty-{cream['guid']}": "3"})
         so = self.reports.sales_order(number)
         self.assertEqual(so["status"], "Completed")
-        self.assertEqual(self.ds.stock_as_at("COF-ESP-5LB")[0], before - 3)
+        self.assertEqual(self.ds.stock_as_at("MILK-WHL-GAL")[0], before - 3)
         self.assertEqual(next(b for b in self.ds.batches if b["Number"] == "CRM-HVY-HG-A")["Quantity"],
                          self.ds.batches[0]["OriginalQty"] - 3)
         page = self.c.get(f"/sales/{number}").get_data(as_text=True)
@@ -582,6 +588,89 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("Complete</button>", self.c.get(f"/purchases/{number}").get_data(as_text=True))
         self._post(f"/purchases/{number}/complete")
         self.assertEqual(self.reports.purchase_order(number)["status"], "Complete")
+
+
+    def test_a_customer_return_goes_back_into_stock_and_off_cogs(self):
+        res = self._post("/sales/new", customer="GDN-POS", warehouse="GDN", order_date=TODAY.isoformat(),
+                         line_guid=["", ""], product=["MILK-WHL-GAL", "CRM-HVY-HG"], qty=["3", "2"], price=["13.5", "28"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        so = self.reports.sales_order(number)
+        espresso = next(l for l in so["lines"] if l["product_code"] == "MILK-WHL-GAL")
+        cream = next(l for l in so["lines"] if l["product_code"] == "CRM-HVY-HG")
+        self._post(f"/sales/{number}/complete", **{f"batch-{cream['guid']}": "CRM-HVY-HG-A",
+                                                   f"batch-qty-{cream['guid']}": "2"})
+        self.assertIn("Credit / return…", self.c.get(f"/sales/{number}").get_data(as_text=True))
+        form = self.c.get(f"/sales/{number}/credit").get_data(as_text=True)
+        self.assertIn('value="CRM-HVY-HG-A"', form)  # the batch it went out as
+        self.assertIn("credit between 0 and the 3", self.c.post(f"/sales/{number}/credit", data={
+            f"qty-{espresso['guid']}": "5", "complete": "1"}).get_data(as_text=True))
+        before = (self.ds.stock_as_at("MILK-WHL-GAL")[0], self.ds.stock_as_at("CRM-HVY-HG")[0])
+        res = self._post(f"/sales/{number}/credit", date=TODAY.isoformat(), reference=number, complete="1", **{
+            f"qty-{espresso['guid']}": "1", f"price-{espresso['guid']}": "13.5", f"reason-{espresso['guid']}": "Wrong grind",
+            f"back-{espresso['guid']}": "1",
+            f"qty-{cream['guid']}": "2", f"price-{cream['guid']}": "28", f"reason-{cream['guid']}": "Spoiled"})
+        credit = res.headers["Location"].rsplit("/", 1)[1]
+        c = self.reports.credit_note(credit)
+        self.assertEqual((c["status"], c["reference"], c["subtotal"]), ("Completed", number, 69.5))
+        # The milk went back on the shelf; the spoiled cream was credited only.
+        self.assertEqual(self.ds.stock_as_at("MILK-WHL-GAL")[0], before[0] + 1)
+        self.assertEqual(self.ds.stock_as_at("CRM-HVY-HG")[0], before[1])
+        page = self.c.get(f"/sales/credits/{credit}").get_data(as_text=True)
+        for text in ("Wrong grind", "Spoiled", "Completed"):
+            self.assertIn(text, page)
+        self.assertIn(credit, self.c.get("/sales/credits").get_data(as_text=True))
+        # COGS: what came back isn't cost of sales, here or in the store's share.
+        recon = self.reports.cogs_reconciliation(TODAY)
+        self.assertAlmostEqual(recon["returns_in"], c["cost"])
+        self.assertGreater(c["cost"], 0)
+        cogs = self.reports.cogs(TODAY)
+        self.assertAlmostEqual(cogs["cogs"], recon["total"], delta=1.0)
+        self.assertIn("returned by customers", self.c.get("/cogs").get_data(as_text=True))
+
+    def test_a_parked_credit_is_completed_or_deleted(self):
+        so = next(o for o in self.reports.sales_enquiry(TODAY - dt.timedelta(days=3), TODAY, status="Completed")["orders"])
+        line = so["lines"][0]
+        res = self._post(f"/sales/{so['number']}/credit", date=TODAY.isoformat(), **{
+            f"qty-{line['guid']}": "1", f"price-{line['guid']}": "1", f"reason-{line['guid']}": "Goodwill"})
+        credit = res.headers["Location"].rsplit("/", 1)[1]
+        self.assertEqual(self.reports.credit_note(credit)["status"], "Parked")
+        self._post(f"/sales/credits/{credit}/delete")
+        self.assertNotIn(f">{credit}</a>", self.c.get("/sales/credits").get_data(as_text=True))
+
+    def test_stock_sent_back_to_a_supplier_comes_off_purchases(self):
+        res = self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(), place="1",
+                         line_guid=["", ""], product=["MILK-WHL-GAL", "CRM-HVY-HG"], qty=["10", "4"], price=["4.2", "9.5"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        po = self.reports.purchase_order(number)
+        milk = next(l for l in po["lines"] if l["product_code"] == "MILK-WHL-GAL")
+        cream = next(l for l in po["lines"] if l["product_code"] == "CRM-HVY-HG")
+        self._post(f"/purchases/{number}/receive", complete="1", **{
+            f"qty-{milk['guid']}": "10", f"qty-{cream['guid']}": "4", f"batch-{cream['guid']}": "CR-9",
+            f"batch-qty-{cream['guid']}": "4"})
+        self.assertIn("Return to supplier…", self.c.get(f"/purchases/{number}").get_data(as_text=True))
+        form = self.c.get(f"/purchases/{number}/return").get_data(as_text=True)
+        self.assertIn("<option>Damaged</option>", form)
+        self.assertIn("tracked by batch: choose the batch", self.c.post(f"/purchases/{number}/return", data={
+            "qty-CRM-HVY-HG-0": "1", "complete": "1"}).get_data(as_text=True))
+        before = (self.ds.stock_as_at("MILK-WHL-GAL")[0], self.ds.stock_as_at("CRM-HVY-HG")[0])
+        res = self._post(f"/purchases/{number}/return", date=TODAY.isoformat(), reference="RMA-1", complete="1", **{
+            "qty-MILK-WHL-GAL-0": "2", "price-MILK-WHL-GAL-0": "4.2", "reason-MILK-WHL-GAL-0": "Damaged",
+            "qty-CRM-HVY-HG-0": "1", "price-CRM-HVY-HG-0": "9.5", "reason-CRM-HVY-HG-0": "Expired",
+            "batch-CRM-HVY-HG-0": "CR-9", "batch-qty-CRM-HVY-HG-0": "1"})
+        ret = res.headers["Location"].rsplit("/", 1)[1]
+        sr = self.reports.supplier_return(ret)
+        self.assertEqual((sr["status"], sr["purchase_order"], [l["product_code"] for l in sr["lines"]]),
+                         ("Completed", number, ["MILK-WHL-GAL", "CRM-HVY-HG"]))  # only what went back
+        self.assertEqual(self.ds.stock_as_at("MILK-WHL-GAL")[0], before[0] - 2)
+        self.assertEqual(next(b for b in self.ds.batches if b["Number"] == "CR-9")["Quantity"], 3)
+        self.assertIn("RMA-1", self.c.get(f"/purchases/returns/{ret}").get_data(as_text=True))
+        self.assertIn(ret, self.c.get("/purchases/returns").get_data(as_text=True))
+        cogs = self.reports.cogs(TODAY)
+        self.assertAlmostEqual(cogs["returned"], sr["value"])
+        self.assertAlmostEqual(cogs["purchases"], cogs["goods"] + cogs["shipping"] - sr["value"])
+        self.assertAlmostEqual(cogs["cogs"], self.reports.cogs_reconciliation(TODAY)["total"], delta=1.0)
+        self.assertIn("sent back to suppliers", self.c.get("/cogs").get_data(as_text=True))
+        self.assertIn(ret, self.c.get("/cogs/not-on-an-order").get_data(as_text=True))
 
 
 class ProductionTests(unittest.TestCase):

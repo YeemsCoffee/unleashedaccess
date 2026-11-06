@@ -22,6 +22,7 @@ INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
 COST_LINE_AMOUNT_FIELDS = ("BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
                            "LineTotal", "Amount", "Total", "Cost", "Value")
 COMPLETED_ASSEMBLY_STATUSES = ("completed", "complete")
+COMPLETED_RETURN_STATUSES = ("completed", "complete")
 # Assemblies in these states never moved stock, so reports leave them out.
 INACTIVE_ASSEMBLY_STATUSES = ("deleted",)
 # Where an assembly line's cost may live. Without one, components are costed at their
@@ -363,6 +364,116 @@ class Reports:
             "cost": cost, "margin": subtotal - cost, "lines": lines,
         }
 
+    # ------------------------------------------------------------ returns
+
+    def credit_notes(self, start=None, end=None, status=None, customer=None):
+        """Credit notes (customer returns and credits) dated start..end."""
+        items = self.client.get_all("CreditNotes", {
+            "startDate": start.isoformat() if start else None, "endDate": end.isoformat() if end else None,
+            "creditStatus": status, "customerCode": customer})
+        credits = [self._credit(i) for i in items]
+        return [c for c in credits if (not start or (c["date"] and c["date"] >= start))
+                and (not end or (c["date"] and c["date"] <= end))]
+
+    def credit_note(self, number):
+        items = self.client.get_all("CreditNotes", {"creditNumber": number})
+        exact = [i for i in items if i.get("CreditNumber") == number]
+        return self._credit(exact[0]) if exact else None
+
+    def _credit(self, i):
+        lines = []
+        for l in i.get("CreditLines") or []:
+            prod = l.get("Product") or {}
+            qty = l.get("CreditQuantity") or 0
+            back = bool(l.get("Return") if l.get("Return") is not None else l.get("ReturnToStock"))
+            unit_cost = l.get("AverageLandedPriceAtTimeOfSale") or 0
+            batches = l.get("BatchNumbers") or l.get("PendingBatchNumbers") or []
+            lines.append({"guid": l.get("Guid"), "product_code": prod.get("ProductCode"),
+                          "description": prod.get("ProductDescription"), "qty": qty,
+                          "price": l.get("CreditPrice") or 0,
+                          "line_total": _first(l.get("BCLineTotal"), l.get("LineTotal")),
+                          "reason": l.get("Reason"), "returned": back, "unit_cost": unit_cost,
+                          "cost": qty * unit_cost if back else 0.0, "comments": l.get("Comments"),
+                          "batches": [{"number": b.get("Number"), "qty": b.get("Quantity")} for b in batches]})
+        status = i.get("CreditStatus") or i.get("Status") or ""
+        customer = i.get("Customer") or {}
+        return {
+            "guid": i.get("Guid"), "number": i.get("CreditNumber"), "status": status,
+            "completed": status.lower() in COMPLETED_RETURN_STATUSES,
+            "date": parse_date(i.get("CreditDate")), "at": parse_moment(i.get("CreditDate")),
+            "timed": has_time(i.get("CreditDate")),
+            "customer_code": customer.get("CustomerCode"), "customer_name": customer.get("CustomerName"),
+            "warehouse": _warehouse_code(i.get("Warehouse")), "reference": i.get("Reference"),
+            "comments": i.get("Comments"), "sales_order": (i.get("SalesOrder") or {}).get("OrderNumber"),
+            "subtotal": _first(i.get("BCSubTotal"), i.get("SubTotal")), "tax": _first(i.get("BCTaxTotal"), i.get("TaxTotal")),
+            "total": _first(i.get("BCTotal"), i.get("Total")), "lines": lines,
+            "cost": sum(l["cost"] for l in lines),
+        }
+
+    def supplier_returns(self, start=None, end=None, status=None, supplier=None):
+        """Supplier returns (stock sent back to suppliers) dated start..end."""
+        items = self.client.get_all("SupplierReturns", {
+            "startDate": start.isoformat() if start else None, "endDate": end.isoformat() if end else None,
+            "supplierReturnStatus": status, "supplierCode": supplier})
+        returns = [self._supplier_return(i) for i in items]
+        return [r for r in returns if (not start or (r["date"] and r["date"] >= start))
+                and (not end or (r["date"] and r["date"] <= end))]
+
+    def supplier_return(self, number):
+        items = self.client.get_all("SupplierReturns", {"supplierReturnNumber": number})
+        exact = [i for i in items if i.get("SupplierReturnNumber") == number]
+        return self._supplier_return(exact[0]) if exact else None
+
+    def _supplier_return(self, i):
+        lines = []
+        for l in i.get("SupplierReturnLines") or []:
+            prod = l.get("Product") or {}
+            qty = _first(l.get("ReturnQuantity"), l.get("PurchaseUnitReturnQuantity")) or 0
+            before, avg_before, avg_after = (l.get("StockOnHandBeforeReturn"), l.get("AverageLandedPriceBeforeReturn"),
+                                             l.get("AverageLandedPriceAfterReturn"))
+            if None not in (before, avg_before, avg_after):  # what left stock, as Unleashed recorded it
+                value = before * avg_before - (before - qty) * avg_after
+            else:
+                value = qty * (l.get("ReturnCost") or l.get("ReturnPrice") or 0)
+            lines.append({"guid": l.get("Guid"), "product_code": prod.get("ProductCode"),
+                          "description": prod.get("ProductDescription"), "ordered": l.get("OrderQuantity") or 0,
+                          "qty": qty, "price": l.get("ReturnPrice") or 0, "order_price": l.get("OrderPrice"),
+                          "reason": l.get("ReturnReason"), "value": value if qty else 0.0,
+                          "comments": l.get("Comments")})
+        status = i.get("Status") or ""
+        supplier = i.get("Supplier") or {}
+        batches = {(pb.get("Product") or {}).get("ProductCode"): [{"number": b.get("BatchNumber"), "qty": b.get("Quantity")}
+                                                                   for b in pb.get("Batches") or []]
+                   for pb in i.get("ProductBatches") or []}
+        return {
+            "guid": i.get("Guid"), "number": i.get("SupplierReturnNumber"), "status": status,
+            "completed": status.lower() in COMPLETED_RETURN_STATUSES,
+            "date": parse_date(i.get("ReturnDate")), "at": parse_moment(i.get("ReturnDate")),
+            "timed": has_time(i.get("ReturnDate")),
+            "supplier_code": supplier.get("SupplierCode"), "supplier_name": supplier.get("SupplierName"),
+            "purchase_order": (i.get("PurchaseOrder") or {}).get("OrderNumber"),
+            "warehouse": _warehouse_code(i.get("Warehouse")), "reference": i.get("SupplierRef"),
+            "comments": i.get("Comments"), "subtotal": _first(i.get("BaseSubTotal"), i.get("SubTotal")),
+            "total": _first(i.get("BaseTotal"), i.get("Total")), "lines": lines, "batches": batches,
+            "value": sum(l["value"] for l in lines),
+        }
+
+    def _completed_returns(self, endpoint, start, through, warehouses=None):
+        """Credit notes or supplier returns completed (dated) from `start` to `through`, in one
+        of `warehouses` when some are given."""
+        status = "Completed,Complete"
+        if getattr(self.client, "finds_by_completion", False):
+            status_key = "creditStatus" if endpoint == "CreditNotes" else "supplierReturnStatus"
+            items = self.client.get_all(endpoint, {status_key: status, "completedStartDate": start.isoformat(),
+                                                   "completedEndDate": through.isoformat()})
+            docs = [(self._credit if endpoint == "CreditNotes" else self._supplier_return)(i) for i in items]
+        elif endpoint == "CreditNotes":
+            docs = self.credit_notes(start, through)
+        else:
+            docs = self.supplier_returns(start, through)
+        return [d for d in docs if d["completed"] and d["date"] and start <= d["date"] <= through
+                and (not warehouses or not d["warehouse"] or d["warehouse"] in warehouses)]
+
     # ------------------------------------------------------------ adjustments
 
     def stock_adjustments(self, start, end):
@@ -515,13 +626,24 @@ class Reports:
                 for l in o["lines"]:
                     rows.append(_txn(o["completed_date"] or o["order_date"], "Sale", o["number"],
                                      o["customer_name"], l, -l["qty"], -l["cost"]))
+        if doc_type in (None, "Credit"):
+            for c in self._completed_returns("CreditNotes", start, end):
+                for l in c["lines"]:
+                    if l["returned"]:
+                        rows.append(_txn(c["date"], "Credit", c["number"], c["customer_name"], l, l["qty"], l["cost"]))
+        if doc_type in (None, "Supplier return"):
+            for r in self._completed_returns("SupplierReturns", start, end):
+                for l in r["lines"]:
+                    if l["qty"]:
+                        rows.append(_txn(r["date"], "Supplier return", r["number"], r["supplier_name"], l,
+                                         -l["qty"], -l["value"]))
         if doc_type in (None, "Adjustment"):
             for a in self.stock_adjustments(start, end)["rows"]:
                 rows.append(_txn(a["date"], "Adjustment", a["number"], a["reason"], a,
                                  a["qty_change"], a["value_change"]))
         if product:
             rows = [r for r in rows if r["product_code"] == product]
-        order = {"Purchase": 0, "Production": 1, "Sale": 2, "Adjustment": 3}
+        order = {"Purchase": 0, "Production": 1, "Sale": 2, "Credit": 3, "Supplier return": 4, "Adjustment": 5}
         rows.sort(key=lambda r: (r["date"], order[r["type"]], r["number"]))
         return rows
 
@@ -572,19 +694,23 @@ class Reports:
         received = self.received_purchases(start, through) if through >= start else []
         goods = sum(o["goods"] for o in received)
         shipping = sum(o["shipping"] for o in received)
+        # Stock sent back to suppliers wasn't used: it comes off what was bought.
+        sent_back = self._completed_returns("SupplierReturns", start, through, warehouses) if through >= start else []
+        returned = sum(r["value"] for r in sent_back)
         closing, closing_by = self._stock_at_end(None if is_current else through, warehouses, flows)
-        cogs = opening + goods + shipping - closing
+        cogs = opening + goods + shipping - returned - closing
 
         result = {
             "month": start, "through": through, "prior_end": prior_end,
             "is_current": is_current, "opening": opening, "goods": goods,
-            "shipping": shipping, "purchases": goods + shipping, "closing": closing,
+            "shipping": shipping, "returned": returned, "supplier_returns": sent_back,
+            "purchases": goods + shipping - returned, "closing": closing,
             "cogs": cogs, "received": received, "days_elapsed": max((through - start).days + 1, 0),
             "days_in_month": (end - start).days + 1, "warehouses": warehouses,
             "opening_by": opening_by, "closing_by": closing_by,
         }
         if daily and through >= start:
-            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses, flows)
+            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses, flows, sent_back)
         return result
 
     # ------------------------------------------------------------ stock at a moment
@@ -642,6 +768,18 @@ class Reports:
                               "qty": r["qty_change"] or 0,
                               "value": r["value_change"] or 0, "warehouse": r["warehouse"], "kind": "Adjustment",
                               "number": r["number"]})
+        for c in self._completed_returns("CreditNotes", start, end, warehouses):
+            for l in c["lines"]:
+                if l["returned"] and c["at"]:
+                    moves.append({"at": c["at"], "timed": c["timed"], "product_code": l["product_code"],
+                                  "qty": l["qty"], "value": l["cost"], "warehouse": c["warehouse"],
+                                  "kind": "Credit", "number": c["number"]})
+        for r in self._completed_returns("SupplierReturns", start, end, warehouses):
+            for l in r["lines"]:
+                if l["qty"] and r["at"]:
+                    moves.append({"at": r["at"], "timed": r["timed"], "product_code": l["product_code"],
+                                  "qty": -l["qty"], "value": -l["value"], "warehouse": r["warehouse"],
+                                  "kind": "Supplier return", "number": r["number"]})
         for a in self._completed_assemblies(start, end):
             if not a.get("completed_at"):
                 continue
@@ -801,10 +939,12 @@ class Reports:
         named = [names.get(c, c) for c in codes]
         return f"{', '.join(named[:-1])} and {named[-1]}" if len(named) > 1 else "".join(named)
 
-    def _daily_cogs(self, start, through, opening, received, warehouses=None, flows=None):
+    def _daily_cogs(self, start, through, opening, received, warehouses=None, flows=None, sent_back=()):
         by_day = defaultdict(float)
         for o in received:
             by_day[o["received_date"]] += o["goods"] + o["shipping"]
+        for r in sent_back:
+            by_day[r["date"]] -= r["value"]
         days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
         closings = self._map(lambda d: self._stock_at_end(d, warehouses, flows)[0], days)
         rows, purchases = [], 0.0
@@ -855,9 +995,11 @@ class Reports:
         if warehouses is None:
             warehouses = self.cogs_settings()["warehouses"]
         cost_of_sales = sum(o["cost"] for o in self._completed_sales(start, through, warehouses))
+        # What customers sent back into stock wasn't sold after all.
+        returns_in = sum(c["cost"] for c in self._completed_returns("CreditNotes", start, through, warehouses))
         written_off, missing = self._write_offs(start, through, warehouses)
-        return {"cost_of_sales": cost_of_sales, "adjustments_out": written_off,
-                "adjustments_missing": missing, "total": cost_of_sales + written_off}
+        return {"cost_of_sales": cost_of_sales, "returns_in": returns_in, "adjustments_out": written_off,
+                "adjustments_missing": missing, "total": cost_of_sales - returns_in + written_off}
 
     def cogs_by_store(self, cogs):
         """`cogs` (a cogs() result) split by store. The stores are customers (cogs_settings):
@@ -869,15 +1011,19 @@ class Reports:
         start, through, warehouses, total = cogs["month"], cogs["through"], cogs["warehouses"], cogs["cogs"]
         codes = self.cogs_settings()["stores"]
         names = {c.get("CustomerCode"): c.get("CustomerName") for c in self.customers()} if codes else {}
-        stores = {code: {"code": code, "name": names.get(code) or code, "orders": 0, "cost": 0.0}
+        stores = {code: {"code": code, "name": names.get(code) or code, "orders": 0, "cost": 0.0, "returned": 0.0}
                   for code in codes}
-        other = {"orders": 0, "cost": 0.0}
+        other = {"orders": 0, "cost": 0.0, "returned": 0.0}
         written_off = 0.0
         if through >= start:
             for o in self._completed_sales(start, through, warehouses):
                 row = stores.get(o["customer_code"], other)
                 row["orders"] += 1
                 row["cost"] += o["cost"]
+            for c in self._completed_returns("CreditNotes", start, through, warehouses):
+                row = stores.get(c["customer_code"], other)  # what came back from it isn't its cost
+                row["returned"] = row.get("returned", 0.0) + c["cost"]
+                row["cost"] -= c["cost"]
             written_off = self._write_offs(start, through, warehouses)[0]
         rows = sorted(stores.values(), key=lambda r: (-r["cost"], r["name"].lower()))
         sent = sum(r["cost"] for r in rows)
@@ -889,7 +1035,7 @@ class Reports:
         for r in rows:
             r["share"] = share(r["cost"])
         return {"stores": rows, "sent": sent, "sent_share": share(sent),
-                "other_customers": other["cost"], "other_orders": other["orders"],
+                "other_customers": other["cost"], "other_orders": other["orders"], "other_returned": other["returned"],
                 "other_share": share(other["cost"]), "written_off": written_off,
                 "written_off_share": share(written_off), "rest": rest, "rest_share": share(rest),
                 "cogs": total}
@@ -931,6 +1077,12 @@ class Reports:
             for o in self._completed_sales(start, through, warehouses):
                 for l in o["lines"]:
                     products[l["product_code"]]["sold"] += l["cost"]
+            for c in self._completed_returns("CreditNotes", start, through, warehouses):
+                for l in c["lines"]:
+                    products[l["product_code"]]["sold"] -= l["cost"]  # came back into stock
+            for r in cogs.get("supplier_returns") or []:
+                for l in r["lines"]:
+                    products[l["product_code"]]["received"] -= l["value"]  # went back to the supplier
             for r in self.stock_adjustments(start, through)["rows"]:
                 if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
                     products[r["product_code"]]["written_off"] -= r["value_change"] or 0
@@ -963,8 +1115,18 @@ class Reports:
                                                             "description": l["description"], "qty": 0.0, "cost": 0.0})
                 p["qty"] += l["qty"] or 0
                 p["cost"] += l["cost"] or 0
-        cost = sum(o["cost"] for o in orders)
+        credits = [c for c in self._completed_returns("CreditNotes", start, through, cogs["warehouses"])
+                   if c["customer_code"] == customer] if through >= start else []
+        for c in credits:  # what it sent back comes off
+            for l in c["lines"]:
+                if l["returned"]:
+                    p = products.setdefault(l["product_code"], {"product_code": l["product_code"],
+                                                                "description": l["description"], "qty": 0.0, "cost": 0.0})
+                    p["qty"] -= l["qty"] or 0
+                    p["cost"] -= l["cost"] or 0
+        cost = sum(o["cost"] for o in orders) - sum(c["cost"] for c in credits)
         return {"orders": sorted(orders, key=lambda o: (o["completed_date"] or o["order_date"], o["number"])),
+                "credits": credits, "returned": sum(c["cost"] for c in credits),
                 "products": sorted(products.values(), key=lambda p: (-p["cost"], p["product_code"] or "")),
                 "cost": cost, "share": cost / cogs["cogs"] if cogs["cogs"] > 0 else None}
 
@@ -974,7 +1136,9 @@ class Reports:
         def month_row(m):
             c = self.cogs(m, warehouses=warehouses)
             # Revenue from the same orders COGS counts: completed in the month, whenever placed.
-            c["revenue"] = sum(o["subtotal"] for o in self._completed_sales(m, min(month_end(m), self.today)))
+            through = min(month_end(m), self.today)
+            c["revenue"] = sum(o["subtotal"] for o in self._completed_sales(m, through)) - \
+                sum(x["subtotal"] or 0 for x in self._completed_returns("CreditNotes", m, through))
             c["gross_margin"] = c["revenue"] - c["cogs"]
             c["cogs_pct"] = c["cogs"] / c["revenue"] if c["revenue"] else None
             if by_store:

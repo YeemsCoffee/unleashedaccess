@@ -8,10 +8,12 @@ from flask import abort, flash, redirect, render_template, request, url_for
 
 from dashboard import (_ext, _person, _sync_soon, _write_problem, bp, reports)
 from unleashed.client import UnleashedError, parse_date
-from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHASES, OrderError,
-                                    complete_purchase_order, complete_sales_order, create_purchase_order,
-                                    create_sales_order, delete_purchase_order, delete_sales_order,
-                                    receive_purchase_order, update_purchase_order, update_sales_order)
+from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHASES, OrderError, complete_credit,
+                                    complete_purchase_order, complete_sales_order, complete_supplier_return,
+                                    create_credit, create_purchase_order, create_sales_order,
+                                    create_supplier_return, delete_credit, delete_purchase_order, delete_sales_order,
+                                    delete_supplier_return, receive_purchase_order, update_purchase_order,
+                                    update_sales_order)
 from unleashed.sync import RECHECK_FROM
 
 
@@ -467,3 +469,302 @@ def purchase_order_delete(number):
     _done("Deleted", number)
     return redirect(url_for("dash.purchases"))
 
+
+
+# ---------------------------------------------------------------- credit notes (customer returns)
+
+def _range():
+    today = reports().today
+    start = _date(request.args.get("start"), today.replace(day=1) - dt.timedelta(days=60))
+    end = _date(request.args.get("end"), today)
+    return start, end
+
+
+@bp.get("/sales/credits")
+def credit_notes():
+    start, end = _range()
+    rows = sorted(reports().credit_notes(start, end), key=lambda c: (c["date"] or dt.date.min, c["number"] or ""),
+                  reverse=True)
+    return render_template("dash/credits.html", rows=[c for c in rows if c["status"] != "Deleted"],
+                           start=start, end=end)
+
+
+@bp.get("/sales/credits/<number>")
+def credit_detail(number):
+    found = reports().credit_note(number)
+    if found is None:
+        abort(404)
+    return render_template("dash/credit_detail.html", c=found, write_problem=_write_problem())
+
+
+@bp.route("/sales/<number>/credit", methods=["GET", "POST"])
+def sales_order_credit(number):
+    """A credit for (some of) what went out on a completed sales order: how much came back or
+    is credited, at what price, why, and whether it goes back into stock."""
+    so = _open_sales_order(number)
+    back = url_for("dash.sales_detail", number=number)
+    if so["status"] != "Completed":
+        flash(f"{number} isn't completed: change the order instead of crediting it.", "warn")
+        return redirect(back)
+    r = reports()
+    tracked = {l["guid"] for l in so["lines"] if r.batch_tracked(l["product_code"])}
+    form = request.form
+
+    def page(error=None):
+        rows = []
+        for l in so["lines"]:
+            g = l["guid"]
+            rows.append(dict(l, tracked=g in tracked,
+                             typed_qty=form.get(f"qty-{g}", "") if form else "",
+                             typed_price=form.get(f"price-{g}") if form else f"{l['unit_price']:g}",
+                             typed_reason=form.get(f"reason-{g}") if form else "Return",
+                             typed_back=(form.get(f"back-{g}") if form else "1"),
+                             batches=[{"number": n, "qty": q, "expiry": e} for n, q, e in zip_longest(
+                                 form.getlist(f"batch-{g}"), form.getlist(f"batch-qty-{g}"),
+                                 form.getlist(f"batch-expiry-{g}"), fillvalue="")] if form else
+                             ([{"number": b["number"], "qty": "", "expiry": ""} for b in l.get("batches") or []]
+                              or [{"number": "", "qty": "", "expiry": ""}])))
+        html = render_template("dash/sales_credit.html", so=so, rows=rows, error=error, today=r.today,
+                               values={"date": form.get("date") if form else r.today.isoformat(),
+                                       "reference": form.get("reference") if form else number,
+                                       "comments": form.get("comments", "") if form else "",
+                                       "complete": form.get("complete") if form else "1"},
+                               write_problem=_write_problem())
+        return (html, 400) if error else html
+
+    if request.method == "GET":
+        return page()
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    lines = []
+    for l in so["lines"]:
+        g = l["guid"]
+        qty = _number(form.get(f"qty-{g}")) or 0
+        if qty < 0 or qty > l["qty"] + 1e-9:
+            return page(f"{l['product_code']}: credit between 0 and the {l['qty']:g} that went out.")
+        if not qty:
+            continue
+        price = _number(form.get(f"price-{g}"))
+        back_in = bool(form.get(f"back-{g}"))
+        batches = []
+        if back_in and g in tracked:
+            for n, q, e in zip_longest(form.getlist(f"batch-{g}"), form.getlist(f"batch-qty-{g}"),
+                                       form.getlist(f"batch-expiry-{g}"), fillvalue=""):
+                if not (n or "").strip() and not (q or "").strip():
+                    continue
+                if not (n or "").strip() or not _number(q):
+                    return page(f"Give each batch of {l['product_code']} coming back a number and a quantity.")
+                batches.append({"number": n.strip()[:50], "qty": _number(q), "expiry": _date(e)})
+            if not batches:
+                return page(f"{l['product_code']} is tracked by batch: enter the batch it comes back as.")
+        lines.append({"product_code": l["product_code"], "qty": qty, "price": price,
+                      "reason": (form.get(f"reason-{g}") or "Return").strip(), "return": back_in, "batches": batches})
+    credit = {"customer": so["customer_code"], "warehouse": so["warehouse"], "date": _date(form.get("date"), r.today),
+              "reference": (form.get("reference") or "").strip()[:500], "comments": (form.get("comments") or "").strip()[:1024],
+              "lines": lines}
+    try:
+        made = create_credit(_ext()["client"], credit, complete=bool(form.get("complete")))
+    except (OrderError, UnleashedError) as e:
+        return page(_failed(e))
+    _saved("CreditNotes", made)
+    status = made.get("CreditStatus") or made.get("Status")
+    _done("Completed credit note" if status == "Completed" else "Made credit note (parked)", made.get("CreditNumber"))
+    if status == "Completed":
+        _sync_soon()
+    return redirect(url_for("dash.credit_detail", number=made.get("CreditNumber")))
+
+
+@bp.post("/sales/credits/<number>/complete")
+def credit_complete(number):
+    found = reports().credit_note(number) or abort(404)
+    back = url_for("dash.credit_detail", number=number)
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    try:
+        done = complete_credit(_ext()["client"], found["guid"])
+    except (OrderError, UnleashedError) as e:
+        flash(_failed(e), "warn")
+        return redirect(back)
+    _saved("CreditNotes", done)
+    _done("Completed", number)
+    _sync_soon()
+    return redirect(back)
+
+
+@bp.post("/sales/credits/<number>/delete")
+def credit_delete(number):
+    found = reports().credit_note(number) or abort(404)
+    back = url_for("dash.credit_detail", number=number)
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    try:
+        delete_credit(_ext()["client"], found["guid"])
+    except (OrderError, UnleashedError) as e:
+        flash(_failed(e), "warn")
+        return redirect(back)
+    gone = _live("CreditNotes", found["guid"])
+    if gone:
+        _saved("CreditNotes", gone)
+    else:
+        _ext()["store"].delete_document("CreditNotes", found["guid"])
+        _ext()["store_client"].clear_cache()
+    _done("Deleted", number)
+    return redirect(url_for("dash.credit_notes"))
+
+
+# ---------------------------------------------------------------- supplier returns
+
+@bp.get("/purchases/returns")
+def supplier_returns():
+    start, end = _range()
+    rows = sorted(reports().supplier_returns(start, end), key=lambda x: (x["date"] or dt.date.min, x["number"] or ""),
+                  reverse=True)
+    return render_template("dash/supplier_returns.html", rows=[x for x in rows if x["status"] != "Deleted"],
+                           start=start, end=end)
+
+
+@bp.get("/purchases/returns/<number>")
+def supplier_return_detail(number):
+    found = reports().supplier_return(number)
+    if found is None:
+        abort(404)
+    return render_template("dash/supplier_return_detail.html", sr=found, write_problem=_write_problem())
+
+
+def _return_reasons():
+    client = _ext()["client"]
+    try:
+        reasons = [x.get("Reason") for x in client.get_all("SupplierReturnReasons") if x.get("Reason")] if client else []
+    except UnleashedError:
+        reasons = []
+    return reasons or ["Return"]
+
+
+@bp.route("/purchases/<number>/return", methods=["GET", "POST"])
+def purchase_order_return(number):
+    """Send (some of) a completed purchase order's stock back to its supplier."""
+    po = _open_purchase_order(number)
+    back = url_for("dash.purchase_detail", number=number)
+    if po["status"] != "Complete":
+        flash(f"{number} is {po['status'].lower()}: only a completed purchase order can be returned.", "warn")
+        return redirect(back)
+    r = reports()
+    client = _ext()["client"]
+    form = request.form
+    keys, seen = [], {}
+    for l in po["lines"]:  # (product, nth on the order), as Unleashed's return lines follow the order's
+        n = seen.get(l["product_code"], 0)
+        seen[l["product_code"]] = n + 1
+        keys.append((l["product_code"], n))
+    tracked = {l["product_code"] for l in po["lines"] if r.batch_tracked(l["product_code"])}
+    available = {}
+    for code in tracked:
+        try:
+            batches = client.get_all("BatchNumbers", {"ProductCode": code, "WarehouseCode": po["warehouse"]}) if client else []
+        except UnleashedError:
+            batches = []
+        available[code] = [{"number": b.get("Number") or b.get("BatchNumber"), "qty": float(b.get("Quantity") or 0),
+                            "expiry": parse_date(b.get("ExpiryDate"))} for b in batches if float(b.get("Quantity") or 0) > 0]
+
+    def field(name, key):
+        return f"{name}-{key[0]}-{key[1]}"
+
+    def page(error=None):
+        rows = []
+        for l, key in zip(po["lines"], keys):
+            rows.append(dict(l, key=f"{key[0]}-{key[1]}", tracked=l["product_code"] in tracked,
+                             available=available.get(l["product_code"], []),
+                             typed_qty=form.get(field("qty", key), "") if form else "",
+                             typed_price=form.get(field("price", key)) if form else f"{l['unit_price']:g}",
+                             typed_reason=form.get(field("reason", key)) if form else "",
+                             batches=[{"number": n, "qty": q} for n, q in zip_longest(
+                                 form.getlist(field("batch", key)), form.getlist(field("batch-qty", key)), fillvalue="")]
+                             if form else [{"number": "", "qty": ""}]))
+        html = render_template("dash/purchase_return.html", po=po, rows=rows, error=error, reasons=_return_reasons(),
+                               values={"date": form.get("date") if form else r.today.isoformat(),
+                                       "reference": form.get("reference", "") if form else "",
+                                       "comments": form.get("comments", "") if form else "",
+                                       "complete": form.get("complete") if form else "1"},
+                               write_problem=_write_problem())
+        return (html, 400) if error else html
+
+    if request.method == "GET":
+        return page()
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    lines = {}
+    for l, key in zip(po["lines"], keys):
+        qty = _number(form.get(field("qty", key))) or 0
+        received = l["received_qty"] if l["received_qty"] is not None else l["qty"]
+        if qty < 0 or qty > received + 1e-9:
+            return page(f"{l['product_code']}: send back between 0 and the {received:g} received.")
+        if not qty:
+            continue
+        batches = []
+        if l["product_code"] in tracked:
+            for n, q in zip_longest(form.getlist(field("batch", key)), form.getlist(field("batch-qty", key)), fillvalue=""):
+                if not (n or "").strip() and not (q or "").strip():
+                    continue
+                if not (n or "").strip() or not _number(q):
+                    return page(f"Give each batch of {l['product_code']} going back a number and a quantity.")
+                batches.append({"number": n.strip()[:50], "qty": _number(q)})
+            if not batches:
+                return page(f"{l['product_code']} is tracked by batch: choose the batch going back.")
+        lines[key] = {"qty": qty, "price": _number(form.get(field("price", key))) or 0,
+                      "reason": form.get(field("reason", key)) or "Return", "batches": batches}
+    ret = {"date": _date(form.get("date"), r.today), "reference": (form.get("reference") or "").strip()[:500],
+           "comments": (form.get("comments") or "").strip()[:1024], "lines": lines}
+    try:
+        made = create_supplier_return(client, number, ret, complete=bool(form.get("complete")))
+    except (OrderError, UnleashedError) as e:
+        return page(_failed(e))
+    _saved("SupplierReturns", made)
+    done = (made.get("Status") or "").lower() in ("completed", "complete")
+    _done("Completed supplier return" if done else "Made supplier return (parked)", made.get("SupplierReturnNumber"))
+    if done:
+        _sync_soon()
+    return redirect(url_for("dash.supplier_return_detail", number=made.get("SupplierReturnNumber")))
+
+
+@bp.post("/purchases/returns/<number>/complete")
+def supplier_return_complete(number):
+    found = reports().supplier_return(number) or abort(404)
+    back = url_for("dash.supplier_return_detail", number=number)
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    try:
+        done = complete_supplier_return(_ext()["client"], found["guid"])
+    except (OrderError, UnleashedError) as e:
+        flash(_failed(e), "warn")
+        return redirect(back)
+    _saved("SupplierReturns", done)
+    _done("Completed", number)
+    _sync_soon()
+    return redirect(back)
+
+
+@bp.post("/purchases/returns/<number>/delete")
+def supplier_return_delete(number):
+    found = reports().supplier_return(number) or abort(404)
+    back = url_for("dash.supplier_return_detail", number=number)
+    blocked = _blocked(back)
+    if blocked:
+        return blocked
+    try:
+        delete_supplier_return(_ext()["client"], found["guid"])
+    except (OrderError, UnleashedError) as e:
+        flash(_failed(e), "warn")
+        return redirect(back)
+    gone = _live("SupplierReturns", found["guid"])
+    if gone:
+        _saved("SupplierReturns", gone)
+    else:
+        _ext()["store"].delete_document("SupplierReturns", found["guid"])
+        _ext()["store_client"].clear_cache()
+    _done("Deleted", number)
+    return redirect(url_for("dash.supplier_returns"))

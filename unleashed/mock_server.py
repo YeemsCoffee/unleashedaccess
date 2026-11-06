@@ -11,7 +11,7 @@ import math
 from flask import Flask, jsonify, request
 
 from .client import sign
-from . import mock_orders
+from . import mock_orders, mock_returns
 from .mock_data import BATCH_TRACKED, MockDataset
 
 MOCK_API_ID = "mock-api-id"
@@ -273,6 +273,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
         return jsonify(_assembly(ds, a))
 
     mock_orders.register(app, ds, _sales_order, _purchase_order, _body_date, _ms_date_in)
+    mock_returns.register(app, ds, _ms, _body_date, _ms_date_in, _product_ref, _customer_ref, _supplier_ref,
+                          _warehouse_ref)
     return app
 
 

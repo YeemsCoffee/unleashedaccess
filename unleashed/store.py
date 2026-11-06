@@ -21,10 +21,11 @@ REFERENCE_ENDPOINTS = {
     "Products": "Guid", "ProductGroups": "GroupName", "Warehouses": "WarehouseCode",
     "Suppliers": "Guid", "Customers": "Guid", "BillOfMaterials": "Guid",
 }
-DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments", "Assemblies")
+DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments", "Assemblies", "CreditNotes",
+                      "SupplierReturns")
 # Production endpoints: an account (or API user) without access to them still syncs
 # everything else, and the Production pages say why they're empty.
-OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies"}
+OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies", "CreditNotes", "SupplierReturns"}
 # Copied whole rather than from a date window: parked assemblies can be older than any window.
 UNWINDOWED_ENDPOINTS = {"Assemblies"}
 ALL_DATES = "all"  # the stored window of an unwindowed endpoint
@@ -92,6 +93,12 @@ def document_columns(endpoint, d):
         return (d.get("AssemblyNumber"), d.get("AssemblyStatus") or d.get("Status"),
                 _iso(d.get("AssemblyDate")), (d.get("Product") or {}).get("ProductCode"),
                 _iso(d.get("CompletedDate") or d.get("AssemblyDate")))
+    if endpoint == "CreditNotes":
+        return (d.get("CreditNumber"), d.get("CreditStatus") or d.get("Status"), _iso(d.get("CreditDate")),
+                (d.get("Customer") or {}).get("CustomerCode"), _iso(d.get("CreditDate")))
+    if endpoint == "SupplierReturns":
+        return (d.get("SupplierReturnNumber"), d.get("Status"), _iso(d.get("ReturnDate")),
+                (d.get("Supplier") or {}).get("SupplierCode"), _iso(d.get("ReturnDate")))
     return (d.get("AdjustmentNumber"), d.get("Status"), _iso(d.get("AdjustmentDate")), None,
             _iso(d.get("AdjustmentDate")))
 
@@ -473,10 +480,11 @@ class LocalStoreClient:
         if start and window and window != ALL_DATES and start[:10] < window:
             return self._live(endpoint, params,
                               f"Dates before {window} aren't in the shared copy of Unleashed data")
-        status = params.get("orderStatus") or params.get("assemblyStatus")
+        status = params.get("orderStatus") or params.get("assemblyStatus") or params.get("creditStatus") \
+            or params.get("supplierReturnStatus")
         statuses = [s.strip() for s in status.split(",")] if status else None
         number = params.get("orderNumber") or params.get("adjustmentNumber") \
-            or params.get("assemblyNumber")
+            or params.get("assemblyNumber") or params.get("creditNumber") or params.get("supplierReturnNumber")
         party = params.get("supplierCode") or params.get("customerCode")
         if endpoint == "Assemblies":
             party = params.get("productCode")

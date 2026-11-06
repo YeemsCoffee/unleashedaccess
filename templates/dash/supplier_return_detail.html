@@ -1,0 +1,34 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill %}
+{% block title %}{{ sr.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Supplier return {{ sr.number }} {{ status_pill(sr.status) }}</h1>
+  <a href="{{ url_for('dash.supplier_returns') }}">← Supplier returns</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+<section class="card">
+  <dl class="facts">
+    <div><dt>Supplier</dt><dd>{{ sr.supplier_name }} ({{ sr.supplier_code }})</dd></div>
+    <div><dt>Date</dt><dd>{{ sr.date|d }}</dd></div>
+    {% if sr.purchase_order %}<div><dt>Purchase order</dt><dd><a href="{{ url_for('dash.purchase_detail', number=sr.purchase_order) }}">{{ sr.purchase_order }}</a></dd></div>{% endif %}
+    {% if sr.warehouse %}<div><dt>From</dt><dd>{{ sr.warehouse }}</dd></div>{% endif %}
+    {% if sr.reference %}<div><dt>Supplier reference</dt><dd>{{ sr.reference }}</dd></div>{% endif %}
+  </dl>
+  {% if sr.comments %}<p class="instructions">{{ sr.comments }}</p>{% endif %}
+  {% if sr.status == 'Parked' %}
+  <div class="run-actions">
+    <form method="post" action="{{ url_for('dash.supplier_return_complete', number=sr.number) }}"
+      onsubmit='return confirm({{ ("Complete " ~ sr.number ~ "? The stock goes out in Unleashed.")|tojson }})'><button class="btn btn-primary" {{ 'disabled' if write_problem }}>Complete</button></form>
+    <form method="post" action="{{ url_for('dash.supplier_return_delete', number=sr.number) }}"
+      onsubmit='return confirm({{ ("Delete " ~ sr.number ~ " in Unleashed?")|tojson }})'><button class="btn btn-quiet" {{ 'disabled' if write_problem }}>Delete</button></form>
+  </div>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Ordered</th><th class="num">Going back</th><th class="num">Return price</th><th>Reason</th><th class="num">Stock out (cost)</th></tr></thead>
+    <tbody>{% for l in sr.lines %}<tr><td>{{ l.product_code }} <span class="muted">{{ l.description }}</span>{% if sr.batches.get(l.product_code) %}<div class="muted small">Batch {% for b in sr.batches[l.product_code] %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
+      <td class="num">{{ l.ordered|qty }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.price|money }}</td>
+      <td>{{ l.reason or '' }}</td><td class="num">{{ l.value|money if sr.completed else '' }}</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="3">Refund (ex tax)</td><td class="num">{{ sr.subtotal|money }}</td><td></td><td class="num">{{ sr.value|money if sr.completed else '' }}</td></tr></tfoot>
+  </table></div>
+</section>
+{% endblock %}

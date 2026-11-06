@@ -397,6 +397,21 @@ class MockDataset:
         po["Modified"] = dt.date.today()
         return None
 
+    def average_cost(self, code):
+        return self._value[code] / self._qty[code] if self._qty[code] else self.products[code]["BaseCost"] or 0.0
+
+    def stock_qty(self, code):
+        return self._qty[code]
+
+    def move_stock(self, day, kind, number, party, code, qty, value):
+        self._move(day, kind, number, party, code, qty, value)
+
+    def find_batch(self, code, warehouse, number):
+        return self._batch(code, warehouse, number)
+
+    def add_batch(self, code, warehouse, number, qty, expiry):
+        self._add_batch(code, warehouse, number, qty, expiry)
+
     def _batch(self, code, warehouse, number):
         return next((b for b in self.batches if b["ProductCode"] == code and b["WarehouseCode"] == warehouse
                      and b["Number"] == number), None)
@@ -554,7 +569,7 @@ class MockDataset:
                 "Lines": [{"ProductCode": c, "Quantity": q, "WastageQuantity": w} for c, q, w in lines]}
 
     def _next(self, prefix):
-        self._seq[prefix] += 1
+        self._seq[prefix] = self._seq.get(prefix, 0) + 1
         return f"{prefix}-{self._seq[prefix]:08d}"
 
     def _guid(self):

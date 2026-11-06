@@ -1,0 +1,37 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill %}
+{% block title %}{{ c.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Credit note {{ c.number }} {{ status_pill(c.status) }}</h1>
+  <a href="{{ url_for('dash.credit_notes') }}">← Credit notes</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+<section class="card">
+  <dl class="facts">
+    <div><dt>Customer</dt><dd>{{ c.customer_name }} ({{ c.customer_code }})</dd></div>
+    <div><dt>Date</dt><dd>{{ c.date|d }}</dd></div>
+    {% if c.warehouse %}<div><dt>Back into</dt><dd>{{ c.warehouse }}</dd></div>{% endif %}
+    {% if c.reference %}<div><dt>Reference</dt><dd>{% if c.reference.startswith('SO-') %}<a href="{{ url_for('dash.sales_detail', number=c.reference) }}">{{ c.reference }}</a>{% else %}{{ c.reference }}{% endif %}</dd></div>{% endif %}
+  </dl>
+  {% if c.comments %}<p class="instructions">{{ c.comments }}</p>{% endif %}
+  {% if c.status == 'Parked' %}
+  <div class="run-actions">
+    <form method="post" action="{{ url_for('dash.credit_complete', number=c.number) }}"
+      onsubmit='return confirm({{ ("Complete " ~ c.number ~ "? What's marked back into stock goes back in Unleashed.")|tojson }})'><button class="btn btn-primary" {{ 'disabled' if write_problem }}>Complete</button></form>
+    <form method="post" action="{{ url_for('dash.credit_delete', number=c.number) }}"
+      onsubmit='return confirm({{ ("Delete " ~ c.number ~ " in Unleashed?")|tojson }})'><button class="btn btn-quiet" {{ 'disabled' if write_problem }}>Delete</button></form>
+  </div>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Quantity</th><th class="num">Credit price</th><th class="num">Line total</th><th>Reason</th><th>Back into stock</th><th class="num">At cost</th></tr></thead>
+    <tbody>{% for l in c.lines %}<tr><td>{{ l.product_code }} <span class="muted">{{ l.description }}</span>{% if l.batches %}<div class="muted small">Batch {% for b in l.batches %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
+      <td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.price|money }}</td><td class="num">{{ l.line_total|money }}</td>
+      <td>{{ l.reason or '' }}</td><td>{{ 'Yes' if l.returned else 'No' }}</td><td class="num">{{ l.cost|money if l.returned else '' }}</td></tr>{% endfor %}</tbody>
+    <tfoot>
+      <tr><td colspan="3">Sub total</td><td class="num">{{ c.subtotal|money }}</td><td colspan="2"></td><td class="num">{{ c.cost|money }}</td></tr>
+      <tr><td colspan="3">Tax</td><td class="num">{{ c.tax|money }}</td><td colspan="3"></td></tr>
+      <tr><td colspan="3"><strong>Total</strong></td><td class="num"><strong>{{ c.total|money }}</strong></td><td colspan="3"></td></tr>
+    </tfoot>
+  </table></div>
+</section>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import status_pill %}
+{% block title %}Credit notes{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Credit notes</h1>
+  <form method="get" class="filters">
+    <label>From <input type="date" name="start" value="{{ start.isoformat() }}"></label>
+    <label>To <input type="date" name="end" value="{{ end.isoformat() }}"></label>
+    <button class="btn btn-primary">Show</button>
+  </form>
+</div>
+<div class="page-actions"><a href="{{ url_for('dash.sales') }}">← Sales</a></div>
+<p class="muted">Credits and returns from customers. Make one from a completed sales order: open it and choose <strong>Credit / return…</strong>.</p>
+<section class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Date</th><th>Credit</th><th>Customer</th><th>Reference</th><th>Status</th><th class="num">Back into stock (cost)</th><th class="num">Credit (ex tax)</th></tr></thead>
+    <tbody>{% for c in rows %}
+    <tr><td>{{ c.date|d }}</td><td><a href="{{ url_for('dash.credit_detail', number=c.number) }}">{{ c.number }}</a></td>
+      <td>{{ c.customer_name }}</td><td>{{ c.reference or '' }}</td><td>{{ status_pill(c.status) }}</td>
+      <td class="num">{{ c.cost|money }}</td><td class="num">{{ c.subtotal|money }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">No credit notes in these dates.</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}
