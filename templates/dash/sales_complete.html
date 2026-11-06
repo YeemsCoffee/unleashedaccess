@@ -1,0 +1,44 @@
+{% extends "dash/base.html" %}
+{% block title %}Complete {{ so.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Complete sales order {{ so.number }}</h1>
+  <a href="{{ url_for('dash.sales_detail', number=so.number) }}">← Back</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form" onsubmit='return confirm({{ ("Complete " ~ so.number ~ "? The stock goes out in Unleashed, and a completed order can't be changed.")|tojson }})'>
+  <p>{{ so.customer_name }}: completing it takes these out of stock{{ (' in ' ~ so.warehouse) if so.warehouse }} in Unleashed, today.
+    A completed order can't be changed or deleted.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Quantity</th><th class="num">Unit price</th><th class="num">Line total</th></tr></thead>
+    <tbody>{% for l in so.lines %}<tr><td>{{ l.product_code }} <span class="muted">{{ l.description }}</span></td><td class="num">{{ l.qty|qty }}</td>
+      <td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>
+    <tfoot><tr><td colspan="3">Total (with tax)</td><td class="num">{{ so.total|money }}</td></tr></tfoot>
+  </table></div>
+
+  {% for l in tracked %}
+  <h2>Batches of {{ l.product_code }} ({{ l.qty|qty }})</h2>
+  {% set have = available[l.guid] %}
+  {% if not have %}<p class="recon recon-warn">! Unleashed has no batches of {{ l.product_code }} in stock here. Type the batch numbers if you
+    know them.</p>{% endif %}
+  <div data-order-batches>
+    <datalist id="batches-{{ l.guid }}">{% for b in have %}<option value="{{ b.number }}">{{ b.qty|qty }} left{{ (', expires ' ~ (b.expiry|d)) if b.expiry }}</option>{% endfor %}</datalist>
+    {% for c in chosen[l.guid] %}
+    <div class="filters batch-row" data-order-batch>
+      <label>Batch <input name="batch-{{ l.guid }}" value="{{ c.number }}" list="batches-{{ l.guid }}" maxlength="50"></label>
+      <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" value="{{ ('%g'|format(c.qty)) if c.qty else '' }}" min="0" step="any"></label>
+    </div>{% endfor %}
+    <template data-order-batch-template><div class="filters batch-row" data-order-batch>
+      <label>Batch <input name="batch-{{ l.guid }}" list="batches-{{ l.guid }}" maxlength="50"></label>
+      <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" min="0" step="any"></label></div></template>
+    <button type="button" class="btn btn-quiet" data-add-order-batch>+ Another batch</button>
+  </div>
+  <p class="muted small">Filled in first-expiring first from what's in stock{% if have %}:
+    {% for b in have %}{{ b.number }} ({{ b.qty|qty }}{{ (', expires ' ~ (b.expiry|d)) if b.expiry }}){{ ', ' if not loop.last }}{% endfor %}{% endif %}.</p>
+  {% endfor %}
+
+  <div class="run-actions"><button class="btn btn-primary" {{ 'disabled' if write_problem }}>Complete {{ so.number }}</button>
+    <a class="btn" href="{{ url_for('dash.sales_detail', number=so.number) }}">Cancel</a></div>
+</form>
+{% endblock %}

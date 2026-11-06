@@ -1,0 +1,76 @@
+{% extends "dash/base.html" %}
+{% set sales = kind == 'sales' %}
+{% set noun = 'sales order' if sales else 'purchase order' %}
+{% block title %}{{ ('Edit ' ~ found.number) if found else ('New ' ~ noun) }}{% endblock %}
+{% block content %}
+{% macro line_row(l, products) -%}
+  <tr data-line>
+    <td><input type="hidden" name="line_guid" value="{{ l.guid or '' }}">
+      <select name="product" class="line-product" aria-label="Product">
+        <option value="">Choose a product…</option>
+        {% for p in products %}<option value="{{ p.code }}" data-price="{{ p.price if p.price is not none else '' }}" data-unit="{{ p.unit or '' }}" {{ 'selected' if p.code == l.product_code }}>{{ p.code }} · {{ p.name }}</option>{% endfor %}
+      </select></td>
+    <td class="num"><input class="qty-input" type="number" name="qty" value="{{ ('%g'|format(l.qty)) if l.qty else '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity"></td>
+    <td class="num"><input class="qty-input" type="number" name="price" value="{{ ('%g'|format(l.unit_price)) if l.unit_price is not none else '' }}" min="0" step="any" inputmode="decimal" aria-label="Unit price"></td>
+    <td class="num nowrap" data-line-total></td>
+    <td><button type="button" class="btn btn-quiet" data-remove-line aria-label="Remove this line">✕</button></td>
+  </tr>
+{%- endmacro %}
+<div class="page-head">
+  <h1>{{ ('Edit ' ~ noun ~ ' ' ~ found.number) if found else ('New ' ~ noun) }}</h1>
+  <a href="{{ url_for('dash.sales_detail' if sales else 'dash.purchase_detail', number=found.number) if found else url_for('dash.sales' if sales else 'dash.purchases') }}">← {{ 'Back' if found else ('Sales' if sales else 'Purchases') }}</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form order-form" data-order-form>
+  <div class="filters new-order">
+    {% if sales %}
+    <label class="wide">Customer
+      {% if found %}<input value="{{ found.customer_name }} ({{ found.customer_code }})" disabled>
+      {% else %}<select name="customer" required><option value="">Choose…</option>
+        {% if stores %}<optgroup label="Stores">{% for code, name in parties if code in stores %}<option value="{{ code }}" {{ 'selected' if code == values.customer }}>{{ name }}</option>{% endfor %}</optgroup>
+        <optgroup label="Other customers">{% endif %}
+        {% for code, name in parties if code not in stores %}<option value="{{ code }}" {{ 'selected' if code == values.customer }}>{{ name }}</option>{% endfor %}
+        {% if stores %}</optgroup>{% endif %}
+      </select>{% endif %}</label>
+    {% else %}
+    <label class="wide">Supplier
+      {% if found %}<input value="{{ found.supplier_name }} ({{ found.supplier_code }})" disabled>
+      {% else %}<select name="supplier" required><option value="">Choose…</option>
+        {% for code, name in parties %}<option value="{{ code }}" {{ 'selected' if code == values.supplier }}>{{ name }}</option>{% endfor %}
+      </select>{% endif %}</label>
+    {% endif %}
+    <label>{{ 'Ship from' if sales else 'Deliver to' }}
+      <select name="warehouse">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == values.warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+  </div>
+  <div class="filters new-order">
+    <label>Order date <input type="date" name="order_date" value="{{ values.order_date }}" required></label>
+    {% if sales %}<label>Required by <input type="date" name="required_date" value="{{ values.required_date }}"></label>
+    {% else %}<label>Delivery date <input type="date" name="delivery_date" value="{{ values.delivery_date }}"></label>{% endif %}
+    <label>{{ 'Customer reference' if sales else 'Supplier reference' }} <input name="reference" value="{{ values.reference }}" maxlength="500" placeholder="Optional"></label>
+  </div>
+
+  <h2>Products</h2>
+  <div class="table-wrap"><table class="order-lines">
+    <thead><tr><th>Product</th><th class="num">Quantity</th><th class="num">Unit price</th><th class="num">Line total</th><th></th></tr></thead>
+    <tbody data-lines>{% for l in lines %}{{ line_row(l, product_options) }}{% endfor %}</tbody>
+    <tfoot><tr><td colspan="3">Sub total <span class="muted small">(before tax)</span></td><td class="num" data-subtotal></td><td></td></tr></tfoot>
+  </table></div>
+  <template id="order-line-template">{{ line_row({'guid': None, 'product_code': '', 'qty': None, 'unit_price': None}, product_options) }}</template>
+  <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
+  <p class="muted small">Picking a product fills in its {{ 'default sell' if sales else 'default purchase' }} price from Unleashed; change it if
+    this order's is different. Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
+    empty are removed.{% endif %}</p>
+
+  <label class="block">Comments <textarea name="comments" rows="2" maxlength="{{ 2048 if sales else 1024 }}">{{ values.comments }}</textarea></label>
+  {% if not sales and (not found or found.status == 'Parked') %}
+  <label class="check-field"><input type="checkbox" name="place" value="1" {{ 'checked' if values.place }}> Place it (send it to the
+    supplier). Unticked, it's saved as parked, a draft.</label>{% endif %}
+  <div class="run-actions">
+    <button class="btn btn-primary" {{ 'disabled' if write_problem }}>{{ 'Save' if found else ('Make the ' ~ noun) }}</button>
+    <a class="btn" href="{{ url_for('dash.sales_detail' if sales else 'dash.purchase_detail', number=found.number) if found else url_for('dash.sales' if sales else 'dash.purchases') }}">Cancel</a>
+  </div>
+  {% if sales and not found %}<p class="muted small">It's made parked. Complete it on its page when it goes out: that takes the stock
+    out in Unleashed.</p>{% endif %}
+</form>
+{% endblock %}

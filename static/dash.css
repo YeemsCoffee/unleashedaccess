@@ -429,6 +429,14 @@ td.wrap { white-space: normal; min-width: 280px; }
 .loc-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .loc-hidden-count { margin-left: 6px; }
 .loc-fold-all { display: flex; gap: 4px; }
+.order-lines select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface-1); color: var(--text-primary); width: 100%; min-width: 220px; max-width: 520px; }
+.order-lines td { vertical-align: middle; }
+.order-lines .qty-input { width: 100px; }
+.batch-row { margin: 6px 0; }
+.receive-line { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.receive-head { margin-bottom: 6px; }
+.receive-batches { margin: 6px 0 0 16px; }
 .where-fields { display: grid; gap: 12px; margin-bottom: 6px; }
 .where-location, .where-equipment { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-secondary); }
 .loc-cascade { display: flex; flex-wrap: wrap; gap: 8px; }

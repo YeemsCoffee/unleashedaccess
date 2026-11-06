@@ -257,6 +257,9 @@ class UnleashedClient:
     def put(self, endpoint, body):
         return self._write("PUT", endpoint, body)
 
+    def delete(self, endpoint):
+        return self._write("DELETE", endpoint, None)
+
     def _write(self, method, endpoint, body):
         """One POST/PUT with a JSON body. Unleashed signs the query string, empty here.
         Only a rate limit is retried: anything else may already have taken effect."""
@@ -275,7 +278,8 @@ class UnleashedClient:
         status, text, error = None, None, None
         try:
             for wait in RETRY_WAITS:
-                status, text = self.transport.send(method, path, "", headers, json.dumps(body or {}))
+                status, text = self.transport.send(method, path, "", headers,
+                                                   None if method == "DELETE" else json.dumps(body or {}))
                 if status != 429 or wait is None:
                     break
                 time.sleep(_retry_after(text, wait))

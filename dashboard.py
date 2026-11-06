@@ -171,6 +171,11 @@ _PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash
             "dash.production_picture": "dash.production_orders",
             "dash.production_check": "dash.production_orders",
             "dash.cogs_unaccounted": "dash.cogs_page",
+            "dash.sales_order_new": "dash.sales", "dash.sales_order_edit": "dash.sales",
+            "dash.sales_order_complete": "dash.sales", "dash.sales_order_delete": "dash.sales",
+            "dash.purchase_order_new": "dash.purchases", "dash.purchase_order_edit": "dash.purchases",
+            "dash.purchase_order_receive": "dash.purchases", "dash.purchase_order_complete": "dash.purchases",
+            "dash.purchase_order_delete": "dash.purchases",
             "dash.team_add": "dash.team", "dash.team_update": "dash.team",
             "dash.profiles_save": "dash.profiles", "dash.profiles_delete": "dash.profiles",
             "maint.task": "maint.tasks", "maint.task_new": "maint.tasks", "maint.task_edit": "maint.tasks",
@@ -1494,6 +1499,7 @@ def init_app(app):
         "source_error": source_error,
     }
     app.extensions["production_runs"] = ProductionRuns(db)
+    import order_pages  # noqa: F401 (adds making, changing, completing and receiving orders)
     app.register_blueprint(bp)
 
     if syncer is not None:

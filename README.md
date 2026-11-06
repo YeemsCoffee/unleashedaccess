@@ -53,8 +53,8 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Finance → COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
 | Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date, filterable by product group |
 | Warehouse → Valuation | Stock valuation by product group |
-| Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail |
-| Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail |
+| Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail; make, change, receive (with batches and expiry), complete and delete purchase orders |
+| Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail; make, change, complete (picking batches) and delete sales orders |
 | Warehouse → Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |
 | Warehouse → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
 | Warehouse → Adjustments | Stock adjustment enquiry |
@@ -79,6 +79,31 @@ admins. Which tabs each person opens depends on their access profile (below).
 
 **Settings** is only shown to admins (with team accounts on). Every report has
 **Export CSV**.
+
+## Orders made in Core
+
+Sales and purchase orders are made and worked in Core, so people don't need an Unleashed
+login. Unleashed stays the system of record: Core writes to it through the API (as the API
+user; Core's message says who did it) and keeps the shared copy up to date straight away.
+
+- **Sales orders** (Warehouse → Sales → + New sales order): customer (stores first), the
+  warehouse it ships from, dates, reference, comments and products. A product's default sell
+  price fills in and can be changed; tax comes from the customer's tax in Unleashed. It's made
+  parked. On its page: **Edit** (lines added, changed or removed; the customer can't change),
+  **Complete…** (the stock goes out; batch-tracked products' batches are filled in first
+  expiring first from what's in stock, and can be changed) and **Delete** (parked only).
+- **Purchase orders** (Warehouse → Purchases → + New purchase order): supplier, the
+  warehouse it's delivered to, dates, reference, products at their default purchase price,
+  placed or parked. **Receive…** enters how much of each product arrived, with batch numbers
+  and expiry dates for batch-tracked products, and can complete the order when everything
+  arrived; a part delivery is received and the order completed later.
+- Unleashed leaves the arithmetic to the caller: line totals and tax are rounded to the cent
+  as it checks them. Every change is read back before the next step: an order is completed
+  or received only once Unleashed has kept its lines (and batches), and if it didn't, the
+  page says so and nothing moves. Orders in a currency other than the account's are left to
+  Unleashed (they need an exchange rate).
+- Purchase cost lines (freight) and orders for several warehouses' stock at once are still
+  entered in Unleashed.
 
 ## Access profiles
 
@@ -600,6 +625,7 @@ unleashedaccess/
 ├── access.py           # access profiles: the tabs each kind of account opens
 ├── production_runs.py  # operating procedures (with step pictures) and what's recorded at each step
 ├── maintenance.py      # the Maintenance tab: overview, tasks, locations, calendar, history
+├── order_pages.py      # Making, changing, completing and receiving sales and purchase orders
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
 ├── maintenance_assets.py # equipment, its moves, counters and readings, files
@@ -618,6 +644,8 @@ unleashedaccess/
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
+│   ├── order_writes.py # sales and purchase orders written to Unleashed, each change read back
+│   ├── mock_orders.py  # the mock server's order writes (as Unleashed's API reference describes)
 │   ├── production.py   # production orders, BOM costing, material requirements, usage
 │   ├── assembly_writes.py # create production orders in Unleashed; close them out
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)

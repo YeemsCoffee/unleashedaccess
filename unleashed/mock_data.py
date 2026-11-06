@@ -44,8 +44,8 @@ PRODUCTS = [
     ("MATCHA-QT", "Matcha Concentrate 32 oz", "House-made", "Each", None, None, 32.00, 0.5),
 ]
 
-# Made products Unleashed tracks by batch number (and expiry).
-BATCH_TRACKED = {"VSC-HG"}
+# Products Unleashed tracks by batch number (and expiry): one made, one bought.
+BATCH_TRACKED = {"VSC-HG", "CRM-HVY-HG"}
 
 # bill number, made product, [(component, qty per unit, wastage per unit)], batch days
 BILLS_OF_MATERIALS = [
@@ -114,6 +114,7 @@ class MockDataset:
         self.sales_orders = []
         self.stock_adjustments = []
         self.assemblies = []
+        self.batches = []  # batch-tracked stock: Number, ProductCode, WarehouseCode, Quantity, ExpiryDate
         self.ledger = []  # every stock movement, chronological
 
         # engine state
@@ -193,6 +194,15 @@ class MockDataset:
                     if po:
                         pending_receipts.append(po)
             day += dt.timedelta(days=1)
+
+        # What's in stock of each batch-tracked product, in two batches.
+        warehouse = next(w["WarehouseCode"] for w in self.warehouses if w["IsDefault"])
+        for code in sorted(BATCH_TRACKED):
+            qty = math.floor(self._qty[code])
+            first = math.ceil(qty * 0.6)
+            for suffix, n, days in (("A", first, 5), ("B", qty - first, 12)):
+                if n > 0:
+                    self._add_batch(code, warehouse, f"{code}-{suffix}", n, self.today + dt.timedelta(days=days))
 
         # anything not yet received stays Placed (open on-order)
         for po in pending_receipts:
@@ -313,7 +323,94 @@ class MockDataset:
                 return line["ProductCode"]
         self._complete(asm, self.today)
         asm["Modified"] = dt.date.today()  # Unleashed stamps changes with the real clock
+        for b in asm.get("Batches") or []:
+            self._add_batch(asm["ProductCode"], asm.get("DestinationWarehouse") or "GDN", b["Number"],
+                            b["Quantity"], b.get("ExpiryDate"))
         return None
+
+    # ------------------------------------------------------------ orders written through the API
+
+    def next_number(self, prefix):
+        return self._next(prefix)
+
+    def lines_with_guids(self, doc):
+        """A document's lines, each with a Guid (simulated ones get one from the document's)."""
+        for i, line in enumerate(doc["Lines"], 1):
+            line.setdefault("Guid", f"{doc['Guid'][:-4]}{i:04d}")
+        return doc["Lines"]
+
+    def sell(self, so):
+        """Complete a sales order today: its stock goes out at average cost, from its batches
+        for a batch-tracked product. Returns why it can't be, or None once done."""
+        for line in so["Lines"]:
+            code, qty = line["ProductCode"], line["OrderQuantity"]
+            if self._qty[code] + 1e-9 < qty:
+                return f"Not enough stock of {code} to complete the order"
+            if code in BATCH_TRACKED:
+                given = line.get("BatchNumbers") or []
+                if abs(sum(b["Quantity"] for b in given) - qty) > 1e-9:
+                    return f"Batch numbers are required for {code}"
+                for b in given:
+                    have = self._batch(code, so.get("WarehouseCode") or "GDN", b["Number"])
+                    if have is None or have["Quantity"] + 1e-9 < b["Quantity"]:
+                        return f"Batch {b['Number']} of {code} doesn't have {b['Quantity']:g}"
+        for line in so["Lines"]:
+            code, qty = line["ProductCode"], line["OrderQuantity"]
+            avg = self._value[code] / self._qty[code] if self._qty[code] else 0.0
+            line["AverageLandedPriceAtTimeOfSale"] = round(avg, 4)
+            self._move(self.today, "Sale", so["OrderNumber"], so["CustomerCode"], code, -qty, -qty * avg)
+            for b in line.get("BatchNumbers") or []:
+                self._batch(code, so.get("WarehouseCode") or "GDN", b["Number"])["Quantity"] -= b["Quantity"]
+        so["OrderStatus"], so["CompletedDate"], so["Modified"] = "Completed", self.today, dt.date.today()
+        return None
+
+    def receive(self, po, complete=False):
+        """Receipt each line's ReceiptQuantity not yet received (all of it when completing),
+        today, at its unit price, with its pending batches. Returns why it can't be, or None."""
+        lines = self.lines_with_guids(po)
+        for line in lines:
+            want = line["OrderQuantity"] if complete and line.get("ReceiptQuantity") is None \
+                else (line.get("ReceiptQuantity") or 0)
+            new = want - (line.get("Received") or 0)
+            if line["ProductCode"] in BATCH_TRACKED and new > 1e-9 and abs(
+                    sum(b["Quantity"] for b in line.get("PendingBatchNumbers") or []) - new) > 1e-9:
+                return f"Batch numbers are required for {line['ProductCode']}"
+        for line in lines:
+            want = line["OrderQuantity"] if complete and line.get("ReceiptQuantity") is None \
+                else (line.get("ReceiptQuantity") or 0)
+            new = want - (line.get("Received") or 0)
+            if new > 1e-9:
+                code = line["ProductCode"]
+                self._move(self.today, "Purchase", po["OrderNumber"], po["SupplierCode"], code, new,
+                           new * line["UnitPrice"])
+                self._on_order[code] -= new
+                for b in line.get("PendingBatchNumbers") or []:
+                    self._add_batch(code, po.get("WarehouseCode") or "GDN", b["Number"], b["Quantity"],
+                                    b.get("ExpiryDate"))
+                line["PendingBatchNumbers"] = []
+                line["Received"] = want
+                line["ReceiptQuantity"] = want
+        po["ReceivedDate"] = self.today
+        po["OrderStatus"] = "Complete" if complete else "Receipted"
+        if complete:
+            po["CompletedDate"] = self.today
+        po["Modified"] = dt.date.today()
+        return None
+
+    def _batch(self, code, warehouse, number):
+        return next((b for b in self.batches if b["ProductCode"] == code and b["WarehouseCode"] == warehouse
+                     and b["Number"] == number), None)
+
+    def _add_batch(self, code, warehouse, number, qty, expiry):
+        found = self._batch(code, warehouse, number)
+        if found:
+            found["Quantity"] += qty
+            found["OriginalQty"] += qty
+        else:
+            self.batches.append({"Guid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"batch:{code}:{warehouse}:{number}")),
+                                 "Number": number, "ProductCode": code,
+                                 "WarehouseCode": warehouse, "Quantity": float(qty), "OriginalQty": float(qty),
+                                 "ExpiryDate": expiry})
 
     def _complete(self, asm, day):
         made, total = asm["ProductCode"], 0.0

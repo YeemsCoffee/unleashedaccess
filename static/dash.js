@@ -538,3 +538,72 @@ function fromTemplate(id, values) {
     build(original.value);
   });
 })();
+
+/* Sales and purchase order forms: product lines added and removed without saving first,
+   a product's default price filled in when it's picked (unless one's typed), and line totals
+   and the sub total as it's typed. Batch rows on the complete and receive pages. */
+(function () {
+  "use strict";
+  var form = document.querySelector("[data-order-form]");
+  if (!form) return;
+  var body = form.querySelector("[data-lines]"), subtotal = form.querySelector("[data-subtotal]");
+  var money = function (x) {
+    return "$" + x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  function sum() {
+    var total = 0;
+    body.querySelectorAll("[data-line]").forEach(function (row) {
+      var qty = parseFloat(row.querySelector("[name=qty]").value) || 0;
+      var price = parseFloat(row.querySelector("[name=price]").value) || 0;
+      var line = Math.round(qty * price * 100) / 100;
+      row.querySelector("[data-line-total]").textContent = qty && price ? money(line) : "";
+      total += line;
+    });
+    subtotal.textContent = money(total);
+  }
+  body.addEventListener("change", function (e) {
+    if (!e.target.matches(".line-product")) return;
+    var opt = e.target.selectedOptions[0], price = e.target.closest("[data-line]").querySelector("[name=price]");
+    if (opt && opt.dataset.price !== "" && !price.value) {
+      var p = +opt.dataset.price;
+      price.value = Math.abs(p * 100 - Math.round(p * 100)) < 1e-9 ? p.toFixed(2) : String(p);
+    }
+    var qty = e.target.closest("[data-line]").querySelector("[name=qty]");
+    if (opt && opt.value && !qty.value) qty.focus();
+    sum();
+  });
+  body.addEventListener("input", sum);
+  body.addEventListener("click", function (e) {
+    var remove = e.target.closest("[data-remove-line]");
+    if (!remove) return;
+    var row = remove.closest("[data-line]");
+    if (body.querySelectorAll("[data-line]").length > 1) {
+      row.remove();
+    } else {
+      row.querySelectorAll("input:not([type=hidden]), select").forEach(function (el) { el.value = ""; });
+      row.querySelector("[name=line_guid]").value = "";
+    }
+    sum();
+  });
+  form.querySelector("[data-add-line]").addEventListener("click", function () {
+    var row = fromTemplate("order-line-template", {});
+    body.appendChild(row);
+    row.querySelector("select").focus();
+  });
+  sum();
+})();
+
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-order-batches]").forEach(function (box) {
+    var add = box.querySelector("[data-add-order-batch]"), template = box.querySelector("[data-order-batch-template]");
+    if (!add || !template) return;
+    add.addEventListener("click", function () {
+      var holder = document.createElement("template");
+      holder.innerHTML = template.innerHTML.trim();
+      var row = holder.content.firstElementChild;
+      add.before(row);
+      row.querySelector("input").focus();
+    });
+  });
+})();

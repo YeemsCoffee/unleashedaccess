@@ -11,6 +11,7 @@
       {% for s in suppliers %}<option value="{{ s.SupplierCode }}" {{ 'selected' if s.SupplierCode == supplier }}>{{ s.SupplierName }}</option>{% endfor %}</select></label>
   {% endcall %}
 </div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.purchase_order_new') }}">+ New purchase order</a></div>
 <p class="muted">Filtered by order date. COGS counts purchases by <em>received</em> date.</p>
 
 <section class="tiles">

@@ -11,10 +11,21 @@
     <div><dt>Customer</dt><dd>{{ so.customer_name }} ({{ so.customer_code }})</dd></div>
     <div><dt>Order date</dt><dd>{{ so.order_date|d }}</dd></div>
     <div><dt>Completed</dt><dd>{{ so.completed_date|d }}</dd></div>
+    {% if so.required_date %}<div><dt>Required by</dt><dd>{{ so.required_date|d }}</dd></div>{% endif %}
+    {% if so.warehouse %}<div><dt>Ships from</dt><dd>{{ so.warehouse }}</dd></div>{% endif %}
+    {% if so.reference %}<div><dt>Customer reference</dt><dd>{{ so.reference }}</dd></div>{% endif %}
   </dl>
+  {% if so.comments %}<p class="instructions">{{ so.comments }}</p>{% endif %}
+  {% if so.status in ('Parked', 'Placed', 'Backordered') %}
+  <div class="run-actions">
+    <a class="btn btn-primary" href="{{ url_for('dash.sales_order_complete', number=so.number) }}">Complete…</a>
+    <a class="btn" href="{{ url_for('dash.sales_order_edit', number=so.number) }}">Edit</a>
+    {% if so.status == 'Parked' %}<form method="post" action="{{ url_for('dash.sales_order_delete', number=so.number) }}"
+      onsubmit='return confirm({{ ("Delete " ~ so.number ~ " in Unleashed?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>{% endif %}
+  </div>{% endif %}
   <div class="table-wrap"><table>
     <thead><tr><th>Product</th><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Line total</th><th class="num">Avg landed cost</th><th class="num">Line cost</th></tr></thead>
-    <tbody>{% for l in so.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td><td class="num">{{ l.unit_cost|money }}</td><td class="num">{{ l.cost|money }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for l in so.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}{% if l.batches %}<div class="muted small">Batch {% for b in l.batches %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td><td class="num">{{ l.unit_cost|money }}</td><td class="num">{{ l.cost|money }}</td></tr>{% endfor %}</tbody>
     <tfoot>
       <tr><td colspan="4">Sub total</td><td class="num">{{ so.subtotal|money }}</td><td></td><td class="num">{{ so.cost|money }}</td></tr>
       <tr><td colspan="4">Tax</td><td class="num">{{ so.tax|money }}</td><td colspan="2"></td></tr>

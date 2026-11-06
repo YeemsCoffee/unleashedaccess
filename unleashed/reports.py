@@ -251,7 +251,7 @@ class Reports:
                                    "field": "PurchaseOrderLines"})
                 continue
             goods += total
-            lines.append({"product_code": code, "description": prod.get("ProductDescription"),
+            lines.append({"guid": l.get("Guid"), "product_code": code, "description": prod.get("ProductDescription"),
                           "qty": l.get("OrderQuantity") or 0,
                           "received_qty": l.get("ReceiptQuantity"),
                           "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
@@ -268,7 +268,8 @@ class Reports:
         return {
             "guid": i.get("Guid"), "number": i["OrderNumber"], "status": i.get("OrderStatus"),
             "order_date": parse_date(i.get("OrderDate")),
-            "required_date": parse_date(i.get("RequiredDate")),
+            "required_date": parse_date(i.get("DeliveryDate") or i.get("RequiredDate")),
+            "reference": i.get("SupplierRef"), "comments": i.get("Comments"),
             "received_date": parse_date(i.get("ReceivedDate") or i.get("CompletedDate")),
             "received_at": parse_moment(i.get("ReceivedDate") or i.get("CompletedDate")),
             "received_timed": has_time(i.get("ReceivedDate") or i.get("CompletedDate")),
@@ -336,8 +337,10 @@ class Reports:
             prod = l.get("Product") or {}
             qty = l.get("OrderQuantity") or 0
             unit_cost = l.get("AverageLandedPriceAtTimeOfSale") or 0
-            lines.append({"product_code": prod.get("ProductCode"),
+            lines.append({"guid": l.get("Guid"), "product_code": prod.get("ProductCode"),
                           "description": prod.get("ProductDescription"),
+                          "batches": [{"number": b.get("Number"), "qty": b.get("Quantity")}
+                                      for b in l.get("BatchNumbers") or []],
                           "qty": qty, "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
                           "line_total": _first(l.get("BCLineTotal"), l.get("LineTotal")),
                           "unit_cost": unit_cost, "cost": qty * unit_cost})
@@ -350,6 +353,8 @@ class Reports:
             "completed_date": parse_date(i.get("CompletedDate")),
             "completed_at": parse_moment(i.get("CompletedDate") or i.get("OrderDate")),
             "completed_timed": has_time(i.get("CompletedDate")),
+            "required_date": parse_date(i.get("RequiredDate")),
+            "reference": i.get("CustomerRef"), "comments": i.get("Comments"),
             "warehouse": _warehouse_code(i.get("Warehouse")),
             "customer_code": customer.get("CustomerCode"),
             "customer_name": customer.get("CustomerName"),

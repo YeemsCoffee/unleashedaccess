@@ -1,0 +1,44 @@
+{% extends "dash/base.html" %}
+{% block title %}Receive {{ po.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Receive purchase order {{ po.number }}</h1>
+  <a href="{{ url_for('dash.purchase_detail', number=po.number) }}">← Back</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form" onsubmit='return confirm({{ ("Receive " ~ po.number ~ " into stock in Unleashed?")|tojson }})'>
+  <p>From {{ po.supplier_name }}. What arrived goes into stock{{ (' in ' ~ po.warehouse) if po.warehouse }} in Unleashed, today, at the
+    prices on the order.</p>
+  {% for l in rows %}
+  <div class="receive-line">
+    <div class="receive-head"><strong>{{ l.product_code }}</strong> {{ l.description }}
+      <span class="muted small">· ordered {{ l.qty|qty }} at {{ l.unit_price|money }}</span></div>
+    <div class="filters">
+      <label>Arrived <input class="qty-input" type="number" name="qty-{{ l.guid }}" value="{{ l.typed }}" min="0" step="any" required></label>
+    </div>
+    {% if l.tracked %}
+    <div data-order-batches class="receive-batches">
+      <p class="muted small">Tracked by batch: the batch numbers and expiry of what arrived.</p>
+      {% for b in l.batches %}
+      <div class="filters batch-row" data-order-batch>
+        <label>Batch <input name="batch-{{ l.guid }}" value="{{ b.number }}" maxlength="50"></label>
+        <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" value="{{ b.qty if b.qty else l.typed }}" min="0" step="any"></label>
+        <label>Expires <input type="date" name="batch-expiry-{{ l.guid }}" value="{{ b.expiry or '' }}"></label>
+      </div>{% endfor %}
+      <template data-order-batch-template><div class="filters batch-row" data-order-batch>
+        <label>Batch <input name="batch-{{ l.guid }}" maxlength="50"></label>
+        <label>Quantity <input class="qty-input" type="number" name="batch-qty-{{ l.guid }}" min="0" step="any"></label>
+        <label>Expires <input type="date" name="batch-expiry-{{ l.guid }}"></label></div></template>
+      <button type="button" class="btn btn-quiet" data-add-order-batch>+ Another batch</button>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <label class="check-field"><input type="checkbox" name="complete" value="1" {{ 'checked' if complete }}> Everything ordered arrived:
+    complete the order too</label>
+  <p class="muted small">Untick it to receive part of a delivery; complete the order from its page later. A completed order can't be changed.</p>
+  <div class="run-actions"><button class="btn btn-primary" {{ 'disabled' if write_problem }}>Receive</button>
+    <a class="btn" href="{{ url_for('dash.purchase_detail', number=po.number) }}">Cancel</a></div>
+</form>
+{% endblock %}

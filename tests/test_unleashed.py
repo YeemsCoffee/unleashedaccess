@@ -465,6 +465,125 @@ class AccountQuirkTests(unittest.TestCase):
         self.assertIn("on active adjustments have no change fields", check)
 
 
+class OrderPageTests(unittest.TestCase):
+    """Sales and purchase orders made, changed, completed and received from Core, written to
+    (the mock) Unleashed and kept in the shared copy."""
+
+    def setUp(self):
+        self.app = make_app(self, UNLEASHED_MODE="mock", TODAY=TODAY)
+        self.c = self.app.test_client()
+        ext = self.app.extensions["unleashed"]
+        self.ds = ext["client"].transport.app.config["DATASET"]
+        self.reports = ext["reports"]
+
+    def _post(self, path, **data):
+        res = self.c.post(path, data=data)
+        self.assertIn(res.status_code, (302, 303), res.get_data(as_text=True)[-3000:])
+        return res
+
+    def test_a_sales_order_is_made_changed_and_completed_with_its_batches(self):
+        form = self.c.get("/sales/new").get_data(as_text=True)
+        for text in ("Mock Wholesale Cafe", 'value="COF-ESP-5LB" data-price="160.0"', "+ Add a product"):
+            self.assertIn(text, form)
+        self.assertIn("Choose the customer", self.c.post("/sales/new", data={"product": "COF-ESP-5LB", "qty": "1",
+                                                                            "price": "1"}).get_data(as_text=True))
+        res = self._post("/sales/new", customer="WHSL-01", warehouse="GDN", order_date=TODAY.isoformat(),
+                         reference="PO 55", comments="Back door", line_guid=["", "", ""],
+                         product=["COF-ESP-5LB", "CRM-HVY-HG", ""], qty=["2", "3", ""], price=["120", "28", ""])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        page = self.c.get(f"/sales/{number}").get_data(as_text=True)
+        for text in ("Complete…", "Edit", "Delete", "PO 55", "Back door", "Parked"):
+            self.assertIn(text, page)
+        so = self.reports.sales_order(number)  # in the shared copy straight away
+        self.assertEqual((so["subtotal"], so["tax"], so["total"]), (324.0, 30.78, 354.78))  # 9.5% sales tax
+
+        # Changing it: a quantity and price, a line added, a line removed.
+        espresso = next(l for l in so["lines"] if l["product_code"] == "COF-ESP-5LB")
+        cream = next(l for l in so["lines"] if l["product_code"] == "CRM-HVY-HG")
+        self.assertIn('value="COF-ESP-5LB" data-price', self.c.get(f"/sales/{number}/edit").get_data(as_text=True))
+        self._post(f"/sales/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(), reference="PO 56",
+                   comments="", line_guid=[espresso["guid"], cream["guid"], ""],
+                   product=["COF-ESP-5LB", "CRM-HVY-HG", "MILK-OAT-QT"], qty=["3", "3", "4"], price=["115", "28", "9.5"])
+        so = self.reports.sales_order(number)
+        self.assertEqual(sorted((l["product_code"], l["qty"], l["unit_price"]) for l in so["lines"]),
+                         [("COF-ESP-5LB", 3, 115), ("CRM-HVY-HG", 3, 28), ("MILK-OAT-QT", 4, 9.5)])
+        self.assertEqual(so["reference"], "PO 56")
+        oat = next(l for l in so["lines"] if l["product_code"] == "MILK-OAT-QT")
+        self._post(f"/sales/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(),
+                   line_guid=[espresso["guid"], cream["guid"], oat["guid"]],
+                   product=["COF-ESP-5LB", "CRM-HVY-HG", ""], qty=["3", "3", ""], price=["115", "28", ""])
+        self.assertEqual(len(self.reports.sales_order(number)["lines"]), 2)
+
+        # Completing: the batch-tracked cream's batches, first expiring first, then the stock goes out.
+        page = self.c.get(f"/sales/{number}/complete").get_data(as_text=True)
+        self.assertIn("Batches of CRM-HVY-HG", page)
+        self.assertIn('value="CRM-HVY-HG-A"', page)
+        bad = self.c.post(f"/sales/{number}/complete", data={f"batch-{cream['guid']}": "CRM-HVY-HG-A",
+                                                              f"batch-qty-{cream['guid']}": "2"})
+        self.assertIn("add up to 2, not the 3", bad.get_data(as_text=True))
+        before = self.ds.stock_as_at("COF-ESP-5LB")[0]
+        self._post(f"/sales/{number}/complete", **{f"batch-{cream['guid']}": "CRM-HVY-HG-A",
+                                                   f"batch-qty-{cream['guid']}": "3"})
+        so = self.reports.sales_order(number)
+        self.assertEqual(so["status"], "Completed")
+        self.assertEqual(self.ds.stock_as_at("COF-ESP-5LB")[0], before - 3)
+        self.assertEqual(next(b for b in self.ds.batches if b["Number"] == "CRM-HVY-HG-A")["Quantity"],
+                         self.ds.batches[0]["OriginalQty"] - 3)
+        page = self.c.get(f"/sales/{number}").get_data(as_text=True)
+        self.assertNotIn("Complete…", page)
+        self.assertIn("Batch CRM-HVY-HG-A (3)", page)
+        self.assertIn("can&#39;t be changed", self.c.get(f"/sales/{number}/edit", follow_redirects=True).get_data(as_text=True))
+
+    def test_a_parked_sales_order_is_deleted(self):
+        res = self._post("/sales/new", customer="GDN-POS", warehouse="GDN", order_date=TODAY.isoformat(),
+                         line_guid=[""], product=["MILK-WHL-GAL"], qty=["5"], price=["4.2"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        so = self.reports.sales_order(number)
+        self.assertEqual(so["tax"], 0)  # the store isn't charged tax
+        self._post(f"/sales/{number}/delete")
+        self.assertNotIn(number, [o["number"] for o in self.reports.sales_enquiry(TODAY, TODAY)["orders"]])
+
+    def test_a_purchase_order_is_made_and_received_with_its_batches(self):
+        self.assertIn("Mock Dairy Distributors", self.c.get("/purchases/new").get_data(as_text=True))
+        res = self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(),
+                         delivery_date=(TODAY + dt.timedelta(days=1)).isoformat(), reference="INV-9", place="1",
+                         line_guid=["", ""], product=["MILK-WHL-GAL", "CRM-HVY-HG"], qty=["10", "6"], price=["4.2", "9.5"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        po = self.reports.purchase_order(number)
+        self.assertEqual((po["status"], po["goods"]), ("Placed", 99.0))
+        page = self.c.get(f"/purchases/{number}/receive").get_data(as_text=True)
+        self.assertIn("Tracked by batch", page)
+        milk = next(l for l in po["lines"] if l["product_code"] == "MILK-WHL-GAL")
+        cream = next(l for l in po["lines"] if l["product_code"] == "CRM-HVY-HG")
+        self.assertIn("enter the batch number", self.c.post(f"/purchases/{number}/receive", data={
+            f"qty-{milk['guid']}": "10", f"qty-{cream['guid']}": "6", "complete": "1"}).get_data(as_text=True))
+        self.assertIn("only when everything ordered arrived", self.c.post(f"/purchases/{number}/receive", data={
+            f"qty-{milk['guid']}": "8", f"qty-{cream['guid']}": "6", f"batch-{cream['guid']}": "CR-1",
+            f"batch-qty-{cream['guid']}": "6", "complete": "1"}).get_data(as_text=True))
+        before = self.ds.stock_as_at("MILK-WHL-GAL")[0]
+        self._post(f"/purchases/{number}/receive", **{
+            f"qty-{milk['guid']}": "10", f"qty-{cream['guid']}": "6", f"batch-{cream['guid']}": "CR-1",
+            f"batch-qty-{cream['guid']}": "6", f"batch-expiry-{cream['guid']}": (TODAY + dt.timedelta(days=9)).isoformat(),
+            "complete": "1"})
+        po = self.reports.purchase_order(number)
+        self.assertEqual(po["status"], "Complete")
+        self.assertEqual(self.ds.stock_as_at("MILK-WHL-GAL")[0], before + 10)
+        batch = next(b for b in self.ds.batches if b["Number"] == "CR-1")
+        self.assertEqual((batch["Quantity"], batch["ExpiryDate"]), (6, TODAY + dt.timedelta(days=9)))
+
+    def test_a_purchase_order_received_in_part_is_completed_later(self):
+        res = self._post("/purchases/new", supplier="SUP-ROAST", warehouse="GDN", order_date=TODAY.isoformat(),
+                         line_guid=[""], product=["COF-ESP-5LB"], qty=["4"], price=["42"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        self.assertEqual(self.reports.purchase_order(number)["status"], "Parked")  # not placed
+        line = self.reports.purchase_order(number)["lines"][0]
+        self._post(f"/purchases/{number}/receive", **{f"qty-{line['guid']}": "3"})
+        self.assertEqual(self.reports.purchase_order(number)["status"], "Receipted")
+        self.assertIn("Complete</button>", self.c.get(f"/purchases/{number}").get_data(as_text=True))
+        self._post(f"/purchases/{number}/complete")
+        self.assertEqual(self.reports.purchase_order(number)["status"], "Complete")
+
+
 class ProductionTests(unittest.TestCase):
     """Assemblies and bills of materials, read the way the Production pages read them."""
 

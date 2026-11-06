@@ -11,6 +11,7 @@ import math
 from flask import Flask, jsonify, request
 
 from .client import sign
+from . import mock_orders
 from .mock_data import BATCH_TRACKED, MockDataset
 
 MOCK_API_ID = "mock-api-id"
@@ -61,7 +62,8 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     @app.get("/Suppliers/<int:page>")
     def suppliers(page=1):
         items = [{"Guid": s["Guid"], "SupplierCode": s["SupplierCode"],
-                  "SupplierName": s["SupplierName"], "Currency": {"CurrencyCode": "USD"}}
+                  "SupplierName": s["SupplierName"], "Currency": {"CurrencyCode": "USD"},
+                  "Taxable": False, "TaxCode": None, "TaxRate": None}
                  for s in ds.suppliers.values() if _match(s["SupplierCode"], "supplierCode")]
         return _paged(items, page)
 
@@ -69,7 +71,10 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     @app.get("/Customers/<int:page>")
     def customers(page=1):
         items = [{"Guid": c["Guid"], "CustomerCode": c["CustomerCode"],
-                  "CustomerName": c["CustomerName"], "Currency": {"CurrencyCode": "USD"}}
+                  "CustomerName": c["CustomerName"], "Currency": {"CurrencyCode": "USD"},
+                  # The store doesn't pay sales tax on what it's sent; other customers do.
+                  **({"Taxable": False, "TaxCode": "NONE", "TaxRate": 0.0} if c["CustomerCode"] == "GDN-POS"
+                     else {"Taxable": True, "TaxCode": "CA-SALES", "TaxRate": 0.095})}
                  for c in ds.customers.values() if _match(c["CustomerCode"], "customerCode")]
         return _paged(items, page)
 
@@ -267,6 +272,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             return jsonify({"description": f"Not enough stock of {short} to complete the assembly"}), 400
         return jsonify(_assembly(ds, a))
 
+    mock_orders.register(app, ds, _sales_order, _purchase_order, _body_date, _ms_date_in)
     return app
 
 
@@ -356,7 +362,8 @@ def _warehouse(w):
 
 def _warehouse_ref(ds, code):
     w = next((w for w in ds.warehouses if w["WarehouseCode"] == code), None)
-    return {"WarehouseCode": w["WarehouseCode"], "WarehouseName": w["WarehouseName"]} if w else WAREHOUSE_REF
+    return {"Guid": w["Guid"], "WarehouseCode": w["WarehouseCode"], "WarehouseName": w["WarehouseName"]} \
+        if w else WAREHOUSE_REF
 
 
 def _product_ref(ds, code):
@@ -392,51 +399,60 @@ WAREHOUSE_REF = {"WarehouseCode": "GDN", "WarehouseName": "Gardena Store"}
 
 
 def _purchase_order(ds, po):
+    tax = po.get("Tax") or {"TaxCode": "NONE", "TaxRate": 0.0}
     lines = []
-    for i, l in enumerate(po["Lines"], 1):
+    for i, l in enumerate(ds.lines_with_guids(po), 1):
         lines.append({
-            "LineNumber": i, "Product": _product_ref(ds, l["ProductCode"]),
+            "Guid": l["Guid"], "LineNumber": i, "Product": _product_ref(ds, l["ProductCode"]),
             "OrderQuantity": l["OrderQuantity"], "ReceiptQuantity": l.get("ReceiptQuantity"),
-            "UnitPrice": l["UnitPrice"], "LineTotal": l["LineTotal"], "LineTax": 0.0,
-            "BCUnitPrice": l["UnitPrice"], "BCSubTotal": l["LineTotal"],
+            "UnitPrice": l["UnitPrice"], "LineTotal": l["LineTotal"], "LineTax": l.get("LineTax", 0.0),
+            "BCUnitPrice": l["UnitPrice"], "BCSubTotal": l["LineTotal"], "Comments": l.get("Comments"),
             "DueDate": _ms(po["RequiredDate"]),
+            "PendingBatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"],
+                                     "ExpiryDate": _ms(b.get("ExpiryDate"))} for b in l.get("PendingBatchNumbers") or []],
         })
     freight = po["Freight"]
+    tax_total = po.get("TaxTotal", 0.0)
     return {
         "Guid": po["Guid"], "OrderNumber": po["OrderNumber"], "OrderStatus": po["OrderStatus"],
         "OrderDate": _ms(po["OrderDate"]), "RequiredDate": _ms(po["RequiredDate"]),
+        "DeliveryDate": _ms(po["RequiredDate"]),
         "ReceivedDate": _ms(po["ReceivedDate"]), "CompletedDate": _ms(po["CompletedDate"]),
-        "Supplier": _supplier_ref(ds, po["SupplierCode"]), "Warehouse": WAREHOUSE_REF,
+        "Supplier": _supplier_ref(ds, po["SupplierCode"]), "Warehouse": _warehouse_ref(ds, po.get("WarehouseCode")),
         "Currency": {"CurrencyCode": "USD"}, "ExchangeRate": 1.0,
-        "Tax": {"TaxCode": "NONE"}, "TaxRate": 0.0,
-        "SubTotal": po["SubTotal"], "TaxTotal": 0.0, "Total": round(po["SubTotal"] + freight, 2),
-        "BCSubTotal": po["SubTotal"], "BCTaxTotal": 0.0, "BCTotal": round(po["SubTotal"] + freight, 2),
+        "Tax": dict(tax), "TaxRate": tax["TaxRate"], "Comments": po.get("Comments"), "SupplierRef": po.get("SupplierRef"),
+        "SubTotal": po["SubTotal"], "TaxTotal": tax_total, "Total": round(po["SubTotal"] + tax_total + freight, 2),
+        "BCSubTotal": po["SubTotal"], "BCTaxTotal": tax_total, "BCTotal": round(po["SubTotal"] + tax_total + freight, 2),
         "CostLines": [{"LineNumber": 1, "Description": "Freight",
                        "Supplier": _supplier_ref(ds, po["SupplierCode"]),
-                       "Currency": {"CurrencyCode": "USD"}, "Amount": freight}],
+                       "Currency": {"CurrencyCode": "USD"}, "Amount": freight}] if freight else [],
         "PurchaseOrderLines": lines,
         "LastModifiedOn": _ms(_modified(po, "CompletedDate", "OrderDate")),
     }
 
 
 def _sales_order(ds, so):
+    tax = so.get("Tax") or {"TaxCode": "NONE", "TaxRate": 0.0}
     lines = []
-    for i, l in enumerate(so["Lines"], 1):
+    for i, l in enumerate(ds.lines_with_guids(so), 1):
         lines.append({
-            "LineNumber": i, "Product": _product_ref(ds, l["ProductCode"]),
+            "Guid": l["Guid"], "LineNumber": i, "Product": _product_ref(ds, l["ProductCode"]),
             "OrderQuantity": l["OrderQuantity"], "UnitPrice": l["UnitPrice"],
-            "LineTotal": l["LineTotal"], "LineTax": 0.0,
-            "BCUnitPrice": l["UnitPrice"], "BCLineTotal": l["LineTotal"],
-            "AverageLandedPriceAtTimeOfSale": l["AverageLandedPriceAtTimeOfSale"],
+            "LineTotal": l["LineTotal"], "LineTax": l.get("LineTax", 0.0), "TaxRate": tax["TaxRate"],
+            "BCUnitPrice": l["UnitPrice"], "BCLineTotal": l["LineTotal"], "Comments": l.get("Comments"),
+            "AverageLandedPriceAtTimeOfSale": l.get("AverageLandedPriceAtTimeOfSale"),
+            "BatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"]} for b in l.get("BatchNumbers") or []],
         })
+    tax_total = so.get("TaxTotal", 0.0)
     return {
         "Guid": so["Guid"], "OrderNumber": so["OrderNumber"], "OrderStatus": so["OrderStatus"],
         "OrderDate": _ms(so["OrderDate"]), "RequiredDate": _ms(so["RequiredDate"]),
         "CompletedDate": _ms(so["CompletedDate"]),
-        "Customer": _customer_ref(ds, so["CustomerCode"]), "Warehouse": WAREHOUSE_REF,
+        "Customer": _customer_ref(ds, so["CustomerCode"]), "Warehouse": _warehouse_ref(ds, so.get("WarehouseCode")),
         "Currency": {"CurrencyCode": "USD"}, "ExchangeRate": 1.0,
-        "SubTotal": so["SubTotal"], "TaxTotal": 0.0, "Total": so["SubTotal"],
-        "BCSubTotal": so["SubTotal"], "BCTaxTotal": 0.0, "BCTotal": so["SubTotal"],
+        "Tax": dict(tax), "TaxRate": tax["TaxRate"], "Comments": so.get("Comments"), "CustomerRef": so.get("CustomerRef"),
+        "SubTotal": so["SubTotal"], "TaxTotal": tax_total, "Total": round(so["SubTotal"] + tax_total, 2),
+        "BCSubTotal": so["SubTotal"], "BCTaxTotal": tax_total, "BCTotal": round(so["SubTotal"] + tax_total, 2),
         "SalesOrderLines": lines,
         "LastModifiedOn": _ms(_modified(so, "CompletedDate", "OrderDate")),
     }

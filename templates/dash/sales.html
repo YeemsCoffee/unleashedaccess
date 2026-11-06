@@ -11,6 +11,7 @@
       {% for c in customers %}<option value="{{ c.CustomerCode }}" {{ 'selected' if c.CustomerCode == customer }}>{{ c.CustomerName }}</option>{% endfor %}</select></label>
   {% endcall %}
 </div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.sales_order_new') }}">+ New sales order</a></div>
 
 <section class="tiles">
   <div class="tile card"><div class="tile-label">Orders</div><div class="tile-value">{{ se.orders|length }}</div></div>
