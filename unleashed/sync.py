@@ -17,8 +17,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from .client import UnleashedError
-from .reports import (COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES, add_months, cost_line_keys,
-                      month_start)
+from .reports import (COMPLETED_ASSEMBLY_STATUSES, INACTIVE_ASSEMBLY_STATUSES, add_months, month_start,
+                      with_po_costs)
 from .store import (ALL_DATES, COGS_WAREHOUSE, COGS_WAREHOUSE_READY, CURRENT, DOCUMENT_ENDPOINTS,
                     OPTIONAL_ENDPOINTS, REFERENCE_ENDPOINTS, UNWINDOWED_ENDPOINTS, document_columns,
                     snapshot_key, utc_now, warehouse_codes)
@@ -180,8 +180,11 @@ class Syncer:
                     continue
                 items, filtered = fetched
                 if endpoint == "PurchaseOrders":
-                    items = self._with_detail(endpoint, items, run, cost_line_keys, "cost lines",
-                                              "po_detail_has_cost_lines")
+                    self._step(run, "Downloading cost lines (freight) of received purchase orders")
+                    previous = {g: store.document_by_guid("PurchaseOrders", g) for g in
+                                {i.get("Guid") for i in items if i.get("Guid")}}
+                    items = with_po_costs(self.client, items, self._map,
+                                          {g: d for g, d in previous.items() if d})
                 elif endpoint == "Assemblies":
                     items = self._with_detail(endpoint, items, run,
                                               lambda a: a.get("AssemblyLines") is not None,

@@ -386,7 +386,7 @@ class LiveModeTests(unittest.TestCase):
         self.assertNotIn("! Check", html)
         self.assertNotIn("Failed", html)
         self.assertIn("Purchase order cost line", html)
-        self.assertIn("CostLines.Amount", html)
+        self.assertIn("PurchaseOrderCosts.BCCost", html)
         self.assertIn("Spot-check", html)
         self.assertIn("Deleted: 1 line(s), 1 without", html)
         self.assertIn("Every line without changes is on a deleted or parked adjustment", html)
@@ -442,16 +442,18 @@ class AccountQuirkTests(unittest.TestCase):
                         UNLEASHED_API_KEY=MOCK_API_KEY, TODAY=TODAY,
                         UNLEASHED_TRANSPORT=RewritingTransport(create_mock_app(today=TODAY), rewrite))
 
-    def test_cost_lines_missing_from_list_are_fetched_from_detail(self):
+    def test_cost_lines_are_fetched_from_each_orders_costs(self):
         app = self._app(_strip_cost_lines_from_lists)
         reports = app.extensions["unleashed"]["reports"]
         stripped = reports.cogs(TODAY)
-        full = ReportsTests.reports.cogs(TODAY)
+        direct = Reports(UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(create_mock_app(today=TODAY)),
+                                         mode="mock"), today_fn=lambda: TODAY)
+        full = direct.cogs(TODAY)
         self.assertGreater(stripped["shipping"], 0)
         self.assertAlmostEqual(stripped["shipping"], full["shipping"], places=6)
         self.assertAlmostEqual(stripped["cogs"], full["cogs"], places=6)
         html = app.test_client().post("/connection", data={"action": "check"}).get_data(as_text=True)
-        self.assertIn("each purchase order&#39;s detail", html)
+        self.assertIn("each purchase order&#39;s costs", html)
 
     def test_adjustments_without_change_fields(self):
         app = self._app(_strip_adjustment_changes)
@@ -2124,7 +2126,10 @@ class StoreSyncTests(unittest.TestCase):
         result = syncer.sync()
         self.assertEqual(result["status"], "ok")
         self.assertFalse(result["full"])
-        self.assertIn("modifiedSince=", self._api_log("/PurchaseOrders/%")[-1][1])
+        lists = [q for e, q in [row[:2] for row in self._api_log("/PurchaseOrders/%")] if not e.endswith("/Costs")]
+        self.assertIn("modifiedSince=", lists[-1])
+        # Only the changed order's costs were fetched again.
+        self.assertEqual(len(self._api_log(f"/PurchaseOrders/{po['Guid']}/Costs*")), 2)
         self.assertAlmostEqual(reports.purchase_order(po["OrderNumber"])["shipping"], before + 10)
         # Stock snapshots from that PO's receipt onward were re-fetched.
         refetched = self._api_log(f"%asAtDate={po['ReceivedDate'].isoformat()}%")

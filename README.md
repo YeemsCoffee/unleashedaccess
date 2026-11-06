@@ -112,8 +112,10 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   the batches for batch-tracked products. Unleashed makes the return from the order; Core sets
   the lines, removes the ones not going back, and completes it. Purchases → **Supplier
   returns** lists them.
-- Purchase cost lines (freight) and orders for several warehouses' stock at once are still
-  entered in Unleashed.
+- Purchase cost lines (freight) are still added in Unleashed: its API only reads them. Core
+  shows them on each purchase order and counts them in COGS: Unleashed keeps them apart from
+  the order (GET /PurchaseOrders/{guid}/Costs), and the sync fetches them for received orders
+  (again only when an order changes).
 
 ## Access profiles
 

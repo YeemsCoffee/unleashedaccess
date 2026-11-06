@@ -7,7 +7,7 @@ import datetime as dt
 
 from .client import UnleashedError
 from .reports import (ASSEMBLY_LINE_TOTAL_FIELDS, ASSEMBLY_LINE_UNIT_COST_FIELDS,
-                      INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys,
+                      INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys, with_po_costs,
                       month_start)
 
 
@@ -94,9 +94,10 @@ def run_checks(reports):
         source = "the purchase order list"
         sample = raw
         if not any(cost_line_keys(p) for p in raw):
-            sample = [client.get(f"PurchaseOrders/{p['Guid']}") for p in raw[:5] if p.get("Guid")]
-            source = ("each purchase order's detail (the list leaves cost lines out, so the "
-                      "dashboard fetches PO detail; first loads are a bit slower)")
+            # Unleashed keeps cost lines apart from the order: GET /PurchaseOrders/{guid}/Costs.
+            sample = with_po_costs(client, raw[:5])
+            source = ("each purchase order's costs (Unleashed keeps them apart from the order; the sync "
+                      "fetches them for received orders)")
         for p in sample:
             for key in cost_line_keys(p):
                 if p.get(key):
@@ -107,8 +108,8 @@ def run_checks(reports):
         found = [p for p in pos if p["cost_lines"]]
         if not found:
             if not any(cost_line_keys(p) for p in sample):
-                return "warn", ("No cost-lines field found on purchase orders (checked the list and "
-                                "the detail of 5 POs). See the purchase order field names below.")
+                return "warn", ("No cost lines found on purchase orders (checked the list and the costs "
+                                "of 5 POs). See the purchase order field names below.")
             return "warn", "Cost lines field exists, but no received PO in 90 days has cost lines"
         unreadable = [p["number"] for p in found if any(c["field"] is None for c in p["cost_lines"])]
         if unreadable:

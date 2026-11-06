@@ -19,8 +19,11 @@ SO_STATUSES = ("Parked", "Placed", "Backordered", "Completed", "Deleted")
 # Adjustments in these states never moved stock, so reports leave them out.
 INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
 # Where a PO cost line's amount may live, most specific (base currency, ex tax) first.
-COST_LINE_AMOUNT_FIELDS = ("BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
+COST_LINE_AMOUNT_FIELDS = ("BCCost", "BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
                            "LineTotal", "Amount", "Total", "Cost", "Value")
+# Where Unleashed keeps a purchase order's cost lines (freight and the like): not in the order
+# itself but from GET /PurchaseOrders/{guid}/Costs, kept on the order under this key.
+PO_COSTS_KEY = "PurchaseOrderCosts"
 COMPLETED_ASSEMBLY_STATUSES = ("completed", "complete")
 COMPLETED_RETURN_STATUSES = ("completed", "complete")
 # Assemblies in these states never moved stock, so reports leave them out.
@@ -189,21 +192,12 @@ class Reports:
         return self._po(self._with_cost_lines(exact)[0]) if exact else None
 
     def _with_cost_lines(self, items):
-        """If the list response leaves cost lines out, fetch each PO's detail."""
-        if not items or self._details_have_cost_lines is False \
+        """Received orders with their cost lines. The stored copy has them (the sync fetches
+        them); read straight from Unleashed, they're fetched here."""
+        if not items or getattr(self.client, "finds_by_completion", False) \
                 or any(cost_line_keys(i) for i in items):
             return items
-
-        def detail(i):
-            if not i.get("Guid"):
-                return i
-            d = self.client.get(f"PurchaseOrders/{i['Guid']}",
-                                long_cache=i.get("OrderStatus") in ("Complete", "Costed"))
-            return d if isinstance(d, dict) and d.get("OrderNumber") else i
-
-        details = self._map(detail, items)
-        self._details_have_cost_lines = any(cost_line_keys(d) for d in details)
-        return details
+        return with_po_costs(self.client, items, self._map)
 
     def purchase_enquiry(self, start, end, status=None, supplier=None):
         orders = self.purchase_orders(start, end, status, supplier)
@@ -261,7 +255,7 @@ class Reports:
             for c in i.get(key) or []:
                 field, amount = cost_line_amount(c)
                 cost_lines.append({
-                    "description": c.get("Description") or c.get("Comments") or "Additional cost",
+                    "description": c.get("Description") or c.get("Reference") or c.get("Comments") or "Additional cost",
                     "supplier": (c.get("Supplier") or {}).get("SupplierName"),
                     "amount": amount, "field": f"{key}.{field}" if field else None})
         shipping = sum(c["amount"] for c in cost_lines)
@@ -1146,6 +1140,29 @@ class Reports:
             return c
 
         return self._map(month_row, [add_months(first, i) for i in range(months)])
+
+
+def with_po_costs(client, items, map_fn=lambda f, xs: [f(x) for x in xs], previous=None):
+    """`items` (purchase orders as Unleashed lists them), each received one with its cost lines
+    from GET /PurchaseOrders/{guid}/Costs under PO_COSTS_KEY. `previous`: {guid: stored order},
+    whose costs are kept when the order hasn't changed since. An order whose costs can't be
+    read is left without them (and tried again next time)."""
+    from .client import UnleashedError
+
+    def one(i):
+        if not i.get("Guid") or i.get("OrderStatus") not in RECEIVED_PO_STATUSES or PO_COSTS_KEY in i:
+            return i
+        old = (previous or {}).get(i["Guid"])
+        if old and PO_COSTS_KEY in old and old.get("LastModifiedOn") == i.get("LastModifiedOn"):
+            return dict(i, **{PO_COSTS_KEY: old[PO_COSTS_KEY]})
+        try:
+            data = client.get(f"PurchaseOrders/{i['Guid']}/Costs")
+        except UnleashedError:
+            return i
+        costs = data.get("Items") if isinstance(data, dict) else data
+        return dict(i, **{PO_COSTS_KEY: costs or []})
+
+    return map_fn(one, items)
 
 
 def cost_line_keys(raw_po):

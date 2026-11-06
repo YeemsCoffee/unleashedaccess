@@ -139,6 +139,20 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  and _match(p["OrderNumber"], "orderNumber")]
         return _paged([_purchase_order(ds, p) for p in items], int(page_or_guid))
 
+    @app.get("/PurchaseOrders/<guid>/Costs")
+    def purchase_order_costs(guid):
+        """A purchase order's cost lines (freight): as in Unleashed, only from this call."""
+        po = next((p for p in ds.purchase_orders if p["Guid"] == guid), None)
+        if po is None:
+            return jsonify({"description": "Purchase order not found"}), 404
+        freight = po["Freight"]
+        items = [{"Guid": f"{po['Guid'][:-4]}c001", "Reference": "Freight", "Cost": freight, "BCCost": freight,
+                  "TaxCost": 0.0, "BCTaxCost": 0.0, "TotalCost": freight, "BCTotalCost": freight,
+                  "CostDate": _ms(po["ReceivedDate"] or po["OrderDate"]), "CostExchangeRate": 1.0,
+                  "Currency": "USD", "DistributionMethod": "Value", "Receipted": po["ReceivedDate"] is not None,
+                  "Supplier": _supplier_ref(ds, po["SupplierCode"]), "TaxCode": "NONE", "TaxRate": 0.0}] if freight else []
+        return jsonify({"Items": items})
+
     @app.get("/SalesOrders")
     @app.get("/SalesOrders/<page_or_guid>")
     def sales_orders(page_or_guid="1"):
@@ -425,9 +439,6 @@ def _purchase_order(ds, po):
         "Tax": dict(tax), "TaxRate": tax["TaxRate"], "Comments": po.get("Comments"), "SupplierRef": po.get("SupplierRef"),
         "SubTotal": po["SubTotal"], "TaxTotal": tax_total, "Total": round(po["SubTotal"] + tax_total + freight, 2),
         "BCSubTotal": po["SubTotal"], "BCTaxTotal": tax_total, "BCTotal": round(po["SubTotal"] + tax_total + freight, 2),
-        "CostLines": [{"LineNumber": 1, "Description": "Freight",
-                       "Supplier": _supplier_ref(ds, po["SupplierCode"]),
-                       "Currency": {"CurrencyCode": "USD"}, "Amount": freight}] if freight else [],
         "PurchaseOrderLines": lines,
         "LastModifiedOn": _ms(_modified(po, "CompletedDate", "OrderDate")),
     }
