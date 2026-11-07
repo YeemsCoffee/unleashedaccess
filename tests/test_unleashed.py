@@ -308,9 +308,22 @@ class DashboardPageTests(unittest.TestCase):
         self.app = make_app(self, UNLEASHED_MODE="mock")
         self.client = self.app.test_client()
 
+    def test_stock_on_hand_shows_value_by_product_group(self):
+        page = self.client.get("/stock-on-hand").get_data(as_text=True)
+        self.assertIn("Value by product group", page)
+        self.assertIn(">Dairy</a>", page)
+        filtered = self.client.get("/stock-on-hand?group=Dairy").get_data(as_text=True)
+        self.assertIn('class="row-selected"', filtered)
+        self.assertIn(">Coffee &amp; Tea</a>", filtered)  # every group's value stays, whichever is listed
+        csv_text = self.client.get("/stock-on-hand?format=csv&by=group").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Product Group,Products,Qty,Value,Share"))
+        old = self.client.get("/stock-valuation?as_at=2026-07-01")
+        self.assertEqual((old.status_code, old.headers["Location"]), (301, "/stock-on-hand?as_at=2026-07-01"))
+        self.assertNotIn(">Valuation</a>", page)
+
     def test_pages_render(self):
         for path in ("/", "/cogs", "/stock-on-hand",
-                     "/stock-valuation", "/stock-movement",
+                     "/stock-movement",
                      "/purchases", "/purchases/PO-00000001",
                      "/sales", "/sales/SO-00000001",
                      "/adjustments", "/transactions",
@@ -334,7 +347,7 @@ class DashboardPageTests(unittest.TestCase):
         self.assertEqual(overview[:5], ["Finance", "Warehouse", "Production", "Maintenance", "Settings"])
         self.assertEqual(overview[5:], ["Overview", "COGS"])  # Finance's pages
         self.assertEqual(links("/", active=True), ["Finance", "Overview"])
-        warehouse = ["Stock on hand", "Valuation", "Purchases", "Sales", "Transactions", "Stock movement",
+        warehouse = ["Stock on hand", "Purchases", "Sales", "Transactions", "Stock movement",
                      "Adjustments"]
         for path in ("/stock-on-hand", "/transactions", "/stock-movement", "/adjustments"):
             self.assertEqual(links(path)[5:], warehouse, path)
@@ -1951,7 +1964,7 @@ class StoreSyncTests(unittest.TestCase):
         app = self._app()
         before = len(self._api_log())
         c = app.test_client()
-        for path in ("/", "/cogs", "/stock-on-hand", "/stock-valuation", "/stock-movement",
+        for path in ("/", "/cogs", "/stock-on-hand", "/stock-movement",
                      "/purchases", "/sales", "/adjustments", "/transactions", "/production",
                      "/production/orders", "/production/requirements", "/production/boms",
                      "/production/boms/BOM-CB", "/production/usage", "/production/orders/ASM-00000001"):

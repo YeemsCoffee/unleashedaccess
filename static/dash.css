@@ -181,6 +181,7 @@ code, .mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .recon { padding: 9px 13px; border-radius: 10px; margin: 14px 0 0; font-size: 14px; }
 .recon-ok { background: var(--good-bg); color: var(--good-ink); }
 .pill-ok { background: var(--good-bg); color: var(--good-ink); }
+tr.row-selected td { background: var(--brand-soft); }
 .cutoff-table td:first-child { width: 28px; }
 .cutoff-table tr.row-best td { background: var(--good-bg); }
 .cutoff-table label { cursor: pointer; }

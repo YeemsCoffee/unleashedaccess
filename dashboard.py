@@ -141,7 +141,7 @@ def _ctx():
 # is open. Settings is only shown to admins.
 _TABS = [
     ("finance", [("dash.overview", "Overview"), ("dash.cogs_page", "COGS")]),
-    ("warehouse", [("dash.stock_on_hand", "Stock on hand"), ("dash.stock_valuation", "Valuation"),
+    ("warehouse", [("dash.stock_on_hand", "Stock on hand"),
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
                    ("dash.transactions", "Transactions"), ("dash.stock_movement", "Stock movement"),
                    ("dash.adjustments", "Adjustments")]),
@@ -161,7 +161,7 @@ _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "
                               ("dash.profiles", "Access profiles"), ("dash.cogs_setup", "COGS"),
                               ("dash.api_log", "API log")])
 # Pages (and form posts) that belong to another page's tab.
-_PAGE_OF = {"dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
+_PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand", "dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
             "dash.production_close": "dash.production_orders",
             "dash.production_new": "dash.production_orders",
@@ -801,6 +801,12 @@ def stock_on_hand():
     as_at = _date_arg("as_at", None)
     group = request.args.get("group") or None
     soh = r.stock_on_hand(as_at=as_at, group=group)
+    val = r.stock_valuation(as_at=as_at)  # every group's value, whichever one is shown
+    if _wants_csv() and request.args.get("by") == "group":
+        return _csv("stock-value-by-group", [
+            ("Product Group", "group"), ("Products", "products"), ("Qty", "qty"),
+            ("Value", lambda x: round(x["value"], 2)), ("Share", lambda x: round(x["share"], 4)),
+        ], val["rows"])
     if _wants_csv():
         return _csv("stock-on-hand", [
             ("Product Code", "product_code"), ("Description", "description"),
@@ -809,21 +815,17 @@ def stock_on_hand():
             ("Avg Cost", "avg_cost"), ("Total Value", "value"),
             ("Days Since Last Sale", "days_since_sale"),
         ], soh["rows"])
-    return render_template("dash/stock_on_hand.html", soh=soh, groups=r.product_groups(),
+    return render_template("dash/stock_on_hand.html", soh=soh, val=val, groups=r.product_groups(),
                            group=group, as_at=as_at, csv_url=_csv_url())
 
 
 @bp.get("/stock-valuation")
 def stock_valuation():
-    r = reports()
-    as_at = _date_arg("as_at", None)
-    val = r.stock_valuation(as_at=as_at)
-    if _wants_csv():
-        return _csv("stock-valuation", [
-            ("Product Group", "group"), ("Products", "products"), ("Qty", "qty"),
-            ("Value", lambda x: round(x["value"], 2)), ("Share", lambda x: round(x["share"], 4)),
-        ], val["rows"])
-    return render_template("dash/valuation.html", val=val, as_at=as_at, csv_url=_csv_url())
+    """The valuation by product group is on Stock on hand now; old links land there."""
+    args = {k: v for k, v in request.args.items() if k in ("as_at", "format")}
+    if args.get("format") == "csv":
+        args["by"] = "group"
+    return redirect(url_for("dash.stock_on_hand", **args), 301)
 
 
 @bp.get("/stock-movement")

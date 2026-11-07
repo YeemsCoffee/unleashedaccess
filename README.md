@@ -51,8 +51,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 |------------|---------------|
 | Finance → Overview | Running month-to-date COGS, sales, gross margin, inventory value, open purchase orders, latest transactions |
 | Finance → COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
-| Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date, filterable by product group |
-| Warehouse → Valuation | Stock valuation by product group |
+| Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date: value by product group (with each group's share), then the products, filterable by group |
 | Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail; make, change, receive (with batches and expiry), complete and delete purchase orders |
 | Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail; make, change, complete (picking batches) and delete sales orders |
 | Warehouse → Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |

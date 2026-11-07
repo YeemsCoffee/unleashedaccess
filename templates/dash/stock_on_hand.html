@@ -13,6 +13,24 @@
     <a class="btn" href="{{ csv_url }}">Export CSV</a>
   </form>
 </div>
+<section class="card" id="by-group">
+  <div class="card-head"><h2>Value by product group{{ ' as at ' ~ (as_at|d) if as_at }}</h2>
+    <a href="{{ url_for('dash.stock_on_hand', as_at=as_at.isoformat() if as_at else None, format='csv', by='group') }}">Export CSV</a></div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Product group</th><th class="num">Products</th><th class="num">Qty</th><th class="num">Value</th><th>Share of value</th></tr></thead>
+    <tbody>
+    {% for r in val.rows %}
+    <tr class="{{ 'row-selected' if r.group == group }}"><td><a href="{{ url_for('dash.stock_on_hand', as_at=as_at.isoformat() if as_at else None, group=None if r.group == '(no group)' or r.group == group else r.group) }}">{{ r.group }}</a></td>
+      <td class="num">{{ r.products }}</td><td class="num">{{ r.qty|qty }}</td><td class="num">{{ r.value|money }}</td>
+      <td><div class="meter" title="{{ r.share|pct }}"><span style="width: {{ (r.share * 100)|round(1) }}%"></span></div> {{ r.share|pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr><td colspan="3">Total</td><td class="num">{{ val.total_value|money }}</td><td></td></tr></tfoot>
+  </table>
+  </div>
+  <p class="muted small">Pick a group to list only its products below{% if group %}; pick it again (or <a href="{{ url_for('dash.stock_on_hand', as_at=as_at.isoformat() if as_at else None) }}">all groups</a>) to see everything{% endif %}.</p>
+</section>
 <section class="card">
   <div class="table-wrap">
   <table>
