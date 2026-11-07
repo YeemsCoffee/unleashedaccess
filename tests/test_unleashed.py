@@ -250,6 +250,7 @@ class ReportsTests(unittest.TestCase):
                 self.assertAlmostEqual(r.cogs_by_store(c)["rest"], 0.0, places=6)  # nothing unexplained
                 self.assertAlmostEqual(r.unexplained(c)["gap"], 0.0, places=6)
                 self.assertAlmostEqual(c["daily"][-1]["cogs_to_date"], expected, places=6)
+                self.assertTrue(all(abs(d["value"]) < 1e-6 for d in r.daily_unexplained(c)["days"]))  # no drift
 
         class Synced:
             """The stored copy: its stock now was read at 6:30, before the documents (to 10:00)."""
@@ -541,6 +542,33 @@ class OrderPageTests(unittest.TestCase):
         self.assertNotIn("Complete…", page)
         self.assertIn("Batch CRM-HVY-HG-A (3)", page)
         self.assertIn("can&#39;t be changed", self.c.get(f"/sales/{number}/edit", follow_redirects=True).get_data(as_text=True))
+
+    def test_not_explained_is_checked_day_by_day_and_adds_up_to_the_month(self):
+        cogs = self.reports.cogs(TODAY)
+        daily = self.reports.daily_unexplained(cogs)
+        self.assertEqual([d["date"] for d in daily["days"]], [TODAY.replace(day=d) for d in range(1, TODAY.day + 1)])
+        self.assertAlmostEqual(daily["total"], self.reports.cogs_by_store(cogs)["rest"], places=4)
+        self.assertTrue(all(abs(d["value"]) < 0.5 for d in daily["days"]))  # the mock's documents explain it all
+        # Two gallons of milk go missing today, on no document: today's row shows it, the others don't move.
+        avg = self.ds.average_cost("MILK-WHL-GAL")
+        self.ds.move_stock(TODAY, "Unrecorded", "-", "-", "MILK-WHL-GAL", -2, -2 * avg)
+        self.app.extensions["unleashed"]["syncer"].sync()
+        cogs = self.reports.cogs(TODAY)
+        daily = self.reports.daily_unexplained(cogs)
+        self.assertAlmostEqual(daily["days"][-1]["value"], 2 * avg, places=2)
+        self.assertEqual(daily["days"][-1]["products"][0]["product_code"], "MILK-WHL-GAL")
+        self.assertTrue(all(abs(d["value"]) < 0.5 for d in daily["days"][:-1]))
+        self.assertAlmostEqual(daily["total"], self.reports.cogs_by_store(cogs)["rest"], places=4)
+        page = self.c.get("/cogs/not-on-an-order").get_data(as_text=True)
+        for text in ('id="daily"', "✓ matches", "MILK-WHL-GAL", 'class="row-warn"' if 2 * avg >= 25 else "Day by day"):
+            self.assertIn(text, page)
+        csv_text = self.c.get("/cogs/not-on-an-order?format=csv&by=daily").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Date,Stock at end of day,Change,Documents explain,Not explained"))
+        self.assertIn("Day by day →", self.c.get("/cogs").get_data(as_text=True))
+        older = self.reports.cogs(add_months(TODAY.replace(day=1), -3))
+        self.assertIsNone(self.reports.daily_unexplained(older))
+        self.assertIn("kept for this month and last month",
+                      self.c.get(f"/cogs/not-on-an-order?month={older['month']:%Y-%m}").get_data(as_text=True))
 
     def test_a_parked_sales_order_is_deleted(self):
         res = self._post("/sales/new", customer="GDN-POS", warehouse="GDN", order_date=TODAY.isoformat(),

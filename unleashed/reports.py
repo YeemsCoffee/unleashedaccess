@@ -1034,6 +1034,69 @@ class Reports:
                 "written_off_share": share(written_off), "rest": rest, "rest_share": share(rest),
                 "cogs": total}
 
+    def daily_unexplained(self, cogs):
+        """"Not on an order or write-off" day by day, so drift shows the day it starts: for each
+        day of `cogs`'s month (a cogs() result), the stock at the end of it, what that day's
+        documents explain (purchases received less returns to suppliers, cost of sales less
+        customer returns, write-offs, production), and the rest, with the products it's on.
+        Each day stands alone, so a difference on one day doesn't carry into the next; the days
+        add up to the month's figure (cogs_by_store's "rest"). None for a month whose daily
+        stock isn't kept (before last month)."""
+        start, through, warehouses = cogs["month"], cogs["through"], cogs["warehouses"]
+        if start < add_months(month_start(self.today), -1) or through < start:
+            return None
+        days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
+        flows = self._flows(cogs["prior_end"], through, warehouses)
+        stock = {d: self._stock_at_end(None if (cogs["is_current"] and d == through) else d, warehouses, flows,
+                                       by_product=True)
+                 for d in [cogs["prior_end"]] + days}
+        moved = defaultdict(lambda: defaultdict(float))  # day -> product -> value the documents moved
+        added = defaultdict(float)  # day -> what production added beyond its components (labour etc.)
+        for o in cogs["received"]:
+            goods = o["goods"] or 1
+            for l in o["lines"]:
+                moved[o["received_date"]][l["product_code"]] += l["line_total"] + o["shipping"] * l["line_total"] / goods
+            if not o["lines"] and o["shipping"]:
+                moved[o["received_date"]]["(costs with no product)"] += o["shipping"]
+        for r in cogs.get("supplier_returns") or []:
+            for l in r["lines"]:
+                moved[r["date"]][l["product_code"]] -= l["value"]
+        for o in self._completed_sales(start, through, warehouses):
+            for l in o["lines"]:
+                moved[o["completed_date"] or o["order_date"]][l["product_code"]] -= l["cost"]
+        for c in self._completed_returns("CreditNotes", start, through, warehouses):
+            for l in c["lines"]:
+                moved[c["date"]][l["product_code"]] += l["cost"]
+        for r in self.stock_adjustments(start, through)["rows"]:
+            if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
+                moved[r["date"]][r["product_code"]] += r["value_change"] or 0
+        for a in self._completed_assemblies(start, through):
+            for l in a["lines"]:
+                moved[a["completed_date"]][l["product_code"]] -= l["cost"]
+            moved[a["completed_date"]][a["product_code"]] += a["cost"]
+            added[a["completed_date"]] += a["supplier_costs"] or 0
+        names = {code: row["description"] for rows in stock.values() for code, row in rows.items()}
+        rows, running, prev = [], 0.0, cogs["prior_end"]
+        for d in days:
+            before, after = stock[prev], stock[d]
+            gaps = {}
+            for code in set(before) | set(after) | set(moved[d]):
+                gap = (before[code]["value"] if code in before else 0.0) + moved[d][code] \
+                    - (after[code]["value"] if code in after else 0.0)
+                gaps[code] = gap
+            value = sum(gaps.values()) - added[d]
+            running += value
+            rows.append({
+                "date": d, "stock": sum(r["value"] for r in after.values()),
+                "change": sum(r["value"] for r in after.values()) - sum(r["value"] for r in before.values()),
+                "explained": sum(moved[d].values()) + added[d], "production_added": added[d],
+                "value": value, "running": running,
+                "products": [{"product_code": code, "description": names.get(code), "value": gap}
+                             for code, gap in sorted(gaps.items(), key=lambda kv: -abs(kv[1]))[:8] if abs(gap) >= 0.005],
+            })
+            prev = d
+        return {"days": rows, "total": running}
+
     def unexplained(self, cogs):
         """Where "not on an order or write-off" (cogs_by_store's rest) comes from: for each
         product, the stock value the month's documents say it should have (opening +

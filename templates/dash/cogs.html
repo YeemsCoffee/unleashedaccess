@@ -110,6 +110,7 @@
     <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}{% if split.other_returned %}<div class="muted small">after {{ split.other_returned|money }} returned</div>{% endif %}</td><td class="num">{{ split.other_share|pct }}</td></tr>
     <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
     <tr><td>Not on an order or write-off <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a>
+        <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#daily">Day by day →</a>
         <div class="muted small">Usage not recorded, production costs, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
       <td></td><td class="num">{{ split.rest|money }}</td><td class="num">{{ split.rest_share|pct }}</td></tr>
     </tbody>
@@ -118,7 +119,8 @@
   {% else %}
   <p class="muted">No stores chosen yet. Each store's COGS is what was sent to it on sales orders, at cost.</p>
   <p>Not on an order or write-off: <strong>{{ split.rest|money }}</strong>{% if split.rest_share is not none %} ({{ split.rest_share|pct }} of COGS){% endif %}
-    <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a></p>
+    <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a>
+        <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#daily">Day by day →</a></p>
   {% endif %}
   <p class="muted small">Stores and the locations counted are set {% if is_admin %}in <a href="{{ url_for('dash.cogs_setup') }}">Settings → COGS</a>{% else %}by an admin, under Settings → COGS{% endif %}.</p>
 </section>

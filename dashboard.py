@@ -733,6 +733,14 @@ def cogs_unaccounted():
     settings = r.cogs_settings()
     view = settings["warehouses"]
     c = r.cogs(month, warehouses=view)
+    if _wants_csv() and request.args.get("by") == "daily":
+        daily = r.daily_unexplained(c) or {"days": []}
+        return _csv(f"cogs-not-explained-by-day-{month:%Y-%m}", [
+            ("Date", lambda x: x["date"].isoformat()), ("Stock at end of day", lambda x: round(x["stock"], 2)),
+            ("Change", lambda x: round(x["change"], 2)), ("Documents explain", lambda x: round(x["explained"], 2)),
+            ("Not explained", lambda x: round(x["value"], 2)), ("Month to date", lambda x: round(x["running"], 2)),
+            ("Products", lambda x: "; ".join(f"{p['product_code']} {p['value']:.2f}" for p in x["products"])),
+        ], daily["days"])
     why = r.unexplained(c)
     if _wants_csv():
         return _csv(f"cogs-not-on-an-order-{month:%Y-%m}", [
@@ -745,6 +753,7 @@ def cogs_unaccounted():
     names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
         "dash/cogs_unaccounted.html", c=c, split=r.cogs_by_store(c), why=why, timing=r.stock_timing(view),
+        daily=r.daily_unexplained(c),
         cutoffs=STOCK_CUTOFFS, settings=settings, names=names, month=month,
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None)
 

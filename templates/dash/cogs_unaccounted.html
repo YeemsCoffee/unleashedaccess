@@ -17,6 +17,37 @@
     ({{ split.rest_share|pct }}){% endif %}, isn't on a completed sales order or a stock write-off.</p>
 </section>
 
+<section class="card" id="daily">
+  <div class="card-head"><h2>Day by day</h2>
+    {% if daily %}<a href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m'), format='csv', by='daily') }}">Export CSV</a>{% endif %}</div>
+  {% if daily %}
+  <p class="muted">Each day on its own: the stock at the end of the day against the day before, less what that day's documents
+    moved (purchases received, returns, cost of sales, write-offs, production). What's left is what that day added to the figure
+    above, so drift shows the day it starts, and a difference on one day doesn't carry into the next. Positive: value left with
+    no record; negative: value appeared. Open a day for its products.</p>
+  <div class="table-wrap"><table class="daily-table">
+    <thead><tr><th>Day</th><th class="num wide-only">Stock at end of day</th><th class="num wide-only">Change</th>
+      <th class="num wide-only">Documents explain</th><th class="num">Not explained</th><th class="num">Month to date</th></tr></thead>
+    <tbody>{% for d in daily.days %}
+    <tr class="{{ 'row-warn' if d.value|abs >= 25 }}">
+      <td class="nowrap">{% if d.products %}<details><summary>{{ d.date|d }}</summary>
+        <ul class="plain-list small">{% for p in d.products %}<li><span class="mono">{{ p.product_code }}</span> {{ p.description or '' }}: {{ p.value|money }}</li>{% endfor %}
+          {% if d.production_added %}<li class="muted">Production added {{ d.production_added|money }} of labour or other costs (not on a document's value).</li>{% endif %}</ul>
+        </details>{% else %}{{ d.date|d }}{% endif %}</td>
+      <td class="num wide-only">{{ d.stock|money }}</td><td class="num wide-only">{{ d.change|money }}</td>
+      <td class="num wide-only">{{ d.explained|money }}</td>
+      <td class="num"><strong>{{ d.value|money if d.value|abs >= 0.005 else '—' }}</strong></td><td class="num">{{ d.running|money }}</td></tr>
+    {% endfor %}</tbody>
+    <tfoot><tr><td>The month</td><td class="wide-only" colspan="3"></td><td class="num">{{ daily.total|money }}</td>
+      <td class="num">{% if (daily.total - split.rest)|abs < 0.5 %}✓ matches{% else %}! differs from {{ split.rest|money }}{% endif %}</td></tr></tfoot>
+  </table></div>
+  <p class="muted small">Days over $25 are highlighted. The stock is Unleashed's, moved to midnight
+    ({{ cutoffs[settings.stock_as_at][0]|lower }}, as set in Settings → COGS).</p>
+  {% else %}
+  <p class="muted">Day by day is kept for this month and last month (Core keeps each day's stock for those).</p>
+  {% endif %}
+</section>
+
 <section class="card" id="unexplained">
   <div class="card-head"><h2>What's in it</h2>
     {% if why.products %}<a href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m'), format='csv') }}">Export CSV</a>{% endif %}</div>

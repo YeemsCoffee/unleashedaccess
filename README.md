@@ -239,6 +239,13 @@ COGS = sent to each store (cost of completed sales orders to it)
      + not on an order or write-off (usage not recorded, production losses, …)
 ```
 
+**Day by day.** The "Not on an order or write-off" page (COGS → What's in this / Day by day)
+checks each day of this month and last on its own: the stock at the end of the day against
+the day before, less what that day's documents moved. What's left is what that day added to
+the month's figure, with the products it's on, so drift shows the day it starts and a
+difference on one day doesn't carry into the next. The days add up to the month's figure
+(the page says whether they match); days over $25 are highlighted; CSV export.
+
 **Returns.** Stock sent back to suppliers comes off purchases (it wasn't used), and what
 customers send back into stock comes off cost of sales, and off the store's share when a
 store sends it back. Credits that don't go back into stock (thrown away) don't change COGS:
