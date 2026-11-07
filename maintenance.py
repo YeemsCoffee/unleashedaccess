@@ -15,9 +15,9 @@ from flask import (Blueprint, Response, abort, current_app, flash, jsonify, redi
 
 import dashboard
 from dashboard import _csv, _csv_url, _wants_csv, current_user, is_admin
-from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_OPERATIONS, MaintenanceError,
-                                fmt_number)
-from maintenance_store import COMPLETION_STATUSES, Maintenance
+from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_OPERATIONS, SIMPTWW, SIMPTWW_KEYS,
+                                MaintenanceError, fmt_number)
+from maintenance_store import COMPLETION_STATUSES, SIMPTWW_TEXT, Maintenance
 from production_runs import picture_type
 
 bp = Blueprint("maint", __name__, url_prefix="/maintenance")
@@ -136,7 +136,8 @@ def overview():
 # ---------------------------------------------------------------- tasks
 
 _STATUS_FILTERS = {"overdue": "Overdue", "soon": f"Due in the next {DUE_SOON_DAYS} days",
-                   "in_progress": "In progress", "unassigned": "Unassigned", "usage": "Done by usage"}
+                   "in_progress": "In progress", "unassigned": "Unassigned", "usage": "Done by usage",
+                   "simptww": "SIMPTWW not filled in"}
 
 
 @bp.get("/tasks")
@@ -158,6 +159,8 @@ def tasks():
         shown = [t for t in shown if t["assigned_to"] is None]
     elif status == "usage":
         shown = [t for t in shown if t["usage"]]
+    elif status == "simptww":
+        shown = [t for t in shown if t["simptww_filled"] < len(SIMPTWW)]
     if person:
         shown = [t for t in shown if t["assigned_to"] == person]
     if q:
@@ -175,6 +178,10 @@ def tasks():
             ("Vendor part number", "vendor_part_number"), ("Lead time (days)", "lead_time_days"),
             ("Order parts by", lambda t: t["order_by"].isoformat() if t["order_by"] else ""),
             ("Last completed", lambda t: (t["last_completed"] or "")[:10]), ("Times done", "times_done"),
+            ("SIMPTWW filled in", lambda t: f"{t['simptww_filled']} of {len(SIMPTWW)}"),
+            ("Safety", "safety"), ("Instructions", "instructions"), ("Materials", "materials"),
+            ("People needed", "people_needed"), ("Skills", "skills"), ("Tools", "tools"),
+            ("Where", "where_notes"), ("When", "when_notes"),
         ], shown)
     all_tasks = store.tasks(today, include_templates=True)
     rows = store.locations()
@@ -223,8 +230,27 @@ def _task_form(task=None, form=None, error=None):
                             "steps": t["steps"]})
     sources.sort(key=lambda s: s["label"].lower())
     return render_template("maint/task_form.html", task=task, form=form, error=error, today=_today(),
-                           return_to=_return_to(), steps=steps, step_sources=sources,
-                           max_steps=MAX_OPERATIONS, **_form_options()), 400 if error else 200
+                           return_to=_return_to(), steps=steps, step_sources=sources, simptww=SIMPTWW,
+                           picture_types=_picture_types(), max_steps=MAX_OPERATIONS,
+                           **_form_options()), 400 if error else 200
+
+
+def _picture_types():
+    return ",".join(f".{t}" for t in sorted(FILE_TYPES) if FILE_TYPES[t].startswith("image/"))
+
+
+def _save_task_pictures(task_id):
+    """The pictures sent with the task form, each under its SIMPTWW section, and the ones
+    ticked to remove; say which weren't kept."""
+    store = _store()
+    store.remove_pictures(task_id, request.form.getlist("remove_picture"))
+    for key in SIMPTWW_KEYS:
+        for upload in request.files.getlist(f"pictures-{key}"):
+            if upload and upload.filename:
+                try:
+                    store.add_attachment(task_id, upload.filename, upload.read(), dashboard._person(), section=key)
+                except MaintenanceError as e:
+                    flash(f"{upload.filename} wasn't added: {e}", "warn")
 
 
 @bp.route("/tasks/new", methods=["GET", "POST"])
@@ -238,6 +264,7 @@ def task_new():
     except MaintenanceError as e:
         return _task_form(form=request.form, error=str(e))
     flash(f"Added {' '.join(request.form.get('name', '').split())}.", "ok")
+    _save_task_pictures(task_id)
     return redirect(_return_to() or url_for("maint.task", task_id=task_id))
 
 
@@ -259,7 +286,8 @@ def task_edit(task_id):
         form = {k: found[k] for k in ("name", "location_id", "frequency_days", "assigned_to", "part_name",
                                       "vendor", "vendor_part_number", "lead_time_days", "instructions",
                                       "in_progress", "equipment_id", "counter_id", "usage_interval",
-                                      "last_reading")}
+                                      "last_reading", "people_needed")}
+        form.update({c: found[c] for c, _ in SIMPTWW_TEXT})
         form["frequency_days"] = found["frequency_days"] or ""
         form["next_due"] = found["stored_due"] if found["frequency_days"] else ""
         return _task_form(found, form)
@@ -270,6 +298,7 @@ def task_edit(task_id):
     except MaintenanceError as e:
         return _task_form(found, request.form, str(e))
     flash("Saved the task.", "ok")
+    _save_task_pictures(task_id)
     return redirect(url_for("maint.task", task_id=task_id))
 
 

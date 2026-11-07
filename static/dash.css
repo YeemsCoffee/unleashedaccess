@@ -550,3 +550,28 @@ td.wrap { white-space: normal; min-width: 280px; }
 }
 .btn.small { font-size: 12px; padding: 2px 8px; }
 .cal-order { border-left: 3px solid var(--warn-ink); }
+
+/* SIMPTWW: a task's job plan (Safety, Information, Material, People, Tools, Where, When & who) */
+.simptww-letter { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none;
+  border-radius: 8px; background: var(--brand, #2D4A2B); color: #fff; font-weight: 700; font-size: 14px; }
+fieldset.simptww-part { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 6px; margin: 0 0 14px; min-width: 0; }
+fieldset.simptww-part legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 6px; font-weight: 700; }
+fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text-secondary); }
+.simptww-pictures { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0; }
+.simptww-picture { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.simptww-picture img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); display: block; }
+.simptww-sheet { display: grid; gap: 4px; }
+.simptww-row { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.simptww-row:first-child { border-top: 0; }
+.simptww-row h3 { font-size: 14px; margin: 3px 0 4px; }
+.simptww-row .instructions { margin: 4px 0; }
+.simptww-row .file-pictures { margin: 8px 0 0; }
+.simptww-body { min-width: 0; flex: 1; }
+.simptww-empty .simptww-letter { background: var(--surface-0); color: var(--text-secondary); border: 1px dashed var(--line); }
+.simptww-steps { margin: 2px 0 4px; padding-left: 20px; }
+.simptww-safety { background: var(--warn-bg); color: var(--warn-ink); border-radius: 10px; padding: 10px 14px; margin: 0 0 12px; }
+.simptww-safety .instructions { margin: 4px 0 0; color: inherit; }
+.simptww-mini { display: inline-flex; gap: 2px; margin-top: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0; }
+.simptww-mini span { width: 15px; height: 15px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-secondary); border: 1px dashed var(--line); }
+.simptww-mini span.on { background: var(--brand, #2D4A2B); color: #fff; border: 1px solid transparent; }

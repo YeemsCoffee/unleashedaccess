@@ -13,6 +13,12 @@
 {%- if t.usage %}{{ ' or ' if t.frequency_days }}{{ t.usage.interval|n }} {{ t.usage.unit }}{% endif -%}
 {%- endmacro %}
 
+{# The task's SIMPTWW at a glance: the letters filled in are solid. #}
+{% macro simptww_mini(t) -%}
+{% if t.simptww is defined %}<div class="simptww-mini" title="SIMPTWW: {{ t.simptww_filled }} of {{ t.simptww|length }} filled in{% if t.simptww_filled < t.simptww|length %} (missing {{ t.simptww|rejectattr('filled')|map(attribute='title')|join(', ') }}){% endif %}">
+  {%- for p in t.simptww %}<span class="{{ 'on' if p.filled }}">{{ p.letter }}</span>{% endfor %}</div>{% endif %}
+{%- endmacro %}
+
 {% macro task_table(tasks, show_location=true, empty='No tasks.') %}
 <div class="table-wrap"><table class="maint-tasks maint-wrap">
   <thead><tr><th>Task</th>{% if show_location %}<th class="wide-only">Location</th>{% endif %}<th>Next due</th><th class="wide-only">Every</th><th>Assigned to</th><th class="wide-only">Status</th></tr></thead>
@@ -21,7 +27,8 @@
     <td><a href="{{ url_for('maint.task', task_id=t.id) }}">{{ t.name }}</a>
       {% if t.status == 'in_progress' %}<span class="narrow-only"> {{ task_pill(t) }}</span>{% endif %}
       {% if t.equipment_name %}<div class="muted small">{{ t.equipment_name }}</div>{% endif %}
-      {% if t.part_name %}<div class="muted small">Part: {{ t.part_name }}{% if t.order_by %} · order by {{ t.order_by|d }}{% endif %}</div>{% endif %}</td>
+      {% if t.part_name %}<div class="muted small">Part: {{ t.part_name }}{% if t.order_by %} · order by {{ t.order_by|d }}{% endif %}</div>{% endif %}
+      {{ simptww_mini(t) }}</td>
     {% if show_location %}<td class="wide-only">{{ t.location or '—' }}</td>{% endif %}
     <td>{{ due(t) }}</td>
     <td class="wide-only nowrap">{{ every(t) }}</td>

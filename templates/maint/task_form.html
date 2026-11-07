@@ -6,79 +6,135 @@
     <li><input class="text-input wide" name="op-text-{{ i }}" value="{{ op.text }}" maxlength="300" placeholder="{{ placeholder }}" aria-label="Step {{ n }}">
       <input class="qty-input" type="number" name="op-minutes-{{ i }}" value="{{ op.minutes if op.minutes is not none else '' }}" min="0" step="1" placeholder="min" aria-label="Minutes for step {{ n }}"></li>
 {%- endmacro %}
+{% macro part_head(key) %}{% set s = (simptww|selectattr(0, 'equalto', key)|first) %}
+  <legend><span class="simptww-letter" aria-hidden="true">{{ s[1] }}</span> {{ s[2] }} <span class="muted small">{{ s[3] }}</span></legend>
+{%- endmacro %}
+{% macro pictures(key, label) %}
+  {% set have = task.pictures[key] if task else [] %}
+  {% if have %}<div class="simptww-pictures">{% for f in have %}
+    <label class="simptww-picture"><img src="{{ url_for('maint.attachment', attachment_id=f.id, view=1) }}" alt="{{ f.filename }}" loading="lazy">
+      <span class="small"><input type="checkbox" name="remove_picture" value="{{ f.id }}"> Remove</span></label>{% endfor %}</div>{% endif %}
+  <label class="block small">{{ 'More pictures' if have else 'Pictures' }} ({{ (label ~ ', ') if label }}optional)
+    <input type="file" name="pictures-{{ key }}" multiple accept="{{ picture_types }}"></label>
+{%- endmacro %}
 <div class="page-head">
   <h1>{{ 'Edit ' ~ task.name if task else 'New maintenance task' }}</h1>
   <a href="{{ url_for('maint.task', task_id=task.id) if task else (return_to or url_for('maint.tasks')) }}">← {{ 'Back to the task' if task else ('Back' if return_to else 'Tasks') }}</a>
 </div>
-{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
-<form method="post" class="card maint-form">
+{% if error %}<p class="recon recon-warn">! {{ error }}{% if request.files %} Pictures need choosing again.{% endif %}</p>{% endif %}
+<form method="post" class="card maint-form" enctype="multipart/form-data">
   {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
-  <div class="filters new-order">
-    <label class="wide">Task <input name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
-    <label>Equipment
-      <select name="equipment_id">
-        <option value="">None: a location</option>
-        {{ equipment_options(equipment, form.equipment_id or '') }}
+  <label class="block">Task <input class="text-input wide" name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
+  <p class="muted small">The job plan below is the task's SIMPTWW: Safety, Information, Material, People, Tools, Where and
+    When &amp; who. Fill in what applies; each part can have pictures (the lockout point, the part, the tools laid out).</p>
+
+  <fieldset class="simptww-part">
+    {{ part_head('safety') }}
+    <label class="block">What to watch for <textarea name="safety" rows="3" maxlength="5000" placeholder="e.g. Unplug and lock out at the wall switch. Let the boiler cool 30 min. Gloves and safety glasses for the descaler.">{{ form.safety or '' }}</textarea></label>
+    {{ pictures('safety', 'lockout points, PPE, warning signs') }}
+  </fieldset>
+
+  <fieldset class="simptww-part">
+    {{ part_head('info') }}
+    <h3>Steps</h3>
+    <p class="muted small">Whoever records the task ticks these off. Empty steps are left out.</p>
+    {% if step_sources %}
+    <label class="block">Start from another task's steps
+      <select data-copy-steps>
+        <option value="">Choose a task…</option>
+        {% for s in step_sources %}<option value="{{ loop.index0 }}">{{ s.label }}</option>{% endfor %}
       </select></label>
-    <label>Location
-      <select name="location_id">
-        <option value="">None</option>
-        {{ location_options(locations, form.location_id or '') }}
-      </select></label>
-    {% if people %}
-    <label>Assigned to
-      <select name="assigned_to">
-        <option value="">No one</option>
-        {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
-        {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
-      </select></label>
+    <script type="application/json" id="step-sources">{{ step_sources|map(attribute='steps')|list|tojson }}</script>
     {% endif %}
-  </div>
-  <p class="muted small">A task on equipment is wherever the equipment is installed, and moves with it.</p>
+    <input type="hidden" name="rows" value="{{ steps|length }}" data-op-count data-max="{{ max_steps }}">
+    <ol class="ops" data-ops>
+      {% for op in steps %}{{ op_row(loop.index0, loop.index, op, 'e.g. Unplug the grinder and remove the hopper' if loop.first else 'Another step (optional)') }}
+      {% endfor %}
+    </ol>
+    <template id="op-template">{{ op_row('__I__', '__N__', {'text': '', 'minutes': none}, 'Another step (optional)') }}</template>
+    <div><button type="button" class="btn" data-add-op hidden>+ Add a step</button></div>
+    <label class="block">Instructions <textarea name="instructions" rows="3" maxlength="5000" placeholder="Optional: how it's done, what good looks like, the SOP to follow">{{ form.instructions or '' }}</textarea></label>
+    {{ pictures('info', 'how it should look, diagrams') }}
+    <p class="muted small">SOPs, manuals and other documents go under Files on the task's page.</p>
+  </fieldset>
 
-  <h2>When it's due</h2>
-  <div class="filters new-order">
-    <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" placeholder="90"></label>
-    <label>Next due <input type="date" name="next_due" value="{{ form.next_due if form.next_due is defined and form.next_due else (today.isoformat() if not task else '') }}"></label>
-    <label>Or by usage: counter
-      <select name="counter_id">
-        <option value="">None</option>
-        {% for c in counters %}<option value="{{ c.id }}" {{ 'selected' if form.counter_id|string == c.id|string }}>{{ c.label }}</option>{% endfor %}
-      </select></label>
-    <label>Every (usage) <input type="number" name="usage_interval" value="{{ form.usage_interval|n if form.usage_interval else '' }}" min="0" step="any" inputmode="decimal" placeholder="10000"></label>
-    <label>Last done at <input type="number" name="last_reading" value="{{ form.last_reading|n if form.last_reading is not none and form.last_reading != '' else '' }}" min="0" step="any" inputmode="decimal" placeholder="the reading now"></label>
-  </div>
-  <p class="muted small">By time (every so many days), by usage on one of its equipment's counters (e.g. every 10,000 shots),
-    or both: it's due at whichever comes first. A usage-based task's date is estimated from the counter's readings.
-    {% if not counters %}Add counters on an equipment page to use them here.{% endif %}</p>
+  <fieldset class="simptww-part">
+    {{ part_head('material') }}
+    <div class="filters new-order">
+      <label class="wide">Part to order <input name="part_name" value="{{ form.part_name or '' }}" maxlength="150" placeholder="Optional, e.g. Water filter cartridge"></label>
+      <label>Vendor <input name="vendor" value="{{ form.vendor or '' }}" maxlength="100" placeholder="Optional"></label>
+      <label>Vendor part number <input name="vendor_part_number" value="{{ form.vendor_part_number or '' }}" maxlength="100" placeholder="Optional"></label>
+      <label>Lead time (days) <input type="number" name="lead_time_days" value="{{ form.lead_time_days or '' }}" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+    </div>
+    <p class="muted small">With a lead time, the part is listed under Parts to order on the Maintenance overview that many days before the task is due.</p>
+    <label class="block">Other materials <textarea name="materials" rows="2" maxlength="2000" placeholder="e.g. Descaler (500 ml), 2 group gaskets, food-safe lubricant, clean rags">{{ form.materials or '' }}</textarea></label>
+    {{ pictures('material', 'the part, its label') }}
+  </fieldset>
 
-  <h2>Part</h2>
-  <div class="filters new-order">
-    <label class="wide">Part <input name="part_name" value="{{ form.part_name or '' }}" maxlength="150" placeholder="Optional, e.g. Water filter cartridge"></label>
-    <label>Vendor <input name="vendor" value="{{ form.vendor or '' }}" maxlength="100" placeholder="Optional"></label>
-    <label>Vendor part number <input name="vendor_part_number" value="{{ form.vendor_part_number or '' }}" maxlength="100" placeholder="Optional"></label>
-    <label>Lead time (days) <input type="number" name="lead_time_days" value="{{ form.lead_time_days or '' }}" min="0" step="1" inputmode="numeric" placeholder="0"></label>
-  </div>
-  <p class="muted small">With a lead time, the part is listed under Parts to order on the Maintenance overview that many days before the task is due.</p>
-  <h2>Steps</h2>
-  <p class="muted small">Optional. Whoever records the task ticks these off. Empty steps are left out.</p>
-  {% if step_sources %}
-  <label class="block">Start from another task's steps
-    <select data-copy-steps>
-      <option value="">Choose a task…</option>
-      {% for s in step_sources %}<option value="{{ loop.index0 }}">{{ s.label }}</option>{% endfor %}
-    </select></label>
-  <script type="application/json" id="step-sources">{{ step_sources|map(attribute='steps')|list|tojson }}</script>
-  {% endif %}
-  <input type="hidden" name="rows" value="{{ steps|length }}" data-op-count data-max="{{ max_steps }}">
-  <ol class="ops" data-ops>
-    {% for op in steps %}{{ op_row(loop.index0, loop.index, op, 'e.g. Unplug the grinder and remove the hopper' if loop.first else 'Another step (optional)') }}
-    {% endfor %}
-  </ol>
-  <template id="op-template">{{ op_row('__I__', '__N__', {'text': '', 'minutes': none}, 'Another step (optional)') }}</template>
-  <div><button type="button" class="btn" data-add-op hidden>+ Add a step</button></div>
+  <fieldset class="simptww-part">
+    {{ part_head('people') }}
+    <div class="filters new-order">
+      <label>People needed <input type="number" name="people_needed" value="{{ form.people_needed or '' }}" min="1" step="1" inputmode="numeric" placeholder="1"></label>
+      <label class="wide">Skills or trade <input name="skills" value="{{ form.skills or '' }}" maxlength="300" placeholder="e.g. Trained barista lead; licensed electrician for the wiring"></label>
+    </div>
+    {{ pictures('people', '') }}
+  </fieldset>
 
-  <label class="block">Instructions <textarea name="instructions" rows="4" maxlength="5000" placeholder="Optional: how it's done, safety notes">{{ form.instructions or '' }}</textarea></label>
+  <fieldset class="simptww-part">
+    {{ part_head('tools') }}
+    <label class="block">Tools <textarea name="tools" rows="2" maxlength="2000" placeholder="e.g. Blind basket, group brush, 8 mm hex key, bucket">{{ form.tools or '' }}</textarea></label>
+    {{ pictures('tools', 'the tools laid out') }}
+  </fieldset>
+
+  <fieldset class="simptww-part">
+    {{ part_head('where') }}
+    <div class="filters new-order">
+      <label>Equipment
+        <select name="equipment_id">
+          <option value="">None: a location</option>
+          {{ equipment_options(equipment, form.equipment_id or '') }}
+        </select></label>
+      <label>Location
+        <select name="location_id">
+          <option value="">None</option>
+          {{ location_options(locations, form.location_id or '') }}
+        </select></label>
+    </div>
+    <p class="muted small">A task on equipment is wherever the equipment is installed, and moves with it.</p>
+    <label class="block">Getting to it <input class="text-input wide" name="where_notes" value="{{ form.where_notes or '' }}" maxlength="1000" placeholder="Optional, e.g. Behind the bar, pull the machine forward; the shutoff valve is under the sink"></label>
+    {{ pictures('where', 'where it is, access points') }}
+  </fieldset>
+
+  <fieldset class="simptww-part">
+    {{ part_head('when') }}
+    <div class="filters new-order">
+      <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" placeholder="90"></label>
+      <label>Next due <input type="date" name="next_due" value="{{ form.next_due if form.next_due is defined and form.next_due else (today.isoformat() if not task else '') }}"></label>
+      <label>Or by usage: counter
+        <select name="counter_id">
+          <option value="">None</option>
+          {% for c in counters %}<option value="{{ c.id }}" {{ 'selected' if form.counter_id|string == c.id|string }}>{{ c.label }}</option>{% endfor %}
+        </select></label>
+      <label>Every (usage) <input type="number" name="usage_interval" value="{{ form.usage_interval|n if form.usage_interval else '' }}" min="0" step="any" inputmode="decimal" placeholder="10000"></label>
+      <label>Last done at <input type="number" name="last_reading" value="{{ form.last_reading|n if form.last_reading is not none and form.last_reading != '' else '' }}" min="0" step="any" inputmode="decimal" placeholder="the reading now"></label>
+    </div>
+    <p class="muted small">By time (every so many days), by usage on one of its equipment's counters (e.g. every 10,000 shots),
+      or both: it's due at whichever comes first. A usage-based task's date is estimated from the counter's readings.
+      {% if not counters %}Add counters on an equipment page to use them here.{% endif %}</p>
+    <div class="filters new-order">
+      <label class="wide">Best time <input name="when_notes" value="{{ form.when_notes or '' }}" maxlength="1000" placeholder="Optional, e.g. After close, machine cold; takes it out of service 1 hour"></label>
+      {% if people %}
+      <label>Who does it
+        <select name="assigned_to">
+          <option value="">No one</option>
+          {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
+          {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
+        </select></label>
+      {% endif %}
+    </div>
+    {{ pictures('when', '') }}
+  </fieldset>
+
   {% if task %}<label class="check-field"><input type="checkbox" name="in_progress" value="1" {{ 'checked' if form.in_progress }}> In progress</label>{% endif %}
   <div class="run-actions">
     <button class="btn btn-primary">{{ 'Save' if task else 'Add task' }}</button>

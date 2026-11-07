@@ -1772,6 +1772,72 @@ class MaintenancePlantTests(unittest.TestCase):
             self.assertEqual(([o["text"] for o in t["steps"]], t["step_minutes"], t["tasklist_id"]),
                              (["Unplug", "Brush"], 2, None))
 
+    def test_tasks_have_a_simptww_job_plan_with_pictures(self):
+        import io
+        gar, kit, esp = self._store_tree()
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 40
+        # A task made before SIMPTWW: everything but its location and schedule is missing.
+        old = self._new_id(self._post("/maintenance/tasks/new", name="Mop kitchen", frequency_days="1",
+                                      next_due=TODAY.isoformat(), location_id=str(kit)))
+        t = self.store.task(old, TODAY)
+        self.assertEqual([p["letter"] for p in t["simptww"]], list("SIMPTWW"))
+        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["where"])
+        listing = self.c.get("/maintenance/tasks?status=simptww").get_data(as_text=True)
+        self.assertIn("Mop kitchen", listing)
+        self.assertIn("SIMPTWW: 1 of 7 filled in (missing Safety, Information, Material, People, Tools, When &amp; who)",
+                      listing)
+
+        form = self.c.get("/maintenance/tasks/new").get_data(as_text=True)
+        for key in ("safety", "info", "material", "people", "tools", "where", "when"):
+            self.assertIn(f'name="pictures-{key}" multiple', form)
+        self.assertIn('enctype="multipart/form-data"', form)
+
+        res = self.c.post("/maintenance/tasks/new", content_type="multipart/form-data", data={
+            "name": "Descale espresso machine", "frequency_days": "90", "next_due": TODAY.isoformat(),
+            "location_id": str(esp), "safety": "Lock out at the wall switch. Let it cool 30 min.",
+            "rows": "1", "op-text-0": "Run descaler through each group", "materials": "Descaler 500 ml",
+            "people_needed": "2", "skills": "Barista lead", "tools": "Blind basket, bucket",
+            "where_notes": "Pull the machine forward", "when_notes": "After close",
+            "pictures-safety": [(io.BytesIO(png), "lockout.png")],
+            "pictures-tools": [(io.BytesIO(png), "tools.png"), (io.BytesIO(b"%PDF-1.4"), "sop.pdf")],
+        }, follow_redirects=True)
+        page = res.get_data(as_text=True)
+        self.assertIn("sop.pdf wasn&#39;t added: Only pictures go in the SIMPTWW", page)
+        new = next(x for x in self.store.tasks(TODAY) if x["name"] == "Descale espresso machine")
+        task = self.store.task(new["id"], TODAY)
+        self.assertEqual(task["simptww_filled"], 7)
+        self.assertEqual((task["people_needed"], task["tools"]), (2, "Blind basket, bucket"))
+        self.assertEqual([f["filename"] for f in task["pictures"]["safety"]], ["lockout.png"])
+        self.assertEqual([f["filename"] for f in task["pictures"]["tools"]], ["tools.png"])
+        self.assertEqual(task["attachments"], [])  # section pictures aren't listed under Files
+        for text in ("SIMPTWW", "7 of 7 filled in", "⚠ Safety first", "Lock out at the wall switch",
+                     "2 people · Barista lead", "Pull the machine forward", "After close",
+                     f'src="/maintenance/attachments/{task["pictures"]["safety"][0]["id"]}?view=1"'):
+            self.assertIn(text, page)
+        self.assertNotIn("Descale espresso machine", self.c.get("/maintenance/tasks?status=simptww").get_data(as_text=True))
+
+        # Editing an existing task: its sheet is filled in, a picture removed and another added.
+        edit = self.c.get(f"/maintenance/tasks/{new['id']}/edit").get_data(as_text=True)
+        self.assertIn("Blind basket, bucket", edit)
+        self.assertIn('name="remove_picture"', edit)
+        lockout = task["pictures"]["safety"][0]["id"]
+        res = self.c.post(f"/maintenance/tasks/{old}/edit", content_type="multipart/form-data", data={
+            "name": "Mop kitchen", "frequency_days": "1", "next_due": TODAY.isoformat(), "location_id": str(kit),
+            "safety": "Wet floor sign out", "remove_picture": str(lockout),  # another task's: left alone
+            "pictures-where": [(io.BytesIO(png), "kitchen.png")]})
+        self.assertEqual(res.status_code, 302)
+        t = self.store.task(old, TODAY)
+        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["safety", "where"])
+        self.assertEqual([f["filename"] for f in t["pictures"]["where"]], ["kitchen.png"])
+        self.assertEqual(len(self.store.task(new["id"], TODAY)["pictures"]["safety"]), 1)
+        self.c.post(f"/maintenance/tasks/{new['id']}/edit", data={
+            "name": "Descale espresso machine", "frequency_days": "90", "next_due": TODAY.isoformat(),
+            "location_id": str(esp), "remove_picture": str(lockout)})
+        t = self.store.task(new["id"], TODAY)
+        self.assertEqual((t["pictures"]["safety"], t["safety"]), ([], None))  # cleared fields stay cleared
+        csv = self.c.get("/maintenance/tasks?format=csv").get_data(as_text=True)
+        self.assertIn("SIMPTWW filled in", csv.splitlines()[0])
+
     def test_work_order_form_picks_location_then_equipment_and_takes_pictures(self):
         import io
         gar, kit, esp = self._store_tree()

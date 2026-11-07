@@ -189,6 +189,17 @@ The maintenance scheduler, brought into Core and kept in its database (the
   unplug, remove the burrs, vacuum, reassemble), each with optional minutes; rows
   are added with **+ Add a step**, and a new task can start from another task's
   steps. Recording the work ticks them off.
+- **SIMPTWW**: each task's form and page are its job plan, in seven parts:
+  **S**afety (hazards, PPE, lockout/tagout), **I**nformation (the steps and
+  instructions), **M**aterial (the part to order, consumables, chemicals), **P**eople
+  (how many, what skills or trade), **T**ools, **W**here (the location or equipment and
+  how to get to it) and **W**hen & who (the schedule, the best time, who does it).
+  Each part can have pictures (the lockout point, the part, the tools laid out),
+  added or removed when adding or editing the task; other files stay under Files.
+  The safety notes show again where the work is recorded. Tasks made before SIMPTWW
+  keep what they had and are filled in by editing them: the letters under each task
+  in the lists are solid for the parts filled in, and Tasks → Show → **SIMPTWW not
+  filled in** lists the ones with gaps. The CSV has the SIMPTWW columns.
 - **Recording work** (completed, or skipped with a reason) keeps who did it, when,
   how long, labor hours, parts used and their cost, the steps done, the counter
   reading and notes. A time-based task moves on by whole intervals from the date

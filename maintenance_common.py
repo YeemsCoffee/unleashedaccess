@@ -18,6 +18,18 @@ PRIORITIES = {1: "Very high", 2: "High", 3: "Medium", 4: "Low"}
 # The priority a new request starts with, from the criticality of what it's about.
 PRIORITY_FOR_CRITICALITY = {"A": 2, "B": 3, "C": 4}
 CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9._/-]*$")
+# A task's job plan, SIMPTWW: what to know before starting. (key, letter, heading, what it
+# covers); pictures attached to a task can be filed under one of the keys.
+SIMPTWW = (
+    ("safety", "S", "Safety", "Hazards, PPE, lockout/tagout and isolation points"),
+    ("info", "I", "Information", "Steps, instructions and the documents to follow"),
+    ("material", "M", "Material", "The part to order, consumables, chemicals"),
+    ("people", "P", "People", "How many people and what skills or trade"),
+    ("tools", "T", "Tools", "Tools and equipment to bring"),
+    ("where", "W", "Where", "The location or equipment, and how to get to it"),
+    ("when", "W", "When & who", "The schedule, the best time to do it, and who does it"),
+)
+SIMPTWW_KEYS = tuple(s[0] for s in SIMPTWW)
 
 
 class MaintenanceError(ValueError):

@@ -12,15 +12,8 @@
   <dl class="facts">
     <div><dt>Next due</dt><dd>{{ task.next_due|d if task.next_due else '—' }} <span class="{{ 'due-late' if task.status == 'overdue' else 'muted' }} small">{{ task.due_label }}</span></dd></div>
     <div><dt>Every</dt><dd>{{ every(task) }}{{ ', whichever comes first' if task.frequency_days and task.usage }}</dd></div>
-    <div><dt>Location</dt><dd>{% if task.location_id %}<a href="{{ url_for('maint.location', location_id=task.location_id) }}">{{ task.location }}</a>{% else %}—{% endif %}</dd></div>
-    {% if task.equipment_id %}<div><dt>Equipment</dt><dd><a href="{{ url_for('maint.equipment', equipment_id=task.equipment_id) }}">{{ task.equipment_name }}</a>{{ ' (in storage)' if task.equipment_status == 'storage' }}</dd></div>{% endif %}
-    <div><dt>Assigned to</dt><dd>{{ task.assignee_name or 'No one' }}</dd></div>
     <div><dt>Last done</dt><dd>{{ task.last_completed|local if task.last_completed else 'Not yet' }}</dd></div>
     <div><dt>Times done</dt><dd>{{ task.times_done }}</dd></div>
-    {% if task.steps %}<div><dt>Steps</dt><dd>{{ task.steps|length }}{% if task.step_minutes %}, about {{ task.step_minutes }} minutes{% endif %}</dd></div>{% endif %}
-    {% if task.part_name %}<div><dt>Part</dt><dd>{{ task.part_name }}{% if task.vendor_part_number %} ({{ task.vendor_part_number }}){% endif %}</dd></div>{% endif %}
-    {% if task.vendor %}<div><dt>Vendor</dt><dd>{{ task.vendor }}</dd></div>{% endif %}
-    {% if task.lead_time_days %}<div><dt>Lead time</dt><dd>{{ task.lead_time_days }} day{{ 's' if task.lead_time_days != 1 }}</dd></div>{% endif %}
     {% if task.order_by %}<div><dt>Order the part by</dt><dd class="{{ 'due-late' if task.order_by < today }}">{{ task.order_by|d }}</dd></div>{% endif %}
   </dl>
   {% if task.usage %}{% set u = task.usage %}
@@ -30,7 +23,6 @@
     {% if u.rate %}About {{ u.rate|round(1)|n }} {{ u.unit }} a day{% if u.projected and not u.reached %}, so around {{ u.projected|d }}{% endif %}.{% else %}Record readings on its equipment to estimate when.{% endif %}
   </div>
   {% endif %}
-  {% if task.instructions %}<div class="proc-notes"><h3>Instructions</h3><p class="instructions">{{ task.instructions }}</p></div>{% endif %}
   <div class="run-actions">
     <a class="btn" href="{{ url_for('maint.task_edit', task_id=task.id) }}">Edit task</a>
     {% if can_delete %}
@@ -42,9 +34,52 @@
   </div>
 </section>
 
+<section class="card" id="simptww">
+  <div class="card-head"><h2>SIMPTWW</h2>
+    <span class="muted small">{{ task.simptww_filled }} of {{ task.simptww|length }} filled in{% if task.simptww_filled < task.simptww|length %} · <a href="{{ url_for('maint.task_edit', task_id=task.id) }}">Fill in the rest</a>{% endif %}</span></div>
+  <div class="simptww-sheet">
+  {% for part in task.simptww %}
+    <div class="simptww-row{{ ' simptww-empty' if not part.filled }}" id="simptww-{{ part.key }}">
+      <div class="simptww-letter" aria-hidden="true">{{ part.letter }}</div>
+      <div class="simptww-body">
+        <h3>{{ part.title }}</h3>
+        {% if part.key == 'safety' %}
+          {% if task.safety %}<p class="instructions">{{ task.safety }}</p>{% endif %}
+        {% elif part.key == 'info' %}
+          {% if task.steps %}<ol class="simptww-steps">{% for op in task.steps %}<li>{{ op.text }}{% if op.minutes %} <span class="muted small nowrap">({{ op.minutes }} min)</span>{% endif %}</li>{% endfor %}</ol>
+            {% if task.step_minutes %}<div class="muted small">About {{ task.step_minutes }} minutes in all.</div>{% endif %}{% endif %}
+          {% if task.instructions %}<p class="instructions">{{ task.instructions }}</p>{% endif %}
+          {% if task.attachments %}<div class="muted small">{{ task.attachments|length }} file{{ 's' if task.attachments|length != 1 }} under <a href="#files">Files</a>.</div>{% endif %}
+        {% elif part.key == 'material' %}
+          {% if task.part_name %}<div>{{ task.part_name }}{% if task.vendor_part_number %} ({{ task.vendor_part_number }}){% endif %}{% if task.vendor %} from {{ task.vendor }}{% endif %}{% if task.lead_time_days %} · {{ task.lead_time_days }} day{{ 's' if task.lead_time_days != 1 }} lead time{% endif %}</div>{% endif %}
+          {% if task.materials %}<p class="instructions">{{ task.materials }}</p>{% endif %}
+        {% elif part.key == 'people' %}
+          {% if task.people_needed or task.skills %}<div>{% if task.people_needed %}{{ task.people_needed }} {{ 'person' if task.people_needed == 1 else 'people' }}{% endif %}{% if task.people_needed and task.skills %} · {% endif %}{{ task.skills or '' }}</div>{% endif %}
+        {% elif part.key == 'tools' %}
+          {% if task.tools %}<p class="instructions">{{ task.tools }}</p>{% endif %}
+        {% elif part.key == 'where' %}
+          {% if task.equipment_id or task.location_id %}<div>
+            {%- if task.equipment_id %}<a href="{{ url_for('maint.equipment', equipment_id=task.equipment_id) }}">{{ task.equipment_name }}</a>{{ ' (in storage)' if task.equipment_status == 'storage' }}{% endif %}
+            {%- if task.equipment_id and task.location_id %} at {% endif %}
+            {%- if task.location_id %}<a href="{{ url_for('maint.location', location_id=task.location_id) }}">{{ task.location }}</a>{% endif %}</div>{% endif %}
+          {% if task.where_notes %}<p class="instructions">{{ task.where_notes }}</p>{% endif %}
+        {% elif part.key == 'when' %}
+          <div>{{ every(task) }}{{ ', whichever comes first' if task.frequency_days and task.usage }}{% if task.next_due %} · next {{ task.next_due|d }}{% endif %} · {{ task.assignee_name or 'not assigned' }}</div>
+          {% if task.when_notes %}<p class="instructions">{{ task.when_notes }}</p>{% endif %}
+        {% endif %}
+        {% if task.pictures[part.key] %}<div class="file-pictures">{% for f in task.pictures[part.key] %}
+          <a href="{{ url_for('maint.attachment', attachment_id=f.id, view=1) }}" target="_blank" rel="noopener"><img src="{{ url_for('maint.attachment', attachment_id=f.id, view=1) }}" alt="{{ f.filename }}" loading="lazy"></a>{% endfor %}</div>{% endif %}
+        {% if not part.filled %}<div class="muted small">Not filled in: {{ part.hint|lower }}.</div>{% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</section>
+
 {% if not task.in_template %}
 <section class="card" id="record">
   <h2>Record work</h2>
+  {% if task.safety %}<div class="simptww-safety"><strong>⚠ Safety first</strong><p class="instructions">{{ task.safety }}</p></div>{% endif %}
   <form method="post" action="{{ url_for('maint.task_complete', task_id=task.id) }}" class="maint-form">
     {% if task.steps %}
     <div class="checklist">

@@ -25,8 +25,8 @@ import json
 import math
 
 from maintenance_assets import Assets
-from maintenance_common import (CRITICALITIES, form_steps, DUE_SOON_DAYS, MaintenanceError, checked_file, code, date,
-                                fmt_number, long_text, number, text, whole)
+from maintenance_common import (CRITICALITIES, form_steps, DUE_SOON_DAYS, MaintenanceError, SIMPTWW, SIMPTWW_KEYS,
+                                checked_file, code, date, fmt_number, long_text, number, text, whole)
 from maintenance_work import Work
 from unleashed.store import utc_now
 
@@ -37,9 +37,16 @@ NEW_COLUMNS = {
     "maint_locations": {"code": "TEXT", "site": "TEXT", "cost_center": "TEXT", "work_center": "TEXT",
                         "criticality": "TEXT", "is_template": "INTEGER"},
     "maint_tasks": {"equipment_id": "INTEGER", "tasklist_id": "INTEGER", "counter_id": "INTEGER",
-                    "usage_interval": "REAL", "last_reading": "REAL", "steps": "TEXT"},
+                    "usage_interval": "REAL", "last_reading": "REAL", "steps": "TEXT",
+                    # SIMPTWW: what the task's other fields don't already cover
+                    "safety": "TEXT", "materials": "TEXT", "people_needed": "INTEGER", "skills": "TEXT",
+                    "tools": "TEXT", "where_notes": "TEXT", "when_notes": "TEXT"},
     "maint_completions": {"parts_cost": "REAL", "reading": "REAL", "checklist": "TEXT"},
+    "maint_attachments": {"section": "TEXT"},  # a SIMPTWW key, for a picture filed under it
 }
+# The SIMPTWW fields saved as typed: (column, longest).
+SIMPTWW_TEXT = (("safety", 5000), ("materials", 2000), ("skills", 300), ("tools", 2000),
+                ("where_notes", 1000), ("when_notes", 1000))
 
 
 def migrate(db):
@@ -260,13 +267,15 @@ class Maintenance(Assets, Work):
             if with_tasks:
                 for t in self.db.query("SELECT * FROM maint_tasks WHERE equipment_id IS NULL"):
                     if t["location_id"] in new_ids:
+                        plan = ("people_needed",) + tuple(c for c, _ in SIMPTWW_TEXT)
                         self.db.execute(
                             "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to,"
                             " in_progress, part_name, vendor, vendor_part_number, lead_time_days, instructions,"
-                            " steps, created_by, created_at) VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            f" steps, created_by, created_at, {', '.join(plan)})"
+                            f" VALUES (?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?{', ?' * len(plan)})",
                             (t["name"], new_ids[t["location_id"]], t["frequency_days"] or 1, first_due.isoformat(),
                              t["part_name"], t["vendor"], t["vendor_part_number"], t["lead_time_days"],
-                             t["instructions"], t["steps"], by, utc_now()))
+                             t["instructions"], t["steps"], by, utc_now()) + tuple(t.get(c) for c in plan))
                         copied += 1
         except MaintenanceError:
             # Undo the part copied so far, so a clash doesn't leave half a store behind.
@@ -290,6 +299,9 @@ class Maintenance(Assets, Work):
             "equipment": {r["id"]: r for r in self.db.query("SELECT id, name, status FROM maint_equipment")},
             "counters": {r["id"]: dict(r, **states.get(r["id"], {}))
                          for r in self.db.query("SELECT id, name, unit, equipment_id FROM maint_counters")},
+            # Which SIMPTWW sections each task has pictures under.
+            "pictured": _pictured(self.db.query("SELECT DISTINCT task_id, section FROM maint_attachments"
+                                                " WHERE section IS NOT NULL")),
         }
 
     _TASK_SQL = ("SELECT t.*, u.name AS assignee_name,"
@@ -319,9 +331,12 @@ class Maintenance(Assets, Work):
         if not rows:
             return None
         task = _task(rows[0], self._task_context(today))
-        task["attachments"] = self.db.query(
-            "SELECT id, filename, content_type, size, uploaded_by, uploaded_at FROM maint_attachments"
-            " WHERE task_id = ? ORDER BY uploaded_at DESC, id DESC", (task_id,))
+        files = self.db.query(
+            "SELECT id, filename, content_type, size, uploaded_by, uploaded_at, section FROM maint_attachments"
+            " WHERE task_id = ? ORDER BY uploaded_at, id", (task_id,))
+        # Pictures filed under a SIMPTWW section show there; the rest are the task's files.
+        task["attachments"] = [f for f in reversed(files) if f["section"] not in SIMPTWW_KEYS]
+        task["pictures"] = {k: [f for f in files if f["section"] == k] for k in SIMPTWW_KEYS}
         task["completions"] = self.completions(task_id=task_id)
         for c in task["completions"]:
             c["steps"] = json.loads(c["checklist"]) if c.get("checklist") else []
@@ -363,26 +378,30 @@ class Maintenance(Assets, Work):
             given = number(form.get("last_reading"), "Last done at", maximum=1e12)
             last_reading = given if given is not None else self.counter_states().get(counter_id, {}).get("value", 0)
         steps = form_steps(form)
+        people_needed = whole(form.get("people_needed"), "People needed", minimum=1)
+        plan = (people_needed,) + tuple(long_text(form, c, limit) for c, limit in SIMPTWW_TEXT)
         assigned_to = whole(form.get("assigned_to"), "Assigned to")
         if assigned_to is not None and assigned_to not in assignable:
             raise MaintenanceError("Assign it to someone who can open Maintenance.")
         values = (name, location_id, frequency, next_due.isoformat(), assigned_to,
                   1 if form.get("in_progress") else 0, text(form, "part_name", 150), text(form, "vendor", 100),
                   text(form, "vendor_part_number", 100), lead_time, long_text(form, "instructions"),
-                  equipment_id, json.dumps(steps) if steps else None, counter_id, usage)
+                  equipment_id, json.dumps(steps) if steps else None, counter_id, usage) + plan
+        plan_columns = ("people_needed",) + tuple(c for c, _ in SIMPTWW_TEXT)
         if task_id is None:
             return self.db.query(
                 "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to, in_progress,"
                 " part_name, vendor, vendor_part_number, lead_time_days, instructions, equipment_id, steps,"
-                " counter_id, usage_interval, last_reading, created_by, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                f" counter_id, usage_interval, {', '.join(plan_columns)}, last_reading, created_by, created_at)"
+                f" VALUES ({', '.join('?' * (len(values) + 3))}) RETURNING id",
                 values + (last_reading, by, utc_now()))[0]["id"]
         if not self.db.query("SELECT 1 FROM maint_tasks WHERE id = ?", (task_id,)):
             raise MaintenanceError("That task doesn't exist any more.")
         self.db.execute(
             "UPDATE maint_tasks SET name = ?, location_id = ?, frequency_days = ?, next_due = ?, assigned_to = ?,"
             " in_progress = ?, part_name = ?, vendor = ?, vendor_part_number = ?, lead_time_days = ?, instructions = ?,"
-            " equipment_id = ?, steps = ?, counter_id = ?, usage_interval = ?, last_reading = ? WHERE id = ?",
+            " equipment_id = ?, steps = ?, counter_id = ?, usage_interval = ?,"
+            f" {', '.join(c + ' = ?' for c in plan_columns)}, last_reading = ? WHERE id = ?",
             values + (last_reading, task_id))
         return task_id
 
@@ -520,13 +539,28 @@ class Maintenance(Assets, Work):
 
     # ------------------------------------------------------------ attachments
 
-    def add_attachment(self, task_id, filename, data, by):
+    def add_attachment(self, task_id, filename, data, by, section=None):
+        """Keep a file with the task; with `section` (a SIMPTWW key), a picture shown in that
+        part of its job plan."""
         filename, content_type = checked_file(filename, data)
+        if section is not None:
+            if section not in SIMPTWW_KEYS:
+                raise MaintenanceError("That isn't a part of the SIMPTWW.")
+            if not content_type.startswith("image/"):
+                raise MaintenanceError("Only pictures go in the SIMPTWW: attach other files under Files.")
         if not self.db.query("SELECT 1 FROM maint_tasks WHERE id = ?", (task_id,)):
             raise MaintenanceError("That task doesn't exist any more.")
         self.db.execute(
-            "INSERT INTO maint_attachments (task_id, filename, content_type, size, data, uploaded_by, uploaded_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)", (task_id, filename, content_type, len(data), data, by, utc_now()))
+            "INSERT INTO maint_attachments (task_id, filename, content_type, size, data, uploaded_by, uploaded_at,"
+            " section) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, filename, content_type, len(data), data, by, utc_now(), section))
+
+    def remove_pictures(self, task_id, ids):
+        """Remove the task's SIMPTWW pictures with these ids (others' are left alone)."""
+        ids = [int(i) for i in ids if str(i).isdigit()]
+        if ids:
+            self.db.execute(f"DELETE FROM maint_attachments WHERE task_id = ? AND section IS NOT NULL"
+                            f" AND id IN ({', '.join('?' * len(ids))})", (task_id, *ids))
 
     def attachment(self, attachment_id):
         rows = self.db.query("SELECT * FROM maint_attachments WHERE id = ?", (attachment_id,))
@@ -629,6 +663,19 @@ def _task(row, ctx):
     task["equipment_status"] = item["status"] if item else None
     task["steps"] = json.loads(row["steps"]) if row.get("steps") else []
     task["step_minutes"] = sum(op.get("minutes") or 0 for op in task["steps"])
+    pictured = ctx["pictured"].get(row["id"], set())
+    filled = {
+        "safety": row.get("safety"),
+        "info": row["instructions"] or task["steps"],
+        "material": row["part_name"] or row.get("materials"),
+        "people": row.get("people_needed") or row.get("skills"),
+        "tools": row.get("tools"),
+        "where": row["location_id"] or row["equipment_id"] or row.get("where_notes"),
+        "when": row["assigned_to"] or row.get("when_notes"),
+    }
+    task["simptww"] = [{"key": k, "letter": letter, "title": title, "hint": hint,
+                        "filled": bool(filled[k]) or k in pictured} for k, letter, title, hint in SIMPTWW]
+    task["simptww_filled"] = sum(1 for s in task["simptww"] if s["filled"])
     task["stored_due"] = row["next_due"]
     task["frequency_days"] = row["frequency_days"] or 0
     time_due = dt.date.fromisoformat(row["next_due"]) if task["frequency_days"] else None
@@ -676,3 +723,11 @@ def _task(row, ctx):
                         if due and row["part_name"] and row["lead_time_days"] else None)
     task["order_now"] = task["order_by"] is not None and task["order_by"] <= today + dt.timedelta(days=DUE_SOON_DAYS)
     return task
+
+
+def _pictured(rows):
+    """{task id: the SIMPTWW sections it has pictures under}."""
+    out = {}
+    for r in rows:
+        out.setdefault(r["task_id"], set()).add(r["section"])
+    return out
