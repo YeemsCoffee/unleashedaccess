@@ -21,6 +21,9 @@ INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
 # Where a PO cost line's amount may live, most specific (base currency, ex tax) first.
 COST_LINE_AMOUNT_FIELDS = ("BCCost", "BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
                            "LineTotal", "Amount", "Total", "Cost", "Value")
+# Products whose purchase order lines are charges (counted as shipping, not goods), besides
+# the ones chosen in Settings -> COGS ("charges").
+SHIPPING_CODES = ("FREIGHT", "SHIPPING", "DELIVERY", "FUEL", "FUEL-SURCHARGE", "SURCHARGE")
 # Where Unleashed keeps a purchase order's cost lines (freight and the like): not in the order
 # itself but from GET /PurchaseOrders/{guid}/Costs, kept on the order under this key.
 PO_COSTS_KEY = "PurchaseOrderCosts"
@@ -82,7 +85,7 @@ def _warehouse_code(value):
 
 class Reports:
     def __init__(self, client, today_fn=dt.date.today,
-                 shipping_codes=("FREIGHT", "SHIPPING", "DELIVERY"), max_workers=1, cogs_settings_fn=None):
+                 shipping_codes=SHIPPING_CODES, max_workers=1, cogs_settings_fn=None):
         self.client = client
         self.today_fn = today_fn
         self.shipping_codes = {c.upper() for c in shipping_codes}
@@ -95,6 +98,10 @@ class Reports:
 
     def cogs_settings(self):
         return self.cogs_settings_fn()
+
+    def charge_codes(self):
+        """Product codes whose purchase order lines are charges (freight, fuel surcharge)."""
+        return self.shipping_codes | {c.upper() for c in self.cogs_settings().get("charges") or []}
 
     def _map(self, fn, args):
         """fn over args, concurrently when max_workers > 1 (independent API reads)."""
@@ -235,15 +242,18 @@ class Reports:
                       key=lambda o: (o["received_date"], o["number"]))
 
     def _po(self, i):
+        charges = self.charge_codes()
         goods, lines, cost_lines = 0.0, [], []
         for l in i.get("PurchaseOrderLines", []):
             prod = l.get("Product") or {}
             code = prod.get("ProductCode", "")
             total = _first(l.get("BCSubTotal"), l.get("BCLineTotal"), l.get("LineTotal"))
-            if code.upper() in self.shipping_codes:
-                cost_lines.append({"description": prod.get("ProductDescription") or code,
-                                   "supplier": None, "amount": total,
-                                   "field": "PurchaseOrderLines"})
+            if code.upper() in charges:
+                cost_lines.append({"description": l.get("Comments") or prod.get("ProductDescription") or code,
+                                   "supplier": None, "amount": total, "field": "PurchaseOrderLines",
+                                   "guid": l.get("Guid"), "product_code": code, "comments": l.get("Comments"),
+                                   "qty": l.get("OrderQuantity") or 1,
+                                   "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice"))})
                 continue
             goods += total
             lines.append({"guid": l.get("Guid"), "product_code": code, "description": prod.get("ProductDescription"),

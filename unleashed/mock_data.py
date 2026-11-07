@@ -126,6 +126,17 @@ class MockDataset:
 
         self._simulate()
 
+        # Charges bought on purchase orders, not stock (Unleashed can't take cost lines through its
+        # API, so freight and fuel surcharges go on as lines on these). Added after the
+        # simulation, which they take no part in.
+        for code, desc in (("FREIGHT", "Freight"), ("FUEL-SURCHARGE", "Fuel surcharge")):
+            self.products[code] = {"ProductCode": code, "ProductDescription": desc, "ProductGroup": "Charges",
+                                   "UnitOfMeasure": "Each", "SupplierCode": None, "BaseCost": 0.0, "SellPrice": 0.0,
+                                   "DailyUse": 0.0, "PlanUse": 0.0, "NonStock": True,
+                                   "Guid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"product:{code}"))}
+            self._qty[code], self._value[code], self._on_order[code] = 0.0, 0.0, 0.0
+            self._snap[code] = ([], [], [])
+
     # ------------------------------------------------------------ public api
 
     def stock_as_at(self, product_code, as_at=None):
@@ -379,7 +390,9 @@ class MockDataset:
             want = line["OrderQuantity"] if complete and line.get("ReceiptQuantity") is None \
                 else (line.get("ReceiptQuantity") or 0)
             new = want - (line.get("Received") or 0)
-            if new > 1e-9:
+            if new > 1e-9 and self.products[line["ProductCode"]].get("NonStock"):  # a charge: no stock
+                line["Received"] = line["ReceiptQuantity"] = want
+            elif new > 1e-9:
                 code = line["ProductCode"]
                 self._move(self.today, "Purchase", po["OrderNumber"], po["SupplierCode"], code, new,
                            new * line["UnitPrice"])

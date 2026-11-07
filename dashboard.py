@@ -21,7 +21,7 @@ from unleashed.client import HttpTransport, UnleashedClient, UnleashedError, set
 from unleashed.assembly_writes import CloseOutError, close_out, create_assembly, is_completed, sent_summary
 from unleashed.reports import (OPEN_PO_STATUSES, PO_STATUSES, SO_STATUSES, STOCK_CUTOFFS, add_months,
                                month_end, month_start)
-from unleashed.store import COGS_STOCK_AS_AT, COGS_STORES, COGS_WAREHOUSE
+from unleashed.store import COGS_CHARGES, COGS_STOCK_AS_AT, COGS_STORES, COGS_WAREHOUSE
 
 bp = Blueprint("dash", __name__)
 
@@ -775,6 +775,10 @@ def cogs_setup():
         store.set_state(COGS_STORES, json.dumps(stores))
         if request.form.get("stock_as_at") in STOCK_CUTOFFS:
             store.set_state(COGS_STOCK_AS_AT, request.form["stock_as_at"])
+        if request.form.get("charges_shown"):
+            product_codes = {p.get("ProductCode") for p in r.products()}
+            store.set_state(COGS_CHARGES, json.dumps([c for c in dict.fromkeys(request.form.getlist("charge"))
+                                                      if c in product_codes]))
         _ext()["store_client"].clear_cache()
         flash(f"Saved. COGS counts stock in {r.warehouse_names(locations) if locations else 'every warehouse'}, "
               f"with {len(stores)} store{'s' if len(stores) != 1 else ''}.", "ok")
@@ -791,6 +795,10 @@ def cogs_setup():
     return render_template(
         "dash/cogs_setup.html", settings=settings, chosen=chosen, warehouses=warehouses,
         timing=r.stock_timing(settings["warehouses"]), cutoffs=STOCK_CUTOFFS,
+        products=sorted((p for p in r.products() if not p.get("Obsolete")),
+                        key=lambda p: ((p.get("ProductCode") or "").upper() not in r.charge_codes(),
+                                       (p.get("ProductCode") or "").lower())),
+        charge_codes=r.charge_codes(),
         customers=sorted(customers, key=lambda x: (x.get("CustomerCode") not in settings["stores"],
                                                    (x.get("CustomerName") or "").lower())))
 

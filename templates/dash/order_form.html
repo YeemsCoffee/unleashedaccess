@@ -6,18 +6,27 @@
 {% macro line_row(l, products) -%}
   <tr data-line>
     <td><input type="hidden" name="line_guid" value="{{ l.guid or '' }}">
-      <select name="product" class="line-product" aria-label="Product">
-        <option value="">Choose a product…</option>
-        {% for p in products %}<option value="{{ p.code }}" data-price="{{ p.price if p.price is not none else '' }}" data-unit="{{ p.unit or '' }}" {{ 'selected' if p.code == l.product_code }}>{{ p.code }} · {{ p.name }}</option>{% endfor %}
-      </select></td>
+      <input name="product" class="line-product" list="order-products" value="{{ l.product_code or '' }}" autocomplete="off"
+        placeholder="Type a product code or name" aria-label="Product">
+      <div class="muted small line-product-name" data-product-name>{{ product_names.get(l.product_code, '') if l.product_code }}</div></td>
     <td class="num"><input class="qty-input" type="number" name="qty" value="{{ ('%g'|format(l.qty)) if l.qty else '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity"></td>
     <td class="num"><input class="qty-input" type="number" name="price" value="{{ ('%g'|format(l.unit_price)) if l.unit_price is not none else '' }}" min="0" step="any" inputmode="decimal" aria-label="Unit price"></td>
     <td class="num nowrap" data-line-total></td>
     <td><button type="button" class="btn btn-quiet" data-remove-line aria-label="Remove this line">✕</button></td>
   </tr>
 {%- endmacro %}
+{% macro charge_row(c) -%}
+  <tr data-charge>
+    <td><input type="hidden" name="charge_guid" value="{{ c.guid or '' }}">
+      <select name="charge" aria-label="Charge"><option value="">Choose…</option>
+        {% for o in charge_options %}<option value="{{ o.code }}" {{ 'selected' if o.code == c.product_code }}>{{ o.name or o.code }}</option>{% endfor %}</select></td>
+    <td class="num"><input class="qty-input" type="number" name="charge_amount" value="{{ ('%g'|format(c.unit_price)) if c.unit_price is not none else '' }}" min="0" step="0.01" inputmode="decimal" aria-label="Amount"></td>
+    <td><input class="text-input" name="charge_note" value="{{ c.comments or '' }}" maxlength="1024" placeholder="e.g. Fuel surcharge Nov" aria-label="Note"></td>
+    <td><button type="button" class="btn btn-quiet" data-remove-charge aria-label="Remove this charge">✕</button></td>
+  </tr>
+{%- endmacro %}
 <div class="page-head">
-  <h1>{{ ('Edit ' ~ noun ~ ' ' ~ found.number) if found else ('New ' ~ noun) }}</h1>
+  <h1>{{ ('Edit ' ~ noun ~ ' ' ~ found.number) if found else ('New ' ~ noun) }}{% if next_number %} <span class="order-number" title="The next number in Unleashed's sequence; Unleashed gives the final one when it's made">{{ next_number }}</span>{% endif %}</h1>
   <a href="{{ url_for('dash.sales_detail' if sales else 'dash.purchase_detail', number=found.number) if found else url_for('dash.sales' if sales else 'dash.purchases') }}">← {{ 'Back' if found else ('Sales' if sales else 'Purchases') }}</a>
 </div>
 {% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
@@ -57,10 +66,30 @@
     <tfoot><tr><td colspan="3">Sub total <span class="muted small">(before tax)</span></td><td class="num" data-subtotal></td><td></td></tr></tfoot>
   </table></div>
   <template id="order-line-template">{{ line_row({'guid': None, 'product_code': '', 'qty': None, 'unit_price': None}, product_options) }}</template>
+  <datalist id="order-products">{% for p in product_options %}<option value="{{ p.code }}">{{ p.code }} · {{ p.name }}</option>{% endfor %}</datalist>
+  <script type="application/json" id="order-product-data">{{ product_options|tojson }}</script>
   <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
   <p class="muted small">Picking a product fills in its {{ 'default sell' if sales else 'default purchase' }} price from Unleashed; change it if
     this order's is different. Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
     empty are removed.{% endif %}</p>
+
+  {% if not sales %}
+  <h2>Charges</h2>
+  {% if charge_options %}
+  <p class="muted small">Freight, fuel surcharge and other charges on the supplier's invoice. Each goes on the order as a line on its charge
+    product, with a note; COGS counts it with shipping.</p>
+  <div class="table-wrap"><table class="order-lines">
+    <thead><tr><th>Charge</th><th class="num">Amount</th><th>Note</th><th></th></tr></thead>
+    <tbody data-charges>{% for c in charges %}{{ charge_row(c) }}{% endfor %}</tbody>
+  </table></div>
+  <template id="order-charge-template">{{ charge_row({'guid': None, 'product_code': '', 'unit_price': None, 'comments': ''}) }}</template>
+  <div><button type="button" class="btn" data-add-charge>+ Add a charge</button></div>
+  {% else %}
+  <p class="recon recon-warn">! No charge products yet. Unleashed's API can't add cost lines to a purchase order, so freight and fuel
+    surcharges go on as lines on a charge product. Make one in Unleashed for each (e.g. FREIGHT, FUEL-SURCHARGE; not stock-tracked),
+    then {% if is_admin %}pick them in <a href="{{ url_for('dash.cogs_setup') }}#charges">Settings → COGS</a>{% else %}ask an admin to pick them in Settings → COGS{% endif %}.</p>
+  {% endif %}
+  {% endif %}
 
   <label class="block">Comments <textarea name="comments" rows="2" maxlength="{{ 2048 if sales else 1024 }}">{{ values.comments }}</textarea></label>
   {% if not sales and (not found or found.status == 'Parked') %}
@@ -70,6 +99,8 @@
     <button class="btn btn-primary" {{ 'disabled' if write_problem }}>{{ 'Save' if found else ('Make the ' ~ noun) }}</button>
     <a class="btn" href="{{ url_for('dash.sales_detail' if sales else 'dash.purchase_detail', number=found.number) if found else url_for('dash.sales' if sales else 'dash.purchases') }}">Cancel</a>
   </div>
+  {% if next_number %}<p class="muted small">{{ next_number }} is the next number in Unleashed's sequence; Unleashed gives the final number
+    when it's made (another order made in Unleashed first takes this one).</p>{% endif %}
   {% if sales and not found %}<p class="muted small">It's made parked. Complete it on its page when it goes out: that takes the stock
     out in Unleashed.</p>{% endif %}
 </form>

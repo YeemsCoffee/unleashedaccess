@@ -69,6 +69,17 @@
         {{ cu.CustomerName or cu.CustomerCode }} <span class="muted small">{{ cu.CustomerCode }}</span></label>{% else %}
       <p class="muted">No customers in Unleashed yet.</p>{% endfor %}</div>
   </section>
+  <section class="card" id="charges">
+    <h2>Charges on purchase orders</h2>
+    <p class="muted">Unleashed's API can't add cost lines to a purchase order, so freight, fuel surcharges and other charges made in Core go on
+      as lines on a charge product: one made in Unleashed for it, not stock-tracked (e.g. FREIGHT, FUEL-SURCHARGE). Tick those products:
+      the purchase order form offers them under Charges, and COGS counts their lines with shipping, not as stock bought.
+      Products coded FREIGHT, SHIPPING, DELIVERY, FUEL, FUEL-SURCHARGE or SURCHARGE count anyway.</p>
+    <input type="hidden" name="charges_shown" value="1">
+    <div class="store-picks">{% for p in products %}
+      <label><input type="checkbox" name="charge" value="{{ p.ProductCode }}" {{ 'checked' if (p.ProductCode or '').upper() in charge_codes }}>
+        {{ p.ProductDescription or p.ProductCode }} <span class="muted small">{{ p.ProductCode }}</span></label>{% endfor %}</div>
+  </section>
   <button class="btn btn-primary">Save</button>
 </form>
 {% endblock %}

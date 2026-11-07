@@ -153,7 +153,7 @@ def create_sales_order(client, order, products):
         "CustomerRef": order.get("reference") or None, "Comments": order.get("comments") or None,
         "SalesOrderLines": [{"Guid": str(uuid.uuid4()), "LineNumber": i, "Product": {"ProductCode": l["product_code"]},
                              "OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
-                             "LineTax": l["line_tax"], "DiscountRate": 0}
+                             "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None}
                             for i, l in enumerate(lines, 1)],
         "SubTotal": sub, "TaxTotal": tax_total, "Total": money(sub + tax_total),
     }
@@ -218,19 +218,20 @@ def _change_lines(client, path, current, wanted, rate, taxable, sales):
             continue
         body = {"Guid": str(uuid.uuid4()), "LineNumber": next_number, "Product": {"ProductCode": l["product_code"]},
                 "OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
-                "LineTax": l["line_tax"], "DiscountRate": 0}
+                "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None}
         next_number += 1
         client.post(f"{path}/Lines", body)
     for l in priced:
         old = by_guid.get(l.get("guid"))
         if old is None:
             continue
+        comments = l["comments"] if "comments" in l else old.get("Comments")
         if abs((old.get("OrderQuantity") or 0) - l["qty"]) <= TOLERANCE and \
-                abs((old.get("UnitPrice") or 0) - l["unit_price"]) <= 0.00005:
+                abs((old.get("UnitPrice") or 0) - l["unit_price"]) <= 0.00005 and (comments or None) == (old.get("Comments") or None):
             continue
         body = {"OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
                 "LineTax": l["line_tax"], "DiscountRate": old.get("DiscountRate") or 0,
-                "Comments": old.get("Comments")}
+                "Comments": comments or None}
         if not sales:
             body["ReceiptQuantity"] = old.get("ReceiptQuantity")
         client.put(f"{path}/Lines/{l['guid']}", body)
@@ -314,7 +315,7 @@ def create_purchase_order(client, order, products, place=True):
         "SupplierRef": order.get("reference") or None, "Comments": order.get("comments") or None,
         "PurchaseOrderLines": [{"Guid": str(uuid.uuid4()), "LineNumber": i, "Product": {"ProductCode": l["product_code"]},
                                 "OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
-                                "LineTax": l["line_tax"], "DiscountRate": 0}
+                                "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None}
                                for i, l in enumerate(lines, 1)],
         "SubTotal": sub, "TaxTotal": tax_total, "Total": money(sub + tax_total),
     }

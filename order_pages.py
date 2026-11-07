@@ -2,6 +2,7 @@
 Unleashed (unleashed/order_writes.py). Anyone who can open Sales (or Purchases) can use them;
 Unleashed records the change as the API user, and Core says who did it in its message."""
 import datetime as dt
+import re
 from itertools import zip_longest
 
 from flask import abort, flash, redirect, render_template, request, url_for
@@ -33,16 +34,46 @@ def _date(value, default=None):
         return default
 
 
-def _lines_from_form(form):
-    """The order lines typed: [{"guid", "product_code", "qty", "unit_price"}], blank rows left out."""
+def _lines_from_form(form, codes=None):
+    """The order lines typed: [{"guid", "product_code", "qty", "unit_price"}], blank rows left out,
+    then the charges (freight, fuel surcharge: one of each, at the amount, with a note). `codes`:
+    {lowercase code: code} to match typed product codes to; a line given something else keeps it,
+    for the page to say so."""
     lines = []
     for guid, code, qty, price in zip_longest(form.getlist("line_guid"), form.getlist("product"),
                                               form.getlist("qty"), form.getlist("price"), fillvalue=""):
         if not (code or "").strip() and not (qty or "").strip():
             continue
-        lines.append({"guid": guid or None, "product_code": (code or "").strip(), "qty": _number(qty) or 0,
+        code = (code or "").strip()
+        code = (codes or {}).get(code.lower(), code)
+        lines.append({"guid": guid or None, "product_code": code, "qty": _number(qty) or 0,
                       "unit_price": _number(price)})
+    for guid, code, amount, note in zip_longest(form.getlist("charge_guid"), form.getlist("charge"),
+                                                form.getlist("charge_amount"), form.getlist("charge_note"), fillvalue=""):
+        if not (code or "").strip() or _number(amount) is None:
+            continue
+        lines.append({"guid": guid or None, "product_code": code.strip(), "qty": 1, "unit_price": _number(amount),
+                      "comments": (note or "").strip()[:1024] or None, "charge": True})
     return lines
+
+
+def _unknown_products(lines, choices):
+    """The typed product codes that aren't products, for an error message."""
+    known = {o["code"] for o in choices["product_options"]} | {o["code"] for o in choices["charge_options"]}
+    return [l["product_code"] for l in lines if l["product_code"] not in known]
+
+
+def _next_number(endpoint, prefix):
+    """The number Unleashed should give the next order (its numbering goes on from the highest
+    one in the copy): "PO-00000281". Unleashed gives the final one when it's made."""
+    best = None
+    for number in _ext()["store"].document_numbers(endpoint) if _ext().get("store") else []:
+        m = re.fullmatch(r"(\D*?)(\d+)", number or "")
+        if m and m.group(1) == prefix and (best is None or int(m.group(2)) > int(best.group(2))):
+            best = m
+    if best is None:
+        return None
+    return f"{prefix}{int(best.group(2)) + 1:0{len(best.group(2))}d}"
 
 
 def _saved(endpoint, doc):
@@ -75,14 +106,24 @@ def _choices(kind):
     if kind == "sales":
         products = [p for p in products if p.get("IsSellable") is not False]
     price = "DefaultSellPrice" if kind == "sales" else "DefaultPurchasePrice"
-    options = sorted(({"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "",
-                       "price": p.get(price), "unit": (p.get("UnitOfMeasure") or {}).get("Name")}
-                      for p in products), key=lambda p: (p["code"] or "").lower())
+    charges = r.charge_codes()
+
+    def option(p):
+        return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": p.get(price),
+                "unit": (p.get("UnitOfMeasure") or {}).get("Name")}
+
+    options = sorted((option(p) for p in products if (p.get("ProductCode") or "").upper() not in charges),
+                     key=lambda p: (p["code"] or "").lower())
+    charge_options = sorted((option(p) for p in r.products() if not p.get("Obsolete")
+                             and (p.get("ProductCode") or "").upper() in charges),
+                            key=lambda p: (p["code"] or "").lower()) if kind == "purchases" else []
     warehouses = r.warehouses()
     default = next((w.get("WarehouseCode") for w in warehouses if w.get("IsDefault")),
                    warehouses[0].get("WarehouseCode") if warehouses else None)
-    return {"product_options": options, "warehouses": warehouses, "default_warehouse": default,
-            "products_raw": products}
+    return {"product_options": options, "charge_options": charge_options, "warehouses": warehouses,
+            "default_warehouse": default, "products_raw": products,
+            "codes": {o["code"].lower(): o["code"] for o in options + charge_options if o["code"]},
+            "product_names": {o["code"]: o["name"] for o in options + charge_options}}
 
 
 def _failed(e):
@@ -112,7 +153,7 @@ def _sales_form(found=None, form=None, error=None):
     if form is not None and hasattr(form, "getlist"):
         values = {k: form.get(k, "") for k in ("customer", "warehouse", "order_date", "required_date",
                                                 "reference", "comments")}
-        lines = _lines_from_form(form)
+        lines = _lines_from_form(form, choices["codes"])
     elif found:
         values = {"customer": found["customer_code"], "warehouse": found["warehouse"] or choices["default_warehouse"],
                   "order_date": found["order_date"].isoformat() if found["order_date"] else "",
@@ -126,6 +167,7 @@ def _sales_form(found=None, form=None, error=None):
         lines = []
     lines += [{"guid": None, "product_code": "", "qty": None, "unit_price": None}] * max(1, 3 - len(lines))
     html = render_template("dash/order_form.html", kind="sales", found=found, values=values, lines=lines,
+                           charges=[], next_number=None if found else _next_number("SalesOrders", "SO-"),
                            parties=[(c.get("CustomerCode"), c.get("CustomerName") or c.get("CustomerCode"))
                                     for c in customers if not c.get("Obsolete")],
                            stores=stores, error=error, write_problem=_write_problem(), **choices)
@@ -137,7 +179,7 @@ def _sales_order_from(form):
             "order_date": _date(form.get("order_date"), reports().today),
             "required_date": _date(form.get("required_date")),
             "reference": (form.get("reference") or "").strip()[:500],
-            "comments": (form.get("comments") or "").strip()[:2048], "lines": _lines_from_form(form)}
+            "comments": (form.get("comments") or "").strip()[:2048], "lines": _lines_from_form(form, _choices("sales")["codes"])}
 
 
 @bp.route("/sales/new", methods=["GET", "POST"])
@@ -150,6 +192,10 @@ def sales_order_new():
     order = _sales_order_from(request.form)
     if not order["customer"]:
         return _sales_form(form=request.form, error="Choose the customer.")
+    unknown = _unknown_products(order["lines"], _choices("sales"))
+    if unknown:
+        return _sales_form(form=request.form, error=f"{', '.join(unknown)}: not a product in Unleashed. Pick one from the "
+                                                    "list as you type its code or name.")
     try:
         made = create_sales_order(_ext()["client"], order, _choices("sales")["products_raw"])
     except (OrderError, UnleashedError) as e:
@@ -180,6 +226,10 @@ def sales_order_edit(number):
         return blocked
     order = _sales_order_from(request.form)
     order["customer"] = so["customer_code"]
+    unknown = _unknown_products(order["lines"], _choices("sales"))
+    if unknown:
+        return _sales_form(found=so, form=request.form, error=f"{', '.join(unknown)}: not a product in Unleashed. Pick "
+                                                              "one from the list as you type its code or name.")
     try:
         changed = update_sales_order(_ext()["client"], so["guid"], order, _choices("sales")["products_raw"])
     except (OrderError, UnleashedError) as e:
@@ -283,7 +333,7 @@ def _purchase_form(found=None, form=None, error=None):
     if form is not None and hasattr(form, "getlist"):
         values = {k: form.get(k, "") for k in ("supplier", "warehouse", "order_date", "delivery_date",
                                                 "reference", "comments", "place")}
-        lines = _lines_from_form(form)
+        lines = _lines_from_form(form, choices["codes"])
     elif found:
         values = {"supplier": found["supplier_code"], "warehouse": found["warehouse"] or choices["default_warehouse"],
                   "order_date": found["order_date"].isoformat() if found["order_date"] else "",
@@ -292,13 +342,20 @@ def _purchase_form(found=None, form=None, error=None):
                   "place": "1" if found["status"] == "Placed" else ""}
         lines = [{"guid": l["guid"], "product_code": l["product_code"], "qty": l["qty"],
                   "unit_price": l["unit_price"]} for l in found["lines"]]
+        lines += [{"guid": c["guid"], "product_code": c["product_code"], "qty": c["qty"], "unit_price": c["unit_price"],
+                   "comments": c["comments"], "charge": True}
+                  for c in found["cost_lines"] if c.get("field") == "PurchaseOrderLines" and c.get("guid")]
     else:
         values = {"supplier": request.args.get("supplier", ""), "warehouse": choices["default_warehouse"],
                   "order_date": reports().today.isoformat(), "delivery_date": "", "reference": "", "comments": "",
                   "place": "1"}
         lines = []
+    charges = [l for l in lines if l.get("charge")]
+    lines = [l for l in lines if not l.get("charge")]
     lines += [{"guid": None, "product_code": "", "qty": None, "unit_price": None}] * max(1, 3 - len(lines))
+    charges += [{"guid": None, "product_code": "", "unit_price": None, "comments": ""}] * (1 if choices["charge_options"] else 0)
     html = render_template("dash/order_form.html", kind="purchases", found=found, values=values, lines=lines,
+                           charges=charges, next_number=None if found else _next_number("PurchaseOrders", "PO-"),
                            parties=[(s.get("SupplierCode"), s.get("SupplierName") or s.get("SupplierCode"))
                                     for s in suppliers if not s.get("Obsolete")],
                            stores=[], error=error, write_problem=_write_problem(), **choices)
@@ -310,7 +367,7 @@ def _purchase_order_from(form):
             "order_date": _date(form.get("order_date"), reports().today),
             "delivery_date": _date(form.get("delivery_date")),
             "reference": (form.get("reference") or "").strip()[:500],
-            "comments": (form.get("comments") or "").strip()[:1024], "lines": _lines_from_form(form)}
+            "comments": (form.get("comments") or "").strip()[:1024], "lines": _lines_from_form(form, _choices("purchases")["codes"])}
 
 
 @bp.route("/purchases/new", methods=["GET", "POST"])
@@ -323,6 +380,10 @@ def purchase_order_new():
     order = _purchase_order_from(request.form)
     if not order["supplier"]:
         return _purchase_form(form=request.form, error="Choose the supplier.")
+    unknown = _unknown_products(order["lines"], _choices("purchases"))
+    if unknown:
+        return _purchase_form(form=request.form, error=f"{', '.join(unknown)}: not a product in Unleashed. Pick one from "
+                                                       "the list as you type its code or name.")
     try:
         made = create_purchase_order(_ext()["client"], order, _choices("purchases")["products_raw"],
                                      place=bool(request.form.get("place")))
@@ -354,6 +415,10 @@ def purchase_order_edit(number):
         return blocked
     order = _purchase_order_from(request.form)
     order["supplier"] = po["supplier_code"]
+    unknown = _unknown_products(order["lines"], _choices("purchases"))
+    if unknown:
+        return _purchase_form(found=po, form=request.form, error=f"{', '.join(unknown)}: not a product in Unleashed. "
+                                                                 "Pick one from the list as you type its code or name.")
     try:
         changed = update_purchase_order(_ext()["client"], po["guid"], order, _choices("purchases")["products_raw"],
                                         place=True if request.form.get("place") else None)
@@ -414,6 +479,9 @@ def purchase_order_receive(number):
                 return page(f"{l['product_code']} is tracked by batch: enter the batch number (and expiry) "
                             "of what arrived.")
         receipts[l["guid"]] = {"qty": qty, "batches": batches}
+    for c in po["cost_lines"]:  # charges on the order (freight, fuel surcharge) are received with it
+        if c.get("field") == "PurchaseOrderLines" and c.get("guid"):
+            receipts[c["guid"]] = {"qty": c["qty"], "batches": []}
     complete = bool(form.get("complete"))
     if complete and not whole:
         return page("Complete the order only when everything ordered arrived. Untick it to receive part of it.")

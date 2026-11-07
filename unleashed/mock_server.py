@@ -89,7 +89,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
             return _paged([], page)  # all the stock is in the default warehouse
         rows = []
         for p in ds.products.values():
-            if not _match(p["ProductCode"], "productCode"):
+            if not _match(p["ProductCode"], "productCode") or p.get("NonStock"):
                 continue
             qty, value = ds.stock_as_at(p["ProductCode"], as_at)
             allocated = ds.allocated(p["ProductCode"]) if as_at is None else 0
@@ -395,7 +395,8 @@ def _product(ds, p):
         "UnitOfMeasure": {"Name": p["UnitOfMeasure"]},
         "DefaultPurchasePrice": p["BaseCost"], "DefaultSellPrice": p["SellPrice"],
         "Supplier": _supplier_ref(ds, p["SupplierCode"]) if p["SupplierCode"] else None,
-        "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None,
+        "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None and not p.get("NonStock"),
+        "NeverDiminishing": bool(p.get("NonStock")),
         "IsBatchTracked": p["ProductCode"] in BATCH_TRACKED,
         "Obsolete": False,
     }

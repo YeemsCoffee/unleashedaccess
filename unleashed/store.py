@@ -36,6 +36,8 @@ CURRENT = "current"
 # snapshots are kept for each of those warehouses; COGS switches to them once a sync has
 # fetched them all (COGS_WAREHOUSE_READY: the warehouses it fetched).
 COGS_WAREHOUSE, COGS_WAREHOUSE_READY, COGS_STORES = "cogs_warehouse", "cogs_warehouse_ready", "cogs_stores"
+# Products that are charges on purchase orders (freight, fuel surcharge), not stock.
+COGS_CHARGES = "cogs_charge_products"
 # Which part of a day Unleashed's stock "as at" that date shows: "end" (Core's first
 # assumption) or "start" (it leaves out that day's sales and receipts).
 COGS_STOCK_AS_AT = "cogs_stock_as_at"
@@ -56,7 +58,8 @@ def cogs_settings(store):
     ready = bool(chosen) and set(chosen) <= set(warehouse_codes(store.get_state(COGS_WAREHOUSE_READY)))
     return {"warehouses": chosen if ready else None, "pending": chosen if chosen and not ready else None,
             "stores": json.loads(store.get_state(COGS_STORES) or "[]"),
-            "stock_as_at": store.get_state(COGS_STOCK_AS_AT) or "end"}
+            "stock_as_at": store.get_state(COGS_STOCK_AS_AT) or "end",
+            "charges": json.loads(store.get_state(COGS_CHARGES) or "[]")}
 
 
 def snapshot_key(as_at, warehouse=None):
@@ -263,6 +266,11 @@ class LocalStore:
             args.append(f"%{number}%")
         sql += " ORDER BY doc_date, number"
         return [json.loads(r["data"]) for r in self.db.query(sql, args)]
+
+    def document_numbers(self, endpoint):
+        """Every stored document's number (orders' OrderNumber, and so on)."""
+        return [r["number"] for r in self.db.query("SELECT number FROM ul_documents WHERE kind = ?", (endpoint,))
+                if r["number"]]
 
     def document_by_guid(self, endpoint, guid):
         rows = self.db.query("SELECT data FROM ul_documents WHERE kind = ? AND guid = ?",

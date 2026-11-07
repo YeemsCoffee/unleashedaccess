@@ -561,17 +561,57 @@ function fromTemplate(id, values) {
     });
     subtotal.textContent = money(total);
   }
-  body.addEventListener("change", function (e) {
-    if (!e.target.matches(".line-product")) return;
-    var opt = e.target.selectedOptions[0], price = e.target.closest("[data-line]").querySelector("[name=price]");
-    if (opt && opt.dataset.price !== "" && !price.value) {
-      var p = +opt.dataset.price;
-      price.value = Math.abs(p * 100 - Math.round(p * 100)) < 1e-9 ? p.toFixed(2) : String(p);
-    }
-    var qty = e.target.closest("[data-line]").querySelector("[name=qty]");
-    if (opt && opt.value && !qty.value) qty.focus();
-    sum();
+  // A product is typed: its code, or picked from the list of codes and names as it's typed.
+  var data = document.getElementById("order-product-data");
+  var products = data ? JSON.parse(data.textContent) : [];
+  var byCode = {}, byName = {};
+  products.forEach(function (p) {
+    byCode[(p.code || "").toLowerCase()] = p;
+    byName[(p.name || "").toLowerCase()] = p;
+    byName[((p.code || "") + " · " + (p.name || "")).toLowerCase()] = p;
   });
+  function pick(input) {
+    var row = input.closest("[data-line]"), typed = input.value.trim().toLowerCase();
+    var p = byCode[typed] || byName[typed];
+    var label = row.querySelector("[data-product-name]");
+    if (!p) {
+      label.textContent = typed ? "Not a product: pick one from the list" : "";
+      label.classList.toggle("due-late", !!typed);
+      return;
+    }
+    input.value = p.code;
+    label.textContent = p.name + (p.unit ? " (" + p.unit + ")" : "");
+    label.classList.remove("due-late");
+    var price = row.querySelector("[name=price]"), qty = row.querySelector("[name=qty]");
+    if (p.price !== null && p.price !== undefined && p.price !== "" && !price.value) {
+      var v = +p.price;
+      price.value = Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? v.toFixed(2) : String(v);
+    }
+    if (!qty.value) qty.focus();
+  }
+  body.addEventListener("change", function (e) {
+    if (e.target.matches(".line-product")) { pick(e.target); sum(); }
+  });
+  body.addEventListener("input", function (e) {
+    // Picking from the list fills the whole code at once: take it straight away.
+    if (e.target.matches(".line-product") && byCode[e.target.value.trim().toLowerCase()] &&
+        e.inputType !== "insertText" && e.inputType !== "deleteContentBackward") pick(e.target);
+  });
+  var charges = form.querySelector("[data-charges]"), addCharge = form.querySelector("[data-add-charge]");
+  if (charges && addCharge) {
+    addCharge.addEventListener("click", function () {
+      var row = fromTemplate("order-charge-template", {});
+      charges.appendChild(row);
+      row.querySelector("select").focus();
+    });
+    charges.addEventListener("click", function (e) {
+      var remove = e.target.closest("[data-remove-charge]");
+      if (!remove) return;
+      var row = remove.closest("[data-charge]");
+      if (charges.querySelectorAll("[data-charge]").length > 1) { row.remove(); return; }
+      row.querySelectorAll("input, select").forEach(function (el) { el.value = ""; });  // the last one: emptied
+    });
+  }
   body.addEventListener("input", sum);
   body.addEventListener("click", function (e) {
     var remove = e.target.closest("[data-remove-line]");
@@ -582,13 +622,14 @@ function fromTemplate(id, values) {
     } else {
       row.querySelectorAll("input:not([type=hidden]), select").forEach(function (el) { el.value = ""; });
       row.querySelector("[name=line_guid]").value = "";
+      row.querySelector("[data-product-name]").textContent = "";
     }
     sum();
   });
   form.querySelector("[data-add-line]").addEventListener("click", function () {
     var row = fromTemplate("order-line-template", {});
     body.appendChild(row);
-    row.querySelector("select").focus();
+    row.querySelector(".line-product").focus();
   });
   sum();
 })();

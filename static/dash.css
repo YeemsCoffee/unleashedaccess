@@ -433,6 +433,12 @@ td.wrap { white-space: normal; min-width: 280px; }
 .order-lines select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--surface-1); color: var(--text-primary); width: 100%; min-width: 220px; max-width: 520px; }
 .order-lines td { vertical-align: middle; }
+.order-lines .line-product, .order-lines .text-input { font: inherit; font-size: 14px; padding: 6px 9px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface-1); color: var(--text-primary); width: 100%; min-width: 220px;
+  max-width: 520px; box-sizing: border-box; }
+.line-product-name { margin-top: 2px; min-height: 1em; }
+.order-number { font-family: ui-monospace, Menlo, monospace; font-size: 0.6em; font-weight: 500; vertical-align: middle;
+  padding: 3px 10px; border-radius: 999px; background: var(--brand-soft); color: var(--text-primary); }
 .order-lines .qty-input { width: 100px; }
 .batch-row { margin: 6px 0; }
 .receive-line { padding: 12px 0; border-bottom: 1px solid var(--line); }

@@ -505,7 +505,8 @@ class OrderPageTests(unittest.TestCase):
 
     def test_a_sales_order_is_made_changed_and_completed_with_its_batches(self):
         form = self.c.get("/sales/new").get_data(as_text=True)
-        for text in ("Mock Wholesale Cafe", 'value="COF-ESP-5LB" data-price="160.0"', "+ Add a product"):
+        for text in ("Mock Wholesale Cafe", '<option value="COF-ESP-5LB">COF-ESP-5LB · Espresso Blend 5 lb</option>',
+                     '"code": "COF-ESP-5LB"', '"price": 160.0', 'list="order-products"', "+ Add a product"):
             self.assertIn(text, form)
         self.assertIn("Choose the customer", self.c.post("/sales/new", data={"product": "MILK-WHL-GAL", "qty": "1",
                                                                             "price": "1"}).get_data(as_text=True))
@@ -522,7 +523,9 @@ class OrderPageTests(unittest.TestCase):
         # Changing it: a quantity and price, a line added, a line removed.
         espresso = next(l for l in so["lines"] if l["product_code"] == "MILK-WHL-GAL")  # the milk
         cream = next(l for l in so["lines"] if l["product_code"] == "CRM-HVY-HG")
-        self.assertIn('value="MILK-WHL-GAL" data-price', self.c.get(f"/sales/{number}/edit").get_data(as_text=True))
+        edit = self.c.get(f"/sales/{number}/edit").get_data(as_text=True)
+        self.assertIn('name="product" class="line-product" list="order-products" value="MILK-WHL-GAL"', edit)
+        self.assertIn("Whole Milk 1 gal</div>", edit)  # its name under the code
         self._post(f"/sales/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(), reference="PO 56",
                    comments="", line_guid=[espresso["guid"], cream["guid"], ""],
                    product=["MILK-WHL-GAL", "CRM-HVY-HG", "MILK-OAT-QT"], qty=["3", "3", "4"], price=["115", "28", "9.5"])
@@ -582,6 +585,56 @@ class OrderPageTests(unittest.TestCase):
         self.assertIsNone(self.reports.daily_unexplained(older))
         self.assertIn("kept for this month and last month",
                       self.c.get(f"/cogs/not-on-an-order?month={older['month']:%Y-%m}").get_data(as_text=True))
+
+    def test_products_are_typed_and_the_next_number_is_shown(self):
+        last_so = max(int(n[3:]) for n in self.app.extensions["unleashed"]["store"].document_numbers("SalesOrders")
+                      if n.startswith("SO-"))
+        form = self.c.get("/sales/new").get_data(as_text=True)
+        self.assertIn(f"SO-{last_so + 1:08d}", form)
+        # Codes typed in any case are matched; something that isn't a product is refused.
+        res = self._post("/sales/new", customer="GDN-POS", warehouse="GDN", order_date=TODAY.isoformat(),
+                         line_guid=[""], product=["milk-whl-gal"], qty=["1"], price=["4.2"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        self.assertEqual(number, f"SO-{last_so + 1:08d}")  # what the form said
+        self.assertEqual(self.reports.sales_order(number)["lines"][0]["product_code"], "MILK-WHL-GAL")
+        bad = self.c.post("/sales/new", data={"customer": "GDN-POS", "warehouse": "GDN", "order_date": TODAY.isoformat(),
+                                              "line_guid": [""], "product": ["Oat milk please"], "qty": ["1"], "price": ["1"]})
+        self.assertIn("Oat milk please: not a product in Unleashed", bad.get_data(as_text=True))
+        self.assertRegex(self.c.get("/purchases/new").get_data(as_text=True),
+                         r'New purchase order <span class="order-number"[^>]*>PO-\d+</span>')
+
+    def test_freight_and_fuel_surcharge_go_on_a_purchase_order_as_charges(self):
+        form = self.c.get("/purchases/new").get_data(as_text=True)
+        self.assertIn('<option value="FUEL-SURCHARGE" >Fuel surcharge</option>', form)
+        self.assertNotIn('<option value="FREIGHT">FREIGHT', form)  # charges aren't offered as products
+        res = self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(), place="1",
+                         line_guid=[""], product=["MILK-WHL-GAL"], qty=["10"], price=["4.2"],
+                         charge_guid=["", ""], charge=["FREIGHT", "FUEL-SURCHARGE"], charge_amount=["18", "3.75"],
+                         charge_note=["", "Fuel surcharge Nov"])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        po = self.reports.purchase_order(number)
+        self.assertEqual((po["goods"], po["shipping"]), (42.0, 21.75))  # charges count with shipping, not stock
+        self.assertEqual(sorted(c["description"] for c in po["cost_lines"]), ["Freight", "Fuel surcharge Nov"])
+        self.assertIn("Fuel surcharge Nov", self.c.get(f"/purchases/{number}").get_data(as_text=True))
+        # Editing keeps them (and can change them); receiving takes them with the goods.
+        self.assertIn('value="Fuel surcharge Nov"', self.c.get(f"/purchases/{number}/edit").get_data(as_text=True))
+        fuel = next(c for c in po["cost_lines"] if c["product_code"] == "FUEL-SURCHARGE")
+        freight = next(c for c in po["cost_lines"] if c["product_code"] == "FREIGHT")
+        milk = po["lines"][0]
+        self._post(f"/purchases/{number}/edit", warehouse="GDN", order_date=TODAY.isoformat(),
+                   line_guid=[milk["guid"]], product=["MILK-WHL-GAL"], qty=["10"], price=["4.2"],
+                   charge_guid=[freight["guid"], fuel["guid"]], charge=["FREIGHT", "FUEL-SURCHARGE"],
+                   charge_amount=["18", "4.10"], charge_note=["", "Fuel surcharge Nov"])
+        self.assertAlmostEqual(self.reports.purchase_order(number)["shipping"], 22.1)
+        before = self.ds.stock_as_at("MILK-WHL-GAL")[0]
+        self._post(f"/purchases/{number}/receive", complete="1", **{f"qty-{milk['guid']}": "10"})
+        self.assertEqual(self.reports.purchase_order(number)["status"], "Complete")
+        self.assertEqual(self.ds.stock_as_at("MILK-WHL-GAL")[0], before + 10)
+        self.assertNotIn("FUEL-SURCHARGE", [r["product_code"] for r in self.reports.stock_on_hand()["rows"]])
+        # Products chosen in Settings → COGS count as charges too.
+        self.c.post("/settings/cogs", data={"charges_shown": "1", "charge": ["FREIGHT", "FUEL-SURCHARGE", "JUG-GAL"],
+                                            "stock_as_at": "end"})
+        self.assertIn("JUG-GAL", self.reports.charge_codes())
 
     def test_a_parked_sales_order_is_deleted(self):
         res = self._post("/sales/new", customer="GDN-POS", warehouse="GDN", order_date=TODAY.isoformat(),

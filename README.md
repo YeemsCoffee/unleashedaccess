@@ -111,10 +111,25 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   the batches for batch-tracked products. Unleashed makes the return from the order; Core sets
   the lines, removes the ones not going back, and completes it. Purchases → **Supplier
   returns** lists them.
-- Purchase cost lines (freight) are still added in Unleashed: its API only reads them. Core
-  shows them on each purchase order and counts them in COGS: Unleashed keeps them apart from
-  the order (GET /PurchaseOrders/{guid}/Costs), and the sync fetches them for received orders
-  (again only when an order changes).
+- **Products are typed**, not scrolled for: type part of a code or name and pick from the list
+  that narrows as you type (or type the whole code). The product's name shows under it, and
+  anything that isn't a product in Unleashed is flagged before the order is saved.
+- **The order number** a new order will get shows beside the page title: the next in
+  Unleashed's sequence after the highest SO-/PO- number in the copy. Unleashed gives the
+  final number when the order's made, so an order made in Unleashed in the meantime takes it
+  and Core's gets the one after.
+- **Freight and fuel surcharges on purchase orders** go in the form's **Charges** section:
+  the charge, the amount and a note (e.g. "Fuel surcharge Nov"). Unleashed's API can't write
+  cost lines, so each charge goes on the order as a line on a charge product: a product made
+  in Unleashed for it (e.g. FREIGHT, FUEL-SURCHARGE; not stock-tracked), quantity 1, the note
+  in the line's comments. Pick those products in Settings → COGS → **Charges on purchase
+  orders** (FREIGHT, SHIPPING, DELIVERY, FUEL, FUEL-SURCHARGE and SURCHARGE count without
+  being picked); COGS counts them with shipping, not as stock bought, and receiving the order
+  receives them in full.
+- Cost lines added in Unleashed (its additional costs) still show on each purchase order and
+  count in COGS: Unleashed keeps them apart from the order (GET
+  /PurchaseOrders/{guid}/Costs), and the sync fetches them for received orders (again only
+  when an order changes).
 
 ## Access profiles
 
