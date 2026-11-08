@@ -299,6 +299,24 @@ the month's figure, with the products it's on, so drift shows the day it starts 
 difference on one day doesn't carry into the next. The days add up to the month's figure
 (the page says whether they match); days over $25 are highlighted; CSV export.
 
+A product's figure for a day isn't a transaction's amount: it's its stock at the start of
+the day, plus what that day's documents moved, less its stock at the end. Open it for the
+working: the stock at the start (quantity and value), each document with its number,
+quantity and value (a purchase's goods and its share of the order's shipping, and the
+warehouse it went into), what it should end at, Unleashed's stock at the end, and the gap
+in quantity and value, with what kind of gap it is. Unleashed records every change to
+stock on a document, so a gap is a document Core dates or values differently, or one it
+doesn't read:
+- the quantity adds up but the value doesn't: Unleashed valued it differently;
+- the documents moved it but Unleashed's stock didn't: it moved on another day (look either
+  side for the opposite amount). A whole order on one day and its opposite the next is the
+  sign of Core reading Unleashed's daily stock as the wrong end of the day (Settings → COGS),
+  or of an order whose received date isn't when it was receipted;
+- a purchase into a warehouse COGS doesn't count: bought, but never in the stock counted;
+- the stock that stayed revalued: when stock comes in at a different price, Unleashed's
+  average cost moves, and what was already there changes value with no document. A gap a
+  little bigger than an order is often this, and the working says how much.
+
 **Returns.** Stock sent back to suppliers comes off purchases (it wasn't used), and what
 customers send back into stock comes off cost of sales, and off the store's share when a
 store sends it back. Credits that don't go back into stock (thrown away) don't change COGS:

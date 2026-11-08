@@ -582,3 +582,10 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .sub-pills a:hover { background: var(--surface-0); }
 .sub-pills a.active { background: var(--brand-soft); color: var(--brand-soft-ink); }
 .count-lines .qty-input { width: 110px; }
+
+/* COGS "not explained": a product's working for one day */
+.gap-products { margin-top: 6px; white-space: normal; }
+.gap-working { margin: 4px 0 8px; }
+.gap-working summary { cursor: pointer; font-size: 13px; }
+.working-table { width: auto; min-width: min(520px, 100%); margin: 6px 0; font-size: 13px; }
+.working-table td, .working-table th { padding: 4px 8px; }

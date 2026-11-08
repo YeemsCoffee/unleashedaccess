@@ -570,6 +570,27 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("Batch CRM-HVY-HG-A (3)", page)
         self.assertIn("can&#39;t be changed", self.c.get(f"/sales/{number}/edit", follow_redirects=True).get_data(as_text=True))
 
+    def test_a_purchase_into_a_warehouse_cogs_doesnt_count_says_so(self):
+        res = self._post("/purchases/new", supplier="SUP-ROAST", warehouse="COM", order_date=TODAY.isoformat(),
+                         line_guid=[""], product=["COF-ESP-5LB"], qty=["10"], price=["26.95"], place="1")
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        po = self.reports.purchase_order(number)
+        self._post(f"/purchases/{number}/receive", **{f"qty-{po['lines'][0]['guid']}": "10"})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        cogs = self.reports.cogs(TODAY, warehouses=["GDN"])
+        day = self.reports.daily_unexplained(cogs)["days"][-1]
+        beans = next(p for p in day["products"] if p["product_code"] == "COF-ESP-5LB")
+        # Counted as bought but never in the stock counted (10 bags), and the bags that stayed revalued
+        # down by the cheaper ones: the working shows both.
+        self.assertAlmostEqual(beans["qty_gap"], 10.0, places=6)
+        self.assertGreater(beans["revalued"], 1)
+        self.assertAlmostEqual(beans["value"], 269.50 + beans["revalued"], places=2)
+        page = self.c.get("/cogs/not-on-an-order").get_data(as_text=True)
+        self.assertNotIn("revalued", page)  # COGS counts every warehouse there, so nothing's out of place
+        entry = next(e for e in beans["docs"] if e["number"] == number)
+        self.assertEqual((entry["qty"], round(entry["value"], 2), entry["warehouse"], entry["elsewhere"]), (10, 269.50, "COM", True))
+        self.assertTrue(beans["elsewhere"])
+
     def test_not_explained_is_checked_day_by_day_and_adds_up_to_the_month(self):
         cogs = self.reports.cogs(TODAY)
         daily = self.reports.daily_unexplained(cogs)
@@ -583,11 +604,19 @@ class OrderPageTests(unittest.TestCase):
         cogs = self.reports.cogs(TODAY)
         daily = self.reports.daily_unexplained(cogs)
         self.assertAlmostEqual(daily["days"][-1]["value"], 2 * avg, places=2)
-        self.assertEqual(daily["days"][-1]["products"][0]["product_code"], "MILK-WHL-GAL")
+        milk = daily["days"][-1]["products"][0]
+        self.assertEqual(milk["product_code"], "MILK-WHL-GAL")
+        # Its working: the stock at the start, each document that day, the stock at the end.
+        self.assertAlmostEqual(milk["before_value"] + sum(e["value"] for e in milk["docs"]) - milk["after_value"],
+                               milk["value"], places=6)
+        self.assertAlmostEqual(milk["qty_gap"], 2.0, places=6)
+        self.assertIn("Sale", {e["kind"] for e in milk["docs"]})  # the day's sales of it, with their numbers
         self.assertTrue(all(abs(d["value"]) < 0.5 for d in daily["days"][:-1]))
         self.assertAlmostEqual(daily["total"], self.reports.cogs_by_store(cogs)["rest"], places=4)
         page = self.c.get("/cogs/not-on-an-order").get_data(as_text=True)
-        for text in ('id="daily"', "✓ matches", "MILK-WHL-GAL", 'class="row-warn"' if 2 * avg >= 25 else "Day by day"):
+        for text in ('id="daily"', "✓ matches", "MILK-WHL-GAL", 'class="row-warn"' if 2 * avg >= 25 else "Day by day",
+                     'class="gap-working"', "Stock at the start of the day", "end of the day",
+                     "Unleashed's stock is 2 lower"):
             self.assertIn(text, page)
         csv_text = self.c.get("/cogs/not-on-an-order?format=csv&by=daily").get_data(as_text=True)
         self.assertTrue(csv_text.startswith("Date,Stock at end of day,Change,Documents explain,Not explained"))

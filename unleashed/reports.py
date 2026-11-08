@@ -1168,31 +1168,52 @@ class Reports:
                                        by_product=True)
                  for d in [cogs["prior_end"]] + days}
         moved = defaultdict(lambda: defaultdict(float))  # day -> product -> value the documents moved
+        docs = defaultdict(lambda: defaultdict(list))  # day -> product -> the documents, to show the working
         added = defaultdict(float)  # day -> what production added beyond its components (labour etc.)
+
+        def note(day, code, kind, number, qty, value, **extra):
+            moved[day][code] += value
+            docs[day][code].append({"kind": kind, "number": number, "qty": qty, "value": value, **extra})
+
         for o in cogs["received"]:
             goods = o["goods"] or 1
+            elsewhere = bool(warehouses and o.get("warehouse") and o["warehouse"] not in warehouses)
             for l in o["lines"]:
-                moved[o["received_date"]][l["product_code"]] += l["line_total"] + o["shipping"] * l["line_total"] / goods
+                share = o["shipping"] * l["line_total"] / goods
+                qty = l["received_qty"] if l.get("received_qty") is not None else l["qty"]
+                note(o["received_date"], l["product_code"], "Purchase", o["number"], qty, l["line_total"] + share,
+                     goods=l["line_total"], shipping=share, warehouse=o.get("warehouse"), elsewhere=elsewhere)
             if not o["lines"] and o["shipping"]:
-                moved[o["received_date"]]["(costs with no product)"] += o["shipping"]
+                note(o["received_date"], "(costs with no product)", "Purchase", o["number"], 0, o["shipping"],
+                     shipping=o["shipping"], warehouse=o.get("warehouse"), elsewhere=elsewhere)
         for r in cogs.get("supplier_returns") or []:
             for l in r["lines"]:
-                moved[r["date"]][l["product_code"]] -= l["value"]
+                note(r["date"], l["product_code"], "Supplier return", r["number"], -l["qty"], -l["value"],
+                     warehouse=r.get("warehouse"))
         for o in self._completed_sales(start, through, warehouses):
             for l in o["lines"]:
-                moved[o["completed_date"] or o["order_date"]][l["product_code"]] -= l["cost"]
+                note(o["completed_date"] or o["order_date"], l["product_code"], "Sale", o["number"], -(l["qty"] or 0),
+                     -l["cost"], warehouse=o.get("warehouse"))
         for c in self._completed_returns("CreditNotes", start, through, warehouses):
             for l in c["lines"]:
-                moved[c["date"]][l["product_code"]] += l["cost"]
+                note(c["date"], l["product_code"], "Credit", c["number"], l["qty"], l["cost"], warehouse=c.get("warehouse"))
         for r in self.stock_adjustments(start, through)["rows"]:
             if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
-                moved[r["date"]][r["product_code"]] += r["value_change"] or 0
+                note(r["date"], r["product_code"], "Adjustment", r["number"], r["qty_change"] or 0,
+                     r["value_change"] or 0, warehouse=r["warehouse"])
+        # Brought in from a warehouse COGS doesn't count: like a purchase (cogs() counts it with them).
+        # Sent out to one counts as used, as stock leaving the warehouses always has, so it stays out.
+        for t in cogs.get("transfers_in") or []:
+            for l in t["lines"]:
+                note(t["date"], l["product_code"], "Transfer in", t["number"], l["qty"], l["value"] or 0,
+                     warehouse=t["destination"])
         for a in self._completed_assemblies(start, through):
             for l in a["lines"]:
-                moved[a["completed_date"]][l["product_code"]] -= l["cost"]
-            moved[a["completed_date"]][a["product_code"]] += a["cost"]
+                note(a["completed_date"], l["product_code"], "Production", a["number"], -l["consumed"], -l["cost"])
+            note(a["completed_date"], a["product_code"], "Production", a["number"], a["qty"], a["cost"])
             added[a["completed_date"]] += a["supplier_costs"] or 0
         names = {code: row["description"] for rows in stock.values() for code, row in rows.items()}
+        empty = {"qty": 0.0, "value": 0.0}
         rows, running, prev = [], 0.0, cogs["prior_end"]
         for d in days:
             before, after = stock[prev], stock[d]
@@ -1203,13 +1224,33 @@ class Reports:
                 gaps[code] = gap
             value = sum(gaps.values()) - added[d]
             running += value
+            products = []
+            for code, gap in sorted(gaps.items(), key=lambda kv: -abs(kv[1]))[:8]:
+                if abs(gap) < 0.005:
+                    continue
+                b, a = before.get(code, empty), after.get(code, empty)
+                entries = docs[d][code]
+                products.append({
+                    "product_code": code, "description": names.get(code), "value": gap,
+                    "before_qty": b["qty"], "before_value": b["value"], "after_qty": a["qty"], "after_value": a["value"],
+                    "docs": entries, "moved": moved[d][code], "moved_qty": sum(e["qty"] or 0 for e in entries),
+                    # Stock that changed by a different amount than the documents say, in quantity: the
+                    # documents and the stock disagree on what happened (not on its cost).
+                    "qty_gap": b["qty"] + sum(e["qty"] or 0 for e in entries) - a["qty"],
+                    "elsewhere": any(e.get("elsewhere") for e in entries),
+                    "unit_before": b["value"] / b["qty"] if b["qty"] > 1e-9 else None,
+                    "unit_after": a["value"] / a["qty"] if a["qty"] > 1e-9 else None,
+                })
+                q = products[-1]
+                # The stock that stayed, revalued: its unit value (Unleashed's average cost) moved, e.g.
+                # with a receipt at a different price. That's value no document records either.
+                q["revalued"] = (min(b["qty"], a["qty"]) * (q["unit_before"] - q["unit_after"])
+                                 if q["unit_before"] is not None and q["unit_after"] is not None else 0.0)
             rows.append({
                 "date": d, "stock": sum(r["value"] for r in after.values()),
                 "change": sum(r["value"] for r in after.values()) - sum(r["value"] for r in before.values()),
                 "explained": sum(moved[d].values()) + added[d], "production_added": added[d],
-                "value": value, "running": running,
-                "products": [{"product_code": code, "description": names.get(code), "value": gap}
-                             for code, gap in sorted(gaps.items(), key=lambda kv: -abs(kv[1]))[:8] if abs(gap) >= 0.005],
+                "value": value, "running": running, "products": products,
             })
             prev = d
         return {"days": rows, "total": running}

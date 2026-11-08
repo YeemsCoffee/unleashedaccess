@@ -1,6 +1,51 @@
 {% extends "dash/base.html" %}
 {% block title %}Not on an order or write-off{% endblock %}
 {% block content %}
+{% macro working(p) %}
+{% set links = {'Purchase': 'dash.purchase_detail', 'Sale': 'dash.sales_detail', 'Production': 'dash.production_order',
+                'Adjustment': 'dash.adjustment_detail', 'Transfer in': 'dash.transfer_detail', 'Credit': 'dash.credit_detail',
+                'Supplier return': 'dash.supplier_return_detail'} %}
+<details class="gap-working">
+  <summary><span class="mono">{{ p.product_code }}</span> {{ p.description or '' }}: <strong>{{ p.value|money }}</strong></summary>
+  <table class="working-table">
+    <thead><tr><th></th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+    <tbody>
+    <tr><td>Stock at the start of the day</td><td class="num">{{ p.before_qty|qty }}</td><td class="num">{{ p.before_value|money }}</td></tr>
+    {% for e in p.docs %}
+    <tr><td>{{ e.kind }} {% if links.get(e.kind) and e.number %}<a href="{{ url_for(links[e.kind], number=e.number) }}">{{ e.number }}</a>{% else %}{{ e.number or '' }}{% endif %}
+        {% if e.shipping %}<div class="muted small">{{ e.goods|money }} goods + {{ e.shipping|money }} of the order's shipping, spread by value</div>{% endif %}
+        {% if e.elsewhere %}<div class="due-late small">Into {{ e.warehouse }}, which COGS doesn't count</div>{% elif e.warehouse and e.kind == 'Purchase' %}<div class="muted small">Into {{ e.warehouse }}</div>{% endif %}</td>
+      <td class="num">{{ '%+g'|format(e.qty) if e.qty else '' }}</td><td class="num">{{ e.value|money }}</td></tr>
+    {% else %}
+    <tr><td class="muted">No document Core reads moved it this day</td><td></td><td></td></tr>
+    {% endfor %}
+    <tr class="row-sub"><td>So it should end the day at</td><td class="num">{{ (p.before_qty + p.moved_qty)|qty }}</td><td class="num">{{ (p.before_value + p.moved)|money }}</td></tr>
+    <tr><td>Unleashed's stock at the end of the day</td><td class="num">{{ p.after_qty|qty }}</td><td class="num">{{ p.after_value|money }}</td></tr>
+    {% if p.unit_before is not none and p.unit_after is not none and (p.unit_before - p.unit_after)|abs >= 0.005 %}
+    <tr><td class="muted">Its unit value (Unleashed's average cost): {{ p.unit_before|money }} at the start, {{ p.unit_after|money }} at the end</td><td></td><td></td></tr>{% endif %}
+    <tr class="row-sub"><td><strong>Not explained</strong></td><td class="num">{{ '%+g'|format(p.qty_gap|round(4)) if p.qty_gap|abs >= 0.0001 else '—' }}</td><td class="num"><strong>{{ p.value|money }}</strong></td></tr>
+    </tbody>
+  </table>
+  {% if p.revalued|abs >= 0.5 %}<p class="small">Of the {{ p.value|money }}, about {{ p.revalued|money }} is the stock that stayed
+    being revalued: its unit value went from {{ p.unit_before|money }} to {{ p.unit_after|money }}. A document moved Unleashed's
+    average cost without it counting here: a receipt into a warehouse COGS doesn't count, or costs added to a purchase order
+    after it was received.
+    {% if (p.value - p.revalued)|abs >= 0.5 %}The other {{ (p.value - p.revalued)|money }} is below.{% endif %}</p>{% endif %}
+  <p class="muted small">
+  {% if p.elsewhere %}The order was received into a warehouse COGS doesn't count: it counts as bought, but its stock never shows here.
+  {% elif p.docs and (p.after_qty - p.before_qty)|abs < 0.0001 and p.moved_qty|abs >= 0.0001 %}Unleashed's stock of it didn't change this day,
+    though these documents say it moved: Unleashed moved it on another day (look at the days either side for the opposite amount), or the
+    document's date isn't when it was received.
+  {% elif p.qty_gap|abs < 0.0001 %}The quantity adds up; the value doesn't: Unleashed valued the stock differently from the documents (a
+    different cost on a receipt, sale or production order than the one recorded on it).
+  {% elif not p.docs %}Core has no document for it this day, but Unleashed's stock of it changed by {{ '%+g'|format((p.after_qty - p.before_qty)|round(4)) }}:
+    a document moved it on a day next to this one (look either side for the opposite amount), or it's a kind Core doesn't read
+    (a stock count completed in Unleashed, costs added to a purchase order after it was received).
+  {% else %}The quantity doesn't add up: Unleashed's stock is {{ '%g'|format((p.qty_gap|abs)|round(4)) }} {{ 'lower' if p.qty_gap > 0 else 'higher' }}
+    than these documents say. A document moved it on a day next to this one (look either side for the opposite amount), or it's a
+    kind Core doesn't read.{% endif %}</p>
+</details>
+{% endmacro %}
 <div class="page-head">
   <h1>Not on an order or write-off</h1>
   <a href="{{ url_for('dash.cogs_page', month=month.strftime('%Y-%m')) }}">← COGS</a>
@@ -23,16 +68,17 @@
   {% if daily %}
   <p class="muted">Each day on its own: the stock at the end of the day against the day before, less what that day's documents
     moved (purchases received, returns, cost of sales, write-offs, production). What's left is what that day added to the figure
-    above, so drift shows the day it starts, and a difference on one day doesn't carry into the next. Positive: value left with
-    no record; negative: value appeared. Open a day for its products.</p>
+    above, so drift shows the day it starts, and a difference on one day doesn't carry into the next. Unleashed records every change
+    to stock on a document, so what's left is a document Core dates or values differently from Unleashed, or one it doesn't read.
+    Positive: Unleashed's stock is lower than the documents say; negative: higher. Open a day for its products, and a product for the working: its stock at the start of the day, each document that moved it, and its stock at the end.</p>
   <div class="table-wrap"><table class="daily-table">
     <thead><tr><th>Day</th><th class="num wide-only">Stock at end of day</th><th class="num wide-only">Change</th>
       <th class="num wide-only">Documents explain</th><th class="num">Not explained</th><th class="num">Month to date</th></tr></thead>
     <tbody>{% for d in daily.days %}
     <tr class="{{ 'row-warn' if d.value|abs >= 25 }}">
       <td class="nowrap">{% if d.products %}<details><summary>{{ d.date|d }}</summary>
-        <ul class="plain-list small">{% for p in d.products %}<li><span class="mono">{{ p.product_code }}</span> {{ p.description or '' }}: {{ p.value|money }}</li>{% endfor %}
-          {% if d.production_added %}<li class="muted">Production added {{ d.production_added|money }} of labour or other costs (not on a document's value).</li>{% endif %}</ul>
+        <div class="gap-products">{% for p in d.products %}{{ working(p) }}{% endfor %}
+          {% if d.production_added %}<p class="muted small">Production added {{ d.production_added|money }} of labour or other costs (not on a document's value).</p>{% endif %}</div>
         </details>{% else %}{{ d.date|d }}{% endif %}</td>
       <td class="num wide-only">{{ d.stock|money }}</td><td class="num wide-only">{{ d.change|money }}</td>
       <td class="num wide-only">{{ d.explained|money }}</td>
@@ -76,8 +122,9 @@
     {% if split.rest|abs < 0.5 and not why.products %}<li class="muted">Nothing to explain: all of COGS is on completed sales
       orders and write-offs.</li>
     {% elif not f.partly_received and not f.elsewhere and not f.production_added %}<li class="muted">None of the usual document
-      causes (part-received purchase orders, deliveries to a location COGS doesn't count, production costs). What's left is
-      stock that changed without a document: used but not on a sales order, waste or a stocktake not entered, or moved out.</li>{% endif %}
+      causes (part-received purchase orders, deliveries to a location COGS doesn't count, production costs). Unleashed records
+      every change on a document, so what's left is a document Core dates or values differently, or one it doesn't read: open
+      the days above for each product's working.</li>{% endif %}
   </ul>
   {% if why.products %}
   <div class="table-wrap"><table class="maint-wrap">
@@ -93,9 +140,9 @@
     <tfoot><tr><td>All products{% if why.products|length > 25 %} ({{ why.products|length - 25 }} more in the CSV){% endif %}</td>
       <td class="wide-only" colspan="5"></td><td></td><td></td><td class="num">{{ why.gap|money }}</td></tr></tfoot>
   </table></div>
-  <p class="muted small">Difference = should be − is. Above zero: value left with no record (used without a sales order, waste or a
-    stocktake not entered, moved to a location COGS doesn't count, part-received orders). Below zero: value appeared (stock
-    received without a purchase order, returns, production costs, cost corrections).</p>
+  <p class="muted small">Difference = should be − is. Above zero: Unleashed's stock is lower than the documents Core reads say
+    (a document dated differently, moved to a location COGS doesn't count, part-received orders). Below zero: higher (production
+    costs, cost changes on a document after the day it moved stock).</p>
   {% endif %}
 </section>
 
