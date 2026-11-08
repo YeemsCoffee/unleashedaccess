@@ -154,15 +154,18 @@ def transactions_history():
     start, end = _range_args()
     doc_type = request.args.get("type") or None
     product = request.args.get("product") or None
-    rows = r.transactions(start, end, product=product, doc_type=doc_type)[::-1]
-    if _wants_csv():
+    # Nothing loads until a range is chosen and run (the form sends start and end).
+    asked = "start" in request.args or "end" in request.args
+    rows = r.transactions(start, end, product=product, doc_type=doc_type)[::-1] if asked else None
+    if _wants_csv() and asked:
         return _csv("transactions", [
             ("Date", lambda x: x["date"].isoformat()), ("Type", "type"), ("Number", "number"),
             ("Party", "party"), ("Warehouse", "warehouse"), ("Product Code", "product_code"), ("Qty", "qty"),
             ("Value", lambda x: _round(x["value"], 4)),
         ], rows)
     return render_template("dash/transactions_history.html", rows=rows, start=start, end=end,
-                           doc_type=doc_type, product=product, products=r.products(), csv_url=_csv_url())
+                           doc_type=doc_type, product=product, products=r.products(),
+                           csv_url=_csv_url() if asked else None)
 
 
 # ---------------------------------------------------------------- adjustments

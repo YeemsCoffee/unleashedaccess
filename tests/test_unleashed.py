@@ -807,8 +807,19 @@ class StockTransactionTests(unittest.TestCase):
         days = {d for d in re.findall(r'<td class="nowrap">([^<]+)</td>', html)}
         self.assertTrue(days)
         self.assertLessEqual(len(days), 2)
-        history = self.c.get("/transactions/history?type=Transfer").get_data(as_text=True)
-        self.assertIn("<option selected>Transfer</option>", history)
+        # History loads nothing until a range is chosen and run.
+        empty = self.c.get("/transactions/history?type=Transfer").get_data(as_text=True)
+        self.assertIn("<option selected>Transfer</option>", empty)
+        self.assertIn("then press <strong>Run enquiry</strong>", empty)
+        self.assertNotIn("<thead>", empty)
+        self.assertNotIn("Export CSV", empty)
+        day = (TODAY - dt.timedelta(days=3)).isoformat()
+        ran = self.c.get(f"/transactions/history?start={day}&end={TODAY.isoformat()}&type=Sale").get_data(as_text=True)
+        self.assertIn("<thead>", ran)
+        self.assertIn("Export CSV", ran)
+        self.assertRegex(ran, r"\d+ lines, ")
+        csv = self.c.get(f"/transactions/history?start={day}&end={TODAY.isoformat()}&format=csv")
+        self.assertEqual(csv.mimetype, "text/csv")
 
     def test_an_adjustment_moves_stock_at_average_cost_and_is_listed(self):
         form = self.c.get("/adjustments/new").get_data(as_text=True)
