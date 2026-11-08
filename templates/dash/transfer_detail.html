@@ -1,0 +1,40 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav, status_pill %}
+{% block title %}Transfer {{ t.number }}{% endblock %}
+{% block content %}
+{{ stock_nav('dash.transfers') }}
+<div class="page-head">
+  <h1>Transfer {{ t.number }} {{ status_pill(t.status) }}</h1>
+  <a href="{{ url_for('dash.transfers') }}">← Transfers</a>
+</div>
+{% if write_problem and t.status in open_statuses %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+<section class="card">
+  <dl class="facts">
+    <div><dt>From</dt><dd>{{ t.source_name }}</dd></div>
+    <div><dt>To</dt><dd>{{ t.destination_name }}</dd></div>
+    <div><dt>{{ 'Completed' if t.completed else 'Made' }}</dt><dd>{{ (t.date if t.completed else t.order_date)|d if (t.date or t.order_date) else '—' }}</dd></div>
+    {% if t.completed %}<div><dt>Value moved</dt><dd>{{ t.value|money }}</dd></div>{% endif %}
+  </dl>
+  {% if short %}<p class="recon recon-warn">! {{ t.source_name }} hasn't enough of {{ short|join(', ') }} to complete it now.</p>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Quantity</th>{% if t.completed %}<th class="num">Unit cost</th><th class="num">Value</th>{% endif %}<th>Note</th></tr></thead>
+    <tbody>{% for l in t.lines %}
+    <tr><td>{{ l.product_code }} <div class="muted small">{{ l.description or '' }}</div></td><td class="num">{{ l.qty|qty }}</td>
+      {% if t.completed %}<td class="num">{{ l.unit_cost|money if l.unit_cost is not none else '—' }}</td><td class="num">{{ l.value|money if l.value is not none else '—' }}</td>{% endif %}
+      <td>{{ l.comments or '' }}</td></tr>
+    {% else %}<tr><td colspan="5" class="muted">No lines.</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if t.comments %}<p class="instructions">{{ t.comments }}</p>{% endif %}
+  {% if t.status in open_statuses %}
+  <div class="run-actions">
+    <form method="post" action="{{ url_for('dash.transfer_complete', number=t.number) }}"
+          onsubmit='return confirm({{ ("Complete " ~ t.number ~ "? The stock moves from " ~ t.source_name ~ " to " ~ t.destination_name ~ " in Unleashed.")|tojson }})'>
+      <button class="btn btn-primary"{{ ' disabled' if write_problem }}>Complete: move the stock</button></form>
+    <a class="btn" href="{{ url_for('dash.transfer_edit', number=t.number) }}">Edit</a>
+    <form method="post" action="{{ url_for('dash.transfer_delete', number=t.number) }}"
+          onsubmit='return confirm({{ ("Delete " ~ t.number ~ "?")|tojson }})'>
+      <button class="btn btn-quiet"{{ ' disabled' if write_problem }}>Delete</button></form>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

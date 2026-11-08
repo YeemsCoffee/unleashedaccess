@@ -1,7 +1,8 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import range_filters, doc_link %}
+{% from "dash/_macros.html" import range_filters, doc_link, stock_nav %}
 {% block title %}Stock movement{% endblock %}
 {% block content %}
+{{ stock_nav('dash.stock_movement') }}
 <div class="page-head">
   <h1>Stock movement enquiry</h1>
   {% call range_filters(start, end, csv_url=csv_url) %}

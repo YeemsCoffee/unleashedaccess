@@ -1,0 +1,30 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav, status_pill %}
+{% block title %}Adjustment {{ a.number }}{% endblock %}
+{% block content %}
+{{ stock_nav('dash.adjustments') }}
+<div class="page-head">
+  <h1>Stock adjustment {{ a.number }} {{ status_pill(a.status) }}</h1>
+  <a href="{{ url_for('dash.adjustments') }}">← Adjustments</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Date</dt><dd>{{ a.date|d if a.date else '—' }}</dd></div>
+    <div><dt>Warehouse</dt><dd>{{ names.get(a.warehouse, a.warehouse) or '—' }}</dd></div>
+    <div><dt>Reason</dt><dd>{{ a.reason or '—' }}</dd></div>
+    {% set change = a.lines|map(attribute='value_change')|select('number')|sum %}
+    <div><dt>Value change</dt><dd>{{ change|money }}</dd></div>
+  </dl>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">Change</th><th class="num">Value change</th><th class="num">New quantity</th><th class="num">New value</th><th>Note</th></tr></thead>
+    <tbody>{% for l in a.lines %}
+    <tr><td>{{ l.product_code }} <div class="muted small">{{ l.description or '' }}</div>
+        {% if l.batches %}<div class="muted small">Batches: {% for b in l.batches %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
+      <td class="num">{{ l.qty_change|qty }}</td><td class="num">{{ l.value_change|money }}</td>
+      <td class="num">{{ l.new_qty|qty }}</td><td class="num">{{ l.new_value|money }}</td><td>{{ l.comments or '' }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <div class="run-actions"><a class="btn" href="{{ url_for('dash.adjustment_new', warehouse=a.warehouse) }}">+ Another adjustment</a></div>
+  <p class="muted small">Unleashed's API can't change or delete an adjustment: to undo this one, make another.</p>
+</section>
+{% endblock %}

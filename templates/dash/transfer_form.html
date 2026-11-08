@@ -1,0 +1,61 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav %}
+{% block title %}{{ 'Edit ' ~ found.number if found else 'New transfer' }}{% endblock %}
+{% block content %}
+{% macro line_row(l) -%}
+  <tr data-line>
+    <td><input type="hidden" name="line_guid" value="{{ l.guid or '' }}">
+      <input name="product" class="line-product" list="stock-products" value="{{ l.product_code or '' }}" autocomplete="off"
+        placeholder="Type a product code or name" aria-label="Product">
+      <div class="muted small line-product-name" data-product-name>{{ names.get(l.product_code, '') if l.product_code }}</div></td>
+    <td class="num nowrap" data-have></td>
+    <td class="num"><input class="qty-input" type="number" name="qty" value="{{ l.qty or '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity to move"></td>
+    <td><input class="text-input" name="line_comment" value="{{ l.comments or '' }}" maxlength="1024" placeholder="Optional" aria-label="Note"></td>
+    <td><button type="button" class="btn btn-quiet" data-remove-line aria-label="Remove this line">✕</button></td>
+  </tr>
+{%- endmacro %}
+{{ stock_nav('dash.transfers') }}
+<div class="page-head">
+  <h1>{{ 'Edit transfer ' ~ found.number if found else 'New transfer' }}</h1>
+  <a href="{{ url_for('dash.transfer_detail', number=found.number) if found else url_for('dash.transfers') }}">← {{ 'Back' if found else 'Transfers' }}</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form order-form" data-stock-form data-kind="transfer">
+  <div class="filters new-order">
+    <label>From
+      <select name="source" data-stock-warehouse>{% for w in warehouses %}<option value="{{ w.WarehouseCode }}"{{ ' selected' if w.WarehouseCode == t.source }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    <label>To
+      <select name="destination">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}"{{ ' selected' if w.WarehouseCode == t.destination }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+  </div>
+  {% if warehouses|length < 2 %}<p class="recon recon-warn">! Unleashed has only one warehouse, so there's nowhere to move stock to.</p>{% endif %}
+
+  <h2>Products</h2>
+  <div class="table-wrap"><table class="order-lines">
+    <thead><tr><th>Product</th><th class="num">In the "from" warehouse</th><th class="num">Move</th><th>Note</th><th></th></tr></thead>
+    <tbody data-lines>{% for l in lines %}{{ line_row(l) }}{% endfor %}</tbody>
+  </table></div>
+  <template id="stock-line-template">{{ line_row({'guid': None, 'product_code': ''}) }}</template>
+  <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
+  <p class="muted small">It moves at the products' average cost. Empty lines are left out.</p>
+
+  <label class="block">Comments <textarea name="comments" rows="2" maxlength="1024">{{ t.comments }}</textarea></label>
+  <div class="run-actions">
+    {% if found %}
+    <button class="btn btn-primary" name="then" value="save"{{ ' disabled' if write_problem }}>Save</button>
+    {% if found.status == 'Parked' %}<button class="btn" name="then" value="place"{{ ' disabled' if write_problem }}>Save and place</button>{% endif %}
+    <button class="btn" name="then" value="complete"{{ ' disabled' if write_problem }}>Save and complete</button>
+    {% else %}
+    <button class="btn btn-primary" name="then" value="park"{{ ' disabled' if write_problem }}>Save parked</button>
+    <button class="btn" name="then" value="place"{{ ' disabled' if write_problem }}>Save placed</button>
+    <button class="btn" name="then" value="complete"{{ ' disabled' if write_problem }}>Save and complete now</button>
+    {% endif %}
+    <a class="btn btn-quiet" href="{{ url_for('dash.transfer_detail', number=found.number) if found else url_for('dash.transfers') }}">Cancel</a>
+  </div>
+  <p class="muted small">Parked is a draft; placed means it's on its way. Neither moves stock: completing it does, in Unleashed,
+    out of one warehouse and into the other.</p>
+  <datalist id="stock-products">{% for p in products %}<option value="{{ p.code }}">{{ p.code }} · {{ p.name }}</option>{% endfor %}</datalist>
+  <script type="application/json" id="stock-product-data">{{ products|tojson }}</script>
+  <script type="application/json" id="stock-levels">{{ levels|tojson }}</script>
+</form>
+{% endblock %}

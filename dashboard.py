@@ -143,8 +143,7 @@ _TABS = [
     ("finance", [("dash.overview", "Overview"), ("dash.cogs_page", "COGS")]),
     ("warehouse", [("dash.stock_on_hand", "Stock on hand"),
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
-                   ("dash.transactions", "Transactions"), ("dash.stock_movement", "Stock movement"),
-                   ("dash.adjustments", "Adjustments")]),
+                   ("dash.transactions", "Transactions")]),
     ("production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
                     ("dash.production_boms", "Bills of materials"),
@@ -161,7 +160,13 @@ _SETTINGS_TAB = ("Settings", [("dash.connection", "Connection"), ("dash.team", "
                               ("dash.profiles", "Access profiles"), ("dash.cogs_setup", "COGS"),
                               ("dash.api_log", "API log")])
 # Pages (and form posts) that belong to another page's tab.
-_PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand", "dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
+_PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand",
+            # Transactions: the history, stock movement, adjustments, transfers and stock counts
+            **{f"dash.{p}": "dash.transactions" for p in (
+                "transactions_history", "stock_movement", "adjustments", "adjustment_new", "adjustment_detail",
+                "transfers", "transfer_new", "transfer_detail", "transfer_edit", "transfer_complete",
+                "transfer_delete", "stock_counts", "stock_count_new", "stock_count", "stock_count_post",
+                "stock_count_cancel")}, "dash.purchase_detail": "dash.purchases", "dash.sales_detail": "dash.sales",
             "dash.production_order": "dash.production_orders",
             "dash.production_close": "dash.production_orders",
             "dash.production_new": "dash.production_orders",
@@ -922,24 +927,6 @@ def adjustments():
                            csv_url=_csv_url())
 
 
-@bp.get("/transactions")
-def transactions():
-    r = reports()
-    start, end = _range_args()
-    doc_type = request.args.get("type") or None
-    product = request.args.get("product") or None
-    rows = r.transactions(start, end, product=product, doc_type=doc_type)[::-1]
-    if _wants_csv():
-        return _csv("transactions", [
-            ("Date", lambda x: x["date"].isoformat()), ("Type", "type"), ("Number", "number"),
-            ("Party", "party"), ("Product Code", "product_code"), ("Qty", "qty"),
-            ("Value", lambda x: _round(x["value"], 4)),
-        ], rows)
-    return render_template("dash/transactions.html", rows=rows, start=start, end=end,
-                           doc_type=doc_type, product=product, products=r.products(),
-                           csv_url=_csv_url())
-
-
 # ---------------------------------------------------------------- production
 
 def _production():
@@ -1524,7 +1511,10 @@ def init_app(app):
         "source_error": source_error,
     }
     app.extensions["production_runs"] = ProductionRuns(db)
+    from stock_counts import StockCounts
+    app.extensions["stock_counts"] = StockCounts(db)
     import order_pages  # noqa: F401 (adds making, changing, completing and receiving orders)
+    import stock_pages  # noqa: F401 (adds the Transactions pages: adjustments, transfers, stock counts)
     app.register_blueprint(bp)
 
     if syncer is not None:

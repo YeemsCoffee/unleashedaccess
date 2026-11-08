@@ -29,6 +29,7 @@ RECHECK_FROM = "recheck_from"
 
 LABELS = {"PurchaseOrders": "purchase orders", "SalesOrders": "sales orders",
           "StockAdjustments": "stock adjustments", "Assemblies": "assemblies",
+          "WarehouseStockTransfers": "warehouse stock transfers",
           "CreditNotes": "credit notes", "SupplierReturns": "supplier returns"}
 
 

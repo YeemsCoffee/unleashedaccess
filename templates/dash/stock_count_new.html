@@ -1,0 +1,30 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav %}
+{% block title %}New stock count{% endblock %}
+{% block content %}
+{{ stock_nav('dash.stock_counts') }}
+<div class="page-head">
+  <h1>New stock count</h1>
+  <a href="{{ url_for('dash.stock_counts') }}">← Stock counts</a>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form">
+  <div class="filters new-order">
+    <label>Warehouse
+      <select name="warehouse" required>{% for w in warehouses %}<option value="{{ w.WarehouseCode }}"{{ ' selected' if w.WarehouseCode == form.warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    <label>Product group
+      <select name="group"><option value="">Every product</option>
+        {% for g in groups %}<option{{ ' selected' if g == form.group }}>{{ g }}</option>{% endfor %}</select></label>
+    <label class="wide">Name <input name="name" value="{{ form.name or '' }}" maxlength="150" placeholder="Optional, e.g. Dairy cooler, end of month"></label>
+  </div>
+  <label class="check-field"><input type="checkbox" name="include_zero" value="1"{{ ' checked' if form.include_zero }}> Also list products
+    Unleashed says aren't there, to count any that are</label>
+  <p class="muted small">Each product (each batch, for a batch-tracked one) gets a line with what Unleashed says is there now. Count
+    over as many saves as it takes; several people can count at once. Posting it moves each counted line by the difference,
+    from the stock there at that time, so sales and receipts during the count stand.</p>
+  <div class="run-actions">
+    <button class="btn btn-primary">Start counting</button>
+    <a class="btn" href="{{ url_for('dash.stock_counts') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

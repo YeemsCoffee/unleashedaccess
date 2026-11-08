@@ -54,9 +54,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date: value by product group (with each group's share), then the products, filterable by group |
 | Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail; make, change, receive (with batches and expiry), complete and delete purchase orders |
 | Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail; make, change, complete (picking batches) and delete sales orders |
-| Warehouse → Transactions | Full history of purchase receipts, completed production, completed sales and stock adjustments |
-| Warehouse → Stock movement | Per-product movements with running balance, reconciled to stock on hand |
-| Warehouse → Adjustments | Stock adjustment enquiry |
+| Warehouse → Transactions | Today's and yesterday's stock transactions, with **+ Adjustment**, **+ Stock count** and **+ Transfer**, and what's waiting to finish (open transfers, counts in progress). Under it: **History** (every receipt, production, sale, credit, supplier return, adjustment and transfer, by date, type and product), **Stock movement** (per product, with running balance, reconciled to stock on hand), **Adjustments**, **Transfers** and **Stock counts** |
 | Production → Overview | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
 | Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then complete them in Unleashed, with yield |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
@@ -130,6 +128,36 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   count in COGS: Unleashed keeps them apart from the order (GET
   /PurchaseOrders/{guid}/Costs), and the sync fetches them for received orders (again only
   when an order changes).
+
+## Stock adjustments, transfers and counts
+
+Warehouse → Transactions makes them in Core, written to Unleashed through its API
+(StockAdjustments, WarehouseStockTransfers) and kept in the shared copy straight away. What
+each warehouse holds is read from Unleashed itself when one is made, not from the copy.
+
+- **Adjustments** (+ Adjustment): the warehouse, a reason from Unleashed's list, and for each
+  product the change (−3 gone, 5 found) or the quantity there should be; the other fills in
+  from what's there now. Stock taken out goes at its average cost; stock added at the unit
+  cost entered (its average cost, or default purchase price, when blank). A batch-tracked
+  product then asks how much of each batch there should be, or a new batch with its expiry.
+  Unleashed's API only creates adjustments (no edit, complete or delete), so Core makes them
+  completed: the stock changes straight away, and a mistake is undone with another one.
+- **Transfers** (+ Transfer): from one warehouse to another, products and quantities (with
+  what the "from" warehouse holds beside each), saved parked (a draft), placed (on its way)
+  or completed now. An open transfer can be edited, completed (the stock moves, at average
+  cost) or deleted. The sync copies transfers too (all of them the first time, then what
+  changed, as their API only filters by change date).
+- **Stock counts** (+ Stock count): Unleashed's API only lists the counts made in Unleashed,
+  so counts are kept in Core. Pick the warehouse and, if you like, one product group: each
+  product gets a line (each batch, for a batch-tracked one) with what Unleashed says is
+  there. Count over as many saves as it takes; several people can count at once, as a save
+  only changes the lines typed in. "Hide what Unleashed says" makes it a blind count.
+  **Post the differences** sends one completed adjustment (reason "Stock count", or another
+  chosen): each counted line moves the stock there now by counted − expected, so sales and
+  receipts during the count stand. A count that matches needs no adjustment.
+- **COGS**: when it counts only some warehouses, stock transferred in from the others counts
+  like a purchase ("transferred in", on the COGS page and its breakdown); stock transferred
+  out counts as used, as stock leaving them always has.
 
 ## Access profiles
 
@@ -307,7 +335,7 @@ materials** (recipes), organised like an ERP's production module:
 | Production order | Production orders | Assemblies: Parked = open, Completed = made |
 | Recipe / bill of materials | Bills of materials | Bills of materials, costed at today's average costs |
 | Material availability check (MRP) | Material requirements | Open assemblies' components against stock on hand, sales allocations and open purchase orders |
-| Goods issue / goods receipt | Warehouse → Transactions (type Production) | Completed assemblies: components out, product in |
+| Goods issue / goods receipt | Warehouse → Transactions → History (type Production) | Completed assemblies: components out, product in |
 | Order costing and variances | Production order detail, Component usage | Components used against the recipe × the order quantity |
 
 - **Components used** = each assembly line's quantity plus its wastage.
@@ -675,6 +703,8 @@ unleashedaccess/
 ├── production_runs.py  # operating procedures (with step pictures) and what's recorded at each step
 ├── maintenance.py      # the Maintenance tab: overview, tasks, locations, calendar, history
 ├── order_pages.py      # Making, changing, completing and receiving sales and purchase orders
+├── stock_pages.py      # the Transactions tab: recent, history, adjustments, transfers, stock counts
+├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
 ├── maintenance_assets.py # equipment, its moves, counters and readings, files
@@ -689,13 +719,15 @@ unleashedaccess/
 ├── Dockerfile          # container image for ECS/Fargate, App Runner, EB Docker
 ├── .ebextensions/      # Elastic Beanstalk settings (/healthz health check, TIMEZONE)
 ├── .platform/          # Elastic Beanstalk nginx: uploads up to 20 MB (maintenance files)
-├── schema.sql          # data copy, sync history and lock, API log, accounts, profiles, production and maintenance tables
+├── schema.sql          # data copy, sync history and lock, API log, accounts, profiles, production, maintenance and stock count tables
 ├── unleashed/
 │   ├── client.py       # Unleashed REST client: signing, paging, dates, logging
 │   ├── reports.py      # report enquiries + COGS (read through a client: API or store)
 │   ├── order_writes.py # sales and purchase orders written to Unleashed, each change read back
 │   ├── mock_orders.py  # the mock server's order writes (as Unleashed's API reference describes)
 │   ├── mock_returns.py # the mock server's credit notes and supplier returns
+│   ├── stock_writes.py # stock adjustments and warehouse transfers written to Unleashed, read back
+│   ├── mock_stock.py   # the mock server's adjustments and transfers (and its second warehouse)
 │   ├── production.py   # production orders, BOM costing, material requirements, usage
 │   ├── assembly_writes.py # create production orders in Unleashed; close them out
 │   ├── db.py           # SQLite or PostgreSQL access (same SQL for both)

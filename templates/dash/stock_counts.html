@@ -1,0 +1,25 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav %}
+{% block title %}Stock counts{% endblock %}
+{% block content %}
+{{ stock_nav('dash.stock_counts') }}
+<div class="page-head">
+  <h1>Stock counts</h1>
+  <a class="btn btn-primary" href="{{ url_for('dash.stock_count_new') }}">+ New stock count</a>
+</div>
+<section class="card">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Count</th><th>Warehouse</th><th class="wide-only">Started</th><th>Status</th><th class="num">Counted</th><th>Adjustment</th></tr></thead>
+    <tbody>{% for c in counts %}
+    <tr><td><a href="{{ url_for('dash.stock_count', count_id=c.id) }}">{{ c.name }}</a>{% if c.product_group %}<div class="muted small">{{ c.product_group }}</div>{% endif %}</td>
+      <td>{{ names.get(c.warehouse, c.warehouse) }}</td>
+      <td class="wide-only">{{ c.created_by or '' }} · {{ c.created_at|local }}</td>
+      <td>{% if c.status == 'counting' %}<span class="pill pill-placed">Counting</span>{% elif c.status == 'posted' %}<span class="pill pill-completed">Posted</span>{% else %}<span class="pill pill-deleted">Cancelled</span>{% endif %}</td>
+      <td class="num">{{ c.counted }} of {{ c.lines }}</td>
+      <td>{% if c.adjustment_number %}<a href="{{ url_for('dash.adjustment_detail', number=c.adjustment_number) }}">{{ c.adjustment_number }}</a>{% elif c.status == 'posted' %}<span class="muted">None needed</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No stock counts yet. Start one to count a warehouse, or one product group in it.</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="muted small">Counts are kept in Core: Unleashed's API can only list the counts made in Unleashed, not make them. Posting
+    a count sends Unleashed one stock adjustment with the differences.</p>
+</section>
+{% endblock %}

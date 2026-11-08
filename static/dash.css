@@ -575,3 +575,10 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .simptww-mini span { width: 15px; height: 15px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
   color: var(--text-secondary); border: 1px dashed var(--line); }
 .simptww-mini span.on { background: var(--brand, #2D4A2B); color: #fff; border: 1px solid transparent; }
+
+/* The Transactions tab's pages, as a row of pills above the page */
+.sub-pills { display: flex; flex-wrap: wrap; gap: 4px; margin: -8px 0 16px; }
+.sub-pills a { padding: 5px 12px; border-radius: 999px; font-size: 14px; font-weight: 500; color: var(--text-secondary); text-decoration: none; }
+.sub-pills a:hover { background: var(--surface-0); }
+.sub-pills a.active { background: var(--brand-soft); color: var(--brand-soft-ink); }
+.count-lines .qty-input { width: 110px; }

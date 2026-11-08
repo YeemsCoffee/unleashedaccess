@@ -11,7 +11,7 @@ import math
 from flask import Flask, jsonify, request
 
 from .client import sign
-from . import mock_orders, mock_returns
+from . import mock_orders, mock_returns, mock_stock
 from .mock_data import BATCH_TRACKED, MockDataset
 
 MOCK_API_ID = "mock-api-id"
@@ -85,21 +85,28 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     def stock_on_hand(page=1):
         as_at = _date_arg("asAtDate")
         wh = request.args.get("warehouseCode")
-        if wh and wh != next(w["WarehouseCode"] for w in ds.warehouses if w.get("IsDefault")):
-            return _paged([], page)  # all the stock is in the default warehouse
+        known = {w["WarehouseCode"]: w for w in ds.warehouses}
+        if wh and wh not in known:
+            return _paged([], page)
         rows = []
         for p in ds.products.values():
             if not _match(p["ProductCode"], "productCode") or p.get("NonStock"):
                 continue
-            qty, value = ds.stock_as_at(p["ProductCode"], as_at)
-            allocated = ds.allocated(p["ProductCode"]) if as_at is None else 0
+            if wh:  # one warehouse's stock; another than the default only lists what it holds
+                qty, value = ds.stock_in(p["ProductCode"], wh, as_at)
+                if wh != ds.default_warehouse and not qty:
+                    continue
+            else:
+                qty, value = ds.stock_as_at(p["ProductCode"], as_at)
+            allocated = ds.allocated(p["ProductCode"]) if as_at is None and wh in (None, ds.default_warehouse) else 0
             last_sale = ds.last_sale_date(p["ProductCode"], as_at)
             ref = as_at or ds.today
             rows.append({
                 "Guid": p["Guid"], "ProductGuid": p["Guid"],
                 "ProductCode": p["ProductCode"], "ProductDescription": p["ProductDescription"],
                 "ProductGroupName": p["ProductGroup"],
-                "Warehouse": "Gardena Store", "WarehouseCode": "GDN",
+                "Warehouse": known[wh or ds.default_warehouse]["WarehouseName"],
+                "WarehouseCode": wh or ds.default_warehouse,
                 "QtyOnHand": round(qty, 4), "AllocatedQty": allocated,
                 "AvailableQty": round(qty - allocated, 4),
                 "OnPurchase": ds.on_order(p["ProductCode"]) if as_at is None else 0,
@@ -118,7 +125,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  if _in_range(a["AdjustmentDate"], start, end)
                  and _modified_since(_modified(a, "AdjustmentDate"))
                  and _match(a["AdjustmentNumber"], "adjustmentNumber")]
-        return _paged([_adjustment(ds, a) for a in items], page)
+        return _paged([app.config["MOCK_SERIALIZE_ADJUSTMENT"](a) for a in items], page)
 
     # ------------------------------------------------------------ orders
 
@@ -289,6 +296,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     mock_orders.register(app, ds, _sales_order, _purchase_order, _body_date, _ms_date_in)
     mock_returns.register(app, ds, _ms, _body_date, _ms_date_in, _product_ref, _customer_ref, _supplier_ref,
                           _warehouse_ref)
+    mock_stock.register(app, ds, _ms, _body_date, _ms_date_in, _product_ref, _warehouse_ref, _paged, _modified_since)
     return app
 
 
@@ -516,18 +524,4 @@ def _assembly(ds, a):
             {"Number": b["Number"], "Quantity": b["Quantity"], "ExpiryDate": _ms(b["ExpiryDate"])}
             for b in a.get("Batches") or []],
         "AssemblyLines": lines, "LastModifiedOn": _ms(_modified(a, "AssemblyDate")),
-    }
-
-
-def _adjustment(ds, a):
-    return {
-        "Guid": a["Guid"], "AdjustmentNumber": a["AdjustmentNumber"],
-        "AdjustmentDate": _ms(a["AdjustmentDate"]), "AdjustmentReason": a["AdjustmentReason"],
-        "Status": a["Status"], "Warehouse": WAREHOUSE_REF,
-        "StockAdjustmentLines": [
-            {"Product": _product_ref(ds, l["ProductCode"]),
-             **{k: l[k] for k in ("QuantityChange", "ValueChange", "NewQuantity",
-                                  "NewActualValue", "Comments") if k in l}}
-            for l in a["Lines"]
-        ],
     }

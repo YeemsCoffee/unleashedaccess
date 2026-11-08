@@ -1,0 +1,66 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav %}
+{% block title %}{{ c.name }}{% endblock %}
+{% block content %}
+{{ stock_nav('dash.stock_counts') }}
+{% set open = c.status == 'counting' %}
+<div class="page-head">
+  <h1>{{ c.name }} {% if open %}<span class="pill pill-placed">Counting</span>{% elif c.status == 'posted' %}<span class="pill pill-completed">Posted</span>{% else %}<span class="pill pill-deleted">Cancelled</span>{% endif %}</h1>
+  <a href="{{ url_for('dash.stock_counts') }}">← Stock counts</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Warehouse</dt><dd>{{ names.get(c.warehouse, c.warehouse) }}</dd></div>
+    <div><dt>Products</dt><dd>{{ c.product_group or 'Every product' }}</dd></div>
+    <div><dt>Counted</dt><dd>{{ c.counted }} of {{ c.lines|length }}</dd></div>
+    <div><dt>Difference so far</dt><dd class="{{ 'due-late' if c.value_difference < -0.005 }}">{{ c.value_difference|money }}</dd></div>
+    {% if c.status == 'posted' %}<div><dt>Posted</dt><dd>{{ c.posted_at|local }} · {{ c.posted_by or '' }}</dd></div>
+    <div><dt>Adjustment</dt><dd>{% if c.adjustment_number %}<a href="{{ url_for('dash.adjustment_detail', number=c.adjustment_number) }}">{{ c.adjustment_number }}</a>{% else %}None needed{% endif %}</dd></div>{% endif %}
+  </dl>
+  {% if open %}<p class="muted small">Started {{ c.created_at|local }} by {{ c.created_by or 'someone' }}.
+    {% if hide %}<a href="{{ url_for('dash.stock_count', count_id=c.id) }}">Show what Unleashed says</a>{% else %}<a href="{{ url_for('dash.stock_count', count_id=c.id, blind=1) }}">Hide what Unleashed says</a> (a blind count){% endif %}</p>{% endif %}
+</section>
+
+<form method="post" class="card maint-form" id="lines">
+  <div class="table-wrap"><table class="count-lines">
+    <thead><tr><th>Product</th>{% if not hide %}<th class="num">Unleashed</th>{% endif %}<th class="num">Counted</th>{% if not hide %}<th class="num">Difference</th>{% endif %}<th class="wide-only">By</th></tr></thead>
+    <tbody>
+    {% for group, lines in c.lines|groupby('product_group') %}
+    <tr class="row-sub"><td colspan="5">{{ group or 'No group' }}</td></tr>
+    {% for l in lines %}
+    <tr class="{{ 'row-warn' if l.difference is not none and l.difference|abs > 0.0000001 and not hide }}">
+      <td>{{ l.product_code }} <div class="muted small">{{ l.description or '' }}{% if l.batch_number %} · batch {{ l.batch_number }}{% if l.expiry_date %}, expires {{ l.expiry_date }}{% endif %}{% endif %}</div></td>
+      {% if not hide %}<td class="num">{{ l.expected_qty|qty }}</td>{% endif %}
+      <td class="num">{% set typed = ('%g'|format(l.counted_qty)) if l.counted_qty is not none else '' %}
+        {% if open %}<input class="qty-input" type="number" name="counted-{{ l.id }}" value="{{ typed }}" min="0" step="any" inputmode="decimal" aria-label="Counted {{ l.product_code }}">
+        <input type="hidden" name="orig-{{ l.id }}" value="{{ typed }}">{% else %}{{ typed or '—' }}{% endif %}</td>
+      {% if not hide %}<td class="num">{{ ('%+g'|format(l.difference)) if l.difference is not none else '' }}</td>{% endif %}
+      <td class="wide-only muted small">{{ l.counted_by or '' }}</td></tr>
+    {% endfor %}{% endfor %}
+    </tbody>
+  </table></div>
+  {% if open %}
+  <div class="run-actions"><button class="btn btn-primary">Save counts</button>
+    <span class="muted small">Blank means not counted yet; only what you change is saved, so others counting at the same time aren't overwritten.</span></div>
+  {% endif %}
+</form>
+
+{% if open %}
+<section class="card">
+  <h2>Post to Unleashed</h2>
+  {% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+  <p>{{ c.differences|length }} counted line{{ 's' if c.differences|length != 1 }} differ{{ 's' if c.differences|length == 1 }} from Unleashed
+    ({{ c.value_difference|money }} at the average cost when the count started). Lines not counted are left as they are.</p>
+  <form method="post" action="{{ url_for('dash.stock_count_post', count_id=c.id) }}" class="filters"
+        onsubmit='return confirm({{ ("Post " ~ c.name ~ "? Unleashed gets a completed stock adjustment with the differences.")|tojson }})'>
+    <label>Reason
+      {% if reasons %}<select name="reason">{% for x in reasons %}<option{{ ' selected' if x == default_reason }}>{{ x }}</option>{% endfor %}</select>
+      {% else %}<input name="reason" value="{{ default_reason }}" maxlength="20">{% endif %}</label>
+    <button class="btn btn-primary"{{ ' disabled' if write_problem or not c.counted }}>Post the differences</button>
+  </form>
+  <form method="post" action="{{ url_for('dash.stock_count_cancel', count_id=c.id) }}"
+        onsubmit='return confirm({{ ("Cancel " ~ c.name ~ "? What was counted is kept here, and nothing is sent to Unleashed.")|tojson }})'>
+    <button class="btn btn-quiet">Cancel the count</button></form>
+</section>
+{% endif %}
+{% endblock %}

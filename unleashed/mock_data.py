@@ -20,6 +20,9 @@ import uuid
 
 WAREHOUSES = [
     {"WarehouseCode": "GDN", "WarehouseName": "Gardena Store", "IsDefault": True},
+    # Holds nothing in the simulation; stock gets there by transfer (or an order or
+    # adjustment made in it).
+    {"WarehouseCode": "COM", "WarehouseName": "Commissary", "IsDefault": False},
 ]
 
 # code, description, group, unit, supplier, base cost, sell price, avg daily use.
@@ -116,6 +119,10 @@ class MockDataset:
         self.assemblies = []
         self.batches = []  # batch-tracked stock: Number, ProductCode, WarehouseCode, Quantity, ExpiryDate
         self.ledger = []  # every stock movement, chronological
+        self.transfers = []  # warehouse stock transfers
+        # Stock in warehouses other than the default: (date, warehouse, product code, qty);
+        # the default warehouse holds the rest of each product's stock.
+        self.wh_moves = []
 
         # engine state
         self._qty = {c: 0.0 for c in self.products}
@@ -138,6 +145,21 @@ class MockDataset:
             self._snap[code] = ([], [], [])
 
     # ------------------------------------------------------------ public api
+
+    @property
+    def default_warehouse(self):
+        return next(w["WarehouseCode"] for w in self.warehouses if w.get("IsDefault"))
+
+    def stock_in(self, product_code, warehouse, as_at=None):
+        """(qty, value) in `warehouse` at end of day `as_at` (None = now), at average cost."""
+        qty, value = self.stock_as_at(product_code, as_at)
+        elsewhere = {}
+        for day, wh, code, moved in self.wh_moves:
+            if code == product_code and (as_at is None or day <= as_at):
+                elsewhere[wh] = elsewhere.get(wh, 0.0) + moved
+        here = qty - sum(elsewhere.values()) if warehouse == self.default_warehouse else elsewhere.get(warehouse, 0.0)
+        here = 0.0 if abs(here) < 1e-9 else here
+        return here, (value / qty * here if qty else 0.0)
 
     def stock_as_at(self, product_code, as_at=None):
         """(qty, value) at end of day `as_at` (None = now)."""
@@ -355,7 +377,7 @@ class MockDataset:
         for a batch-tracked product. Returns why it can't be, or None once done."""
         for line in so["Lines"]:
             code, qty = line["ProductCode"], line["OrderQuantity"]
-            if self._qty[code] + 1e-9 < qty:
+            if self.stock_in(code, so.get("WarehouseCode") or self.default_warehouse)[0] + 1e-9 < qty:
                 return f"Not enough stock of {code} to complete the order"
             if code in BATCH_TRACKED:
                 given = line.get("BatchNumbers") or []
@@ -369,7 +391,8 @@ class MockDataset:
             code, qty = line["ProductCode"], line["OrderQuantity"]
             avg = self._value[code] / self._qty[code] if self._qty[code] else 0.0
             line["AverageLandedPriceAtTimeOfSale"] = round(avg, 4)
-            self._move(self.today, "Sale", so["OrderNumber"], so["CustomerCode"], code, -qty, -qty * avg)
+            self._move(self.today, "Sale", so["OrderNumber"], so["CustomerCode"], code, -qty, -qty * avg,
+                       so.get("WarehouseCode"))
             for b in line.get("BatchNumbers") or []:
                 self._batch(code, so.get("WarehouseCode") or "GDN", b["Number"])["Quantity"] -= b["Quantity"]
         so["OrderStatus"], so["CompletedDate"], so["Modified"] = "Completed", self.today, dt.date.today()
@@ -395,7 +418,7 @@ class MockDataset:
             elif new > 1e-9:
                 code = line["ProductCode"]
                 self._move(self.today, "Purchase", po["OrderNumber"], po["SupplierCode"], code, new,
-                           new * line["UnitPrice"])
+                           new * line["UnitPrice"], po.get("WarehouseCode"))
                 self._on_order[code] -= new
                 for b in line.get("PendingBatchNumbers") or []:
                     self._add_batch(code, po.get("WarehouseCode") or "GDN", b["Number"], b["Quantity"],
@@ -416,8 +439,14 @@ class MockDataset:
     def stock_qty(self, code):
         return self._qty[code]
 
-    def move_stock(self, day, kind, number, party, code, qty, value):
-        self._move(day, kind, number, party, code, qty, value)
+    def move_stock(self, day, kind, number, party, code, qty, value, warehouse=None):
+        self._move(day, kind, number, party, code, qty, value, warehouse)
+
+    def shift_stock(self, day, code, qty, source, destination):
+        """Move `qty` of a product between warehouses (its total stock and value unchanged)."""
+        for wh, moved in ((source, -qty), (destination, qty)):
+            if wh != self.default_warehouse:
+                self.wh_moves.append((day, wh, code, moved))
 
     def find_batch(self, code, warehouse, number):
         return self._batch(code, warehouse, number)
@@ -563,7 +592,9 @@ class MockDataset:
 
     # ------------------------------------------------------------ primitives
 
-    def _move(self, day, kind, number, party, code, qty, value):
+    def _move(self, day, kind, number, party, code, qty, value, warehouse=None):
+        if warehouse and warehouse != self.default_warehouse:
+            self.wh_moves.append((day, warehouse, code, qty))
         self._qty[code] += qty
         self._value[code] += value
         if abs(self._qty[code]) < 1e-9:

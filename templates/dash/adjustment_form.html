@@ -1,0 +1,75 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav %}
+{% block title %}New stock adjustment{% endblock %}
+{% block content %}
+{% macro line_row(l) -%}
+  <tr data-line>
+    <td><input name="product" class="line-product" list="stock-products" value="{{ l.product_code or '' }}" autocomplete="off"
+        placeholder="Type a product code or name" aria-label="Product">
+      <div class="muted small line-product-name" data-product-name>{{ names.get(l.product_code, '') if l.product_code }}</div></td>
+    <td class="num nowrap" data-have></td>
+    <td class="num"><input class="qty-input" type="number" name="change" value="{{ l.change or '' }}" step="any" inputmode="decimal" placeholder="±" aria-label="Change"></td>
+    <td class="num"><input class="qty-input" type="number" name="new_qty" value="{{ l.new_qty or '' }}" min="0" step="any" inputmode="decimal" aria-label="New quantity"></td>
+    <td class="num"><input class="qty-input" type="number" name="unit_cost" value="{{ l.unit_cost or '' }}" min="0" step="any" inputmode="decimal" aria-label="Unit cost of what's added"></td>
+    <td><input class="text-input" name="line_comment" value="{{ l.comments or '' }}" maxlength="200" placeholder="Optional" aria-label="Note"></td>
+    <td><button type="button" class="btn btn-quiet" data-remove-line aria-label="Remove this line">✕</button></td>
+  </tr>
+{%- endmacro %}
+{{ stock_nav('dash.adjustments') }}
+<div class="page-head">
+  <h1>New stock adjustment</h1>
+  <a href="{{ url_for('dash.adjustments') }}">← Adjustments</a>
+</div>
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card maint-form order-form" data-stock-form data-kind="adjust">
+  <div class="filters new-order">
+    <label>Warehouse
+      <select name="warehouse" data-stock-warehouse>{% for w in warehouses %}<option value="{{ w.WarehouseCode }}"{{ ' selected' if w.WarehouseCode == warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    <label class="wide">Reason
+      {% if reasons %}<select name="reason" required><option value="">Choose…</option>
+        {% for x in reasons %}<option{{ ' selected' if x == reason }}>{{ x }}</option>{% endfor %}</select>
+      {% else %}<input name="reason" value="{{ reason }}" maxlength="20" required placeholder="e.g. Damaged">{% endif %}</label>
+  </div>
+
+  <h2>Products</h2>
+  <div class="table-wrap"><table class="order-lines">
+    <thead><tr><th>Product</th><th class="num">There now</th><th class="num">Change</th><th class="num">New quantity</th>
+      <th class="num">Unit cost <span class="muted small">(added)</span></th><th>Note</th><th></th></tr></thead>
+    <tbody data-lines>{% for l in lines %}{{ line_row(l) }}{% endfor %}</tbody>
+  </table></div>
+  <template id="stock-line-template">{{ line_row({'product_code': ''}) }}</template>
+  <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
+  <p class="muted small">Enter the change (−3 for three gone, 5 for five found) or the quantity there should be; the other fills
+    in. Stock taken out goes at its average cost; stock added at the unit cost (its average cost, or default purchase
+    price, when blank).</p>
+
+  {% for code, b in batch_rows.items() %}
+  <fieldset class="simptww-part">
+    <legend>Batches of {{ code }} <span class="muted small">{{ b.name }}</span></legend>
+    <input type="hidden" name="batches-shown-{{ code }}" value="1">
+    {% if b.target is not none %}<p class="muted small">You entered {{ b.target|qty }} in all: set each batch so they add up to it.</p>{% endif %}
+    <div class="table-wrap"><table class="order-lines">
+      <thead><tr><th>Batch</th><th class="num">There now</th><th class="num">Should be</th><th>Expiry</th></tr></thead>
+      <tbody>{% for r in b.rows %}
+      <tr>{% if r.existing %}<td><input type="hidden" name="batch-number-{{ code }}" value="{{ r.number }}">{{ r.number }}</td>
+        {% else %}<td><input class="text-input" name="batch-number-{{ code }}" value="{{ r.number }}" maxlength="50" placeholder="New batch number" aria-label="New batch number"></td>{% endif %}
+        <td class="num">{{ r.had|qty if r.existing else '—' }}</td>
+        <td class="num"><input class="qty-input" type="number" name="batch-qty-{{ code }}" value="{{ r.qty }}" min="0" step="any" inputmode="decimal" aria-label="Quantity of batch {{ r.number }}"></td>
+        <td>{% if r.existing %}<input type="hidden" name="batch-expiry-{{ code }}" value="{{ r.expiry or '' }}">{{ r.expiry or '' }}{% else %}<input type="date" name="batch-expiry-{{ code }}" value="{{ r.expiry or '' }}" aria-label="Expiry date">{% endif %}</td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+  </fieldset>
+  {% endfor %}
+
+  <p class="recon recon-warn">! The adjustment is made completed: the stock changes in Unleashed straight away. Unleashed's API can't
+    park an adjustment or change it afterwards, so a mistake is undone with another adjustment.</p>
+  <div class="run-actions">
+    <button class="btn btn-primary"{{ ' disabled' if write_problem }}>Make the adjustment</button>
+    <a class="btn" href="{{ url_for('dash.adjustments') }}">Cancel</a>
+  </div>
+  <datalist id="stock-products">{% for p in products %}<option value="{{ p.code }}">{{ p.code }} · {{ p.name }}</option>{% endfor %}</datalist>
+  <script type="application/json" id="stock-product-data">{{ products|tojson }}</script>
+  <script type="application/json" id="stock-levels">{{ levels|tojson }}</script>
+</form>
+{% endblock %}

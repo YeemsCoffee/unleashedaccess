@@ -10,7 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from zoneinfo import ZoneInfo
 
-from .client import business_timezone, has_time, parse_date, parse_moment
+from .client import UnleashedError, business_timezone, has_time, parse_date, parse_moment
+from .store import transfer_moved
 
 RECEIVED_PO_STATUSES = ("Receipted", "Costed", "Complete")
 OPEN_PO_STATUSES = ("Parked", "Placed")
@@ -489,7 +490,7 @@ class Reports:
                 continue
             for l in a.get("StockAdjustmentLines") or []:
                 prod = l.get("Product") or {}
-                rows.append({"number": a["AdjustmentNumber"],
+                rows.append({"number": a["AdjustmentNumber"], "guid": a.get("Guid"),
                              "date": parse_date(a.get("AdjustmentDate")),
                              "at": parse_moment(a.get("AdjustmentDate")),
                              "timed": has_time(a.get("AdjustmentDate")),
@@ -506,6 +507,83 @@ class Reports:
         return {"rows": rows,
                 "value_change": sum(r["value_change"] or 0 for r in rows),
                 "missing_change": sum(1 for r in rows if r["value_change"] is None)}
+
+    def stock_adjustment(self, number):
+        """One adjustment, any status: {"number", "guid", "date", "warehouse", "reason", "status",
+        "lines": [{"product_code", "description", "qty_change", "value_change", "new_qty",
+        "new_value", "comments", "batches"}]}, or None."""
+        items = self.client.get_all("StockAdjustments", {"adjustmentNumber": number})
+        a = next((i for i in items if i.get("AdjustmentNumber") == number), None)
+        if a is None:
+            return None
+        return {"number": number, "guid": a.get("Guid"), "date": parse_date(a.get("AdjustmentDate")),
+                "warehouse": _warehouse_code(a.get("Warehouse")), "reason": a.get("AdjustmentReason"),
+                "status": a.get("Status"), "created_by": a.get("CreatedBy"),
+                "lines": [{"product_code": (l.get("Product") or {}).get("ProductCode"),
+                           "description": (l.get("Product") or {}).get("ProductDescription"),
+                           "qty_change": l.get("QuantityChange"), "value_change": l.get("ValueChange"),
+                           "new_qty": l.get("NewQuantity"), "new_value": l.get("NewActualValue"),
+                           "comments": l.get("Comments"),
+                           "batches": [{"number": b.get("Number"), "qty": b.get("Quantity")}
+                                       for b in l.get("BatchNumbers") or []]}
+                          for l in a.get("StockAdjustmentLines") or []]}
+
+    # ------------------------------------------------------------ transfers
+
+    def transfers(self, start=None, end=None, status=None):
+        """Warehouse stock transfers, newest first: those that moved stock (completed) from
+        `start` to `end`, or with `status` (e.g. "Parked,Placed") any date."""
+        params = {"transferStatus": status or "Parked,Placed,Completed"}
+        if start and not status and getattr(self.client, "finds_by_completion", False):
+            params.update({"completedStartDate": start.isoformat(), "completedEndDate": (end or self.today).isoformat()})
+        try:
+            items = self.client.get_all("WarehouseStockTransfers", params)
+        except UnleashedError as e:
+            if e.status_code in (401, 403, 404):  # this account (or API user) can't see transfers
+                return []
+            raise
+        found = [self._transfer(i) for i in items]
+        if start or end:
+            found = [t for t in found if t["date"] and (not start or t["date"] >= start) and (not end or t["date"] <= end)]
+        return sorted(found, key=lambda t: (t["date"] or dt.date.min, t["number"] or ""), reverse=True)
+
+    def transfer(self, number):
+        items = self.client.get_all("WarehouseStockTransfers", {"transferStatus": "Parked,Placed,Completed"})
+        found = next((i for i in items if i.get("TransferOrderNumber") == number or i.get("Guid") == number), None)
+        return self._transfer(found) if found else None
+
+    def _transfer(self, i):
+        status = i.get("TransferStatus") or ""
+        moved = transfer_moved(i)
+        done = status.lower() == "completed"
+        lines = []
+        for l in i.get("TransferDetails") or []:
+            prod = l.get("Product") or {}
+            cost = l.get("AverageLandedPriceAtTimeOfTransfer")
+            qty = float(l.get("TransferQuantity") or 0)
+            lines.append({"guid": l.get("Guid"), "product_code": prod.get("ProductCode"),
+                          "description": prod.get("ProductDescription"), "qty": qty, "comments": l.get("Comments"),
+                          "unit_cost": cost, "value": qty * cost if cost is not None else None})
+        source, destination = i.get("SourceWarehouse") or {}, i.get("DestinationWarehouse") or {}
+        return {"guid": i.get("Guid"), "number": i.get("TransferOrderNumber"), "status": status, "completed": done,
+                "date": parse_date(moved) if moved else None,
+                "at": parse_moment(moved) if done and moved else None,
+                "timed": bool(done and moved and has_time(moved)),
+                "order_date": parse_date(i.get("OrderDate")) if i.get("OrderDate") else None,
+                "source": source.get("WarehouseCode"), "source_name": source.get("WarehouseName") or source.get("WarehouseCode"),
+                "destination": destination.get("WarehouseCode"),
+                "destination_name": destination.get("WarehouseName") or destination.get("WarehouseCode"),
+                "comments": i.get("Comments"), "lines": lines,
+                "value": sum(l["value"] or 0 for l in lines)}
+
+    def _transferred(self, start, through, warehouses):
+        """Stock value transferred into `warehouses` from other warehouses, start..through
+        (none counts when every warehouse is counted: it only moved)."""
+        if not warehouses or through < start:
+            return 0.0, []
+        moved = [t for t in self.transfers(start, through) if t["completed"]
+                 and t["destination"] in warehouses and t["source"] not in warehouses]
+        return sum(t["value"] for t in moved), moved
 
     # ------------------------------------------------------------ production
 
@@ -617,7 +695,7 @@ class Reports:
                     qty = l["received_qty"] if l["received_qty"] is not None else l["qty"]
                     value = l["line_total"] + o["shipping"] * l["line_total"] / goods
                     rows.append(_txn(o["received_date"], "Purchase", o["number"],
-                                     o["supplier_name"], l, qty, value))
+                                     o["supplier_name"], l, qty, value, warehouse=o.get("warehouse")))
         if doc_type in (None, "Production"):
             for a in self._completed_assemblies(start, end):
                 for l in a["lines"]:  # components used, then the product made
@@ -629,25 +707,37 @@ class Reports:
             for o in self._completed_sales(start, end):
                 for l in o["lines"]:
                     rows.append(_txn(o["completed_date"] or o["order_date"], "Sale", o["number"],
-                                     o["customer_name"], l, -l["qty"], -l["cost"]))
+                                     o["customer_name"], l, -l["qty"], -l["cost"], warehouse=o.get("warehouse")))
         if doc_type in (None, "Credit"):
             for c in self._completed_returns("CreditNotes", start, end):
                 for l in c["lines"]:
                     if l["returned"]:
-                        rows.append(_txn(c["date"], "Credit", c["number"], c["customer_name"], l, l["qty"], l["cost"]))
+                        rows.append(_txn(c["date"], "Credit", c["number"], c["customer_name"], l, l["qty"], l["cost"],
+                                         warehouse=c.get("warehouse")))
         if doc_type in (None, "Supplier return"):
             for r in self._completed_returns("SupplierReturns", start, end):
                 for l in r["lines"]:
                     if l["qty"]:
                         rows.append(_txn(r["date"], "Supplier return", r["number"], r["supplier_name"], l,
-                                         -l["qty"], -l["value"]))
+                                         -l["qty"], -l["value"], warehouse=r.get("warehouse")))
         if doc_type in (None, "Adjustment"):
             for a in self.stock_adjustments(start, end)["rows"]:
                 rows.append(_txn(a["date"], "Adjustment", a["number"], a["reason"], a,
-                                 a["qty_change"], a["value_change"]))
+                                 a["qty_change"], a["value_change"], warehouse=a.get("warehouse")))
+        if doc_type in (None, "Transfer"):
+            for t in self.transfers(start, end):
+                if not t["completed"]:
+                    continue
+                for l in t["lines"]:  # out of one warehouse, into the other
+                    value = l["value"] or 0.0
+                    rows.append(_txn(t["date"], "Transfer", t["number"], f"{t['source_name']} → {t['destination_name']}",
+                                     l, -l["qty"], -value, warehouse=t["source"]))
+                    rows.append(_txn(t["date"], "Transfer", t["number"], f"{t['source_name']} → {t['destination_name']}",
+                                     l, l["qty"], value, warehouse=t["destination"]))
         if product:
             rows = [r for r in rows if r["product_code"] == product]
-        order = {"Purchase": 0, "Production": 1, "Sale": 2, "Credit": 3, "Supplier return": 4, "Adjustment": 5}
+        order = {"Purchase": 0, "Production": 1, "Sale": 2, "Credit": 3, "Supplier return": 4, "Adjustment": 5,
+                 "Transfer": 6}
         rows.sort(key=lambda r: (r["date"], order[r["type"]], r["number"]))
         return rows
 
@@ -701,20 +791,24 @@ class Reports:
         # Stock sent back to suppliers wasn't used: it comes off what was bought.
         sent_back = self._completed_returns("SupplierReturns", start, through, warehouses) if through >= start else []
         returned = sum(r["value"] for r in sent_back)
+        # Stock brought in from warehouses COGS doesn't count wasn't used up there: like a purchase.
+        transferred, transfers_in = self._transferred(start, through, warehouses)
         closing, closing_by = self._stock_at_end(None if is_current else through, warehouses, flows)
-        cogs = opening + goods + shipping - returned - closing
+        cogs = opening + goods + shipping - returned + transferred - closing
 
         result = {
             "month": start, "through": through, "prior_end": prior_end,
             "is_current": is_current, "opening": opening, "goods": goods,
             "shipping": shipping, "returned": returned, "supplier_returns": sent_back,
-            "purchases": goods + shipping - returned, "closing": closing,
+            "transferred": transferred, "transfers_in": transfers_in,
+            "purchases": goods + shipping - returned + transferred, "closing": closing,
             "cogs": cogs, "received": received, "days_elapsed": max((through - start).days + 1, 0),
             "days_in_month": (end - start).days + 1, "warehouses": warehouses,
             "opening_by": opening_by, "closing_by": closing_by,
         }
         if daily and through >= start:
-            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses, flows, sent_back)
+            result["daily"] = self._daily_cogs(start, through, opening, received, warehouses, flows, sent_back,
+                                               transfers_in)
         return result
 
     # ------------------------------------------------------------ stock at a moment
@@ -784,6 +878,15 @@ class Reports:
                     moves.append({"at": r["at"], "timed": r["timed"], "product_code": l["product_code"],
                                   "qty": -l["qty"], "value": -l["value"], "warehouse": r["warehouse"],
                                   "kind": "Supplier return", "number": r["number"]})
+        for t in self.transfers(start, end):
+            if not t["completed"] or not t["at"]:
+                continue
+            for l in t["lines"]:
+                for warehouse, sign in ((t["source"], -1), (t["destination"], 1)):
+                    if here(warehouse):
+                        moves.append({"at": t["at"], "timed": t["timed"], "product_code": l["product_code"],
+                                      "qty": sign * l["qty"], "value": sign * (l["value"] or 0), "warehouse": warehouse,
+                                      "kind": "Transfer", "number": t["number"]})
         for a in self._completed_assemblies(start, end):
             if not a.get("completed_at"):
                 continue
@@ -943,12 +1046,15 @@ class Reports:
         named = [names.get(c, c) for c in codes]
         return f"{', '.join(named[:-1])} and {named[-1]}" if len(named) > 1 else "".join(named)
 
-    def _daily_cogs(self, start, through, opening, received, warehouses=None, flows=None, sent_back=()):
+    def _daily_cogs(self, start, through, opening, received, warehouses=None, flows=None, sent_back=(),
+                    transfers_in=()):
         by_day = defaultdict(float)
         for o in received:
             by_day[o["received_date"]] += o["goods"] + o["shipping"]
         for r in sent_back:
             by_day[r["date"]] -= r["value"]
+        for t in transfers_in:
+            by_day[t["date"]] += t["value"]
         days = [start + dt.timedelta(days=i) for i in range((through - start).days + 1)]
         closings = self._map(lambda d: self._stock_at_end(d, warehouses, flows)[0], days)
         rows, purchases = [], 0.0
@@ -1153,6 +1259,12 @@ class Reports:
             for r in self.stock_adjustments(start, through)["rows"]:
                 if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
                     products[r["product_code"]]["written_off"] -= r["value_change"] or 0
+            if warehouses:  # in from other warehouses (like bought), out to them (counted as used)
+                for t in self.transfers(start, through):
+                    if t["completed"] and (t["source"] in warehouses) != (t["destination"] in warehouses):
+                        for l in t["lines"]:
+                            key = "received" if t["destination"] in warehouses else "sold"
+                            products[l["product_code"]][key] += l["value"] or 0
             for a in self._completed_assemblies(start, through):
                 for l in a["lines"]:
                     products[l["product_code"]]["production"] -= l["cost"]
@@ -1268,7 +1380,7 @@ def _field(record, names):
     return next((record[n] for n in names if record.get(n) is not None), None)
 
 
-def _txn(date, kind, number, party, line, qty, value):
+def _txn(date, kind, number, party, line, qty, value, warehouse=None):
     return {"date": date, "type": kind, "number": number, "party": party,
             "product_code": line["product_code"], "description": line.get("description"),
-            "qty": qty, "value": value}
+            "qty": qty, "value": value, "warehouse": warehouse}

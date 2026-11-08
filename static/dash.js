@@ -648,3 +648,85 @@ function fromTemplate(id, values) {
     });
   });
 })();
+
+/* Stock adjustment and transfer forms: a product typed (code or name, picked from the list
+   as it's typed), what the chosen warehouse holds of it, lines added and removed, and on an
+   adjustment the change and the new quantity kept in step (enter either). */
+(function () {
+  "use strict";
+  var form = document.querySelector("[data-stock-form]");
+  if (!form) return;
+  var adjust = form.dataset.kind === "adjust";
+  var body = form.querySelector("[data-lines]"), warehouse = form.querySelector("[data-stock-warehouse]");
+  var read = function (id) { var el = document.getElementById(id); return el ? JSON.parse(el.textContent) : null; };
+  var products = read("stock-product-data") || [], levels = read("stock-levels") || {};
+  var byCode = {}, byName = {};
+  products.forEach(function (p) {
+    byCode[p.code.toLowerCase()] = p;
+    byName[(p.name || "").toLowerCase()] = p;
+    byName[(p.code + " · " + (p.name || "")).toLowerCase()] = p;
+  });
+  var fmt = function (x) { return (Math.round(x * 10000) / 10000).toLocaleString(); };
+  function have(code) {
+    var at = levels[warehouse.value] || {};
+    return at[code] || [0, 0];
+  }
+  function show(row) {
+    var input = row.querySelector(".line-product"), typed = input.value.trim().toLowerCase();
+    var p = byCode[typed] || byName[typed], label = row.querySelector("[data-product-name]"), cell = row.querySelector("[data-have]");
+    if (!p) {
+      label.textContent = typed ? "Not a product that holds stock: pick one from the list" : "";
+      label.classList.toggle("due-late", !!typed);
+      cell.textContent = "";
+      return null;
+    }
+    if (input.value !== p.code) input.value = p.code;
+    label.textContent = p.name + (p.unit ? " (" + p.unit + ")" : "") + (p.batch ? " · by batch" : "");
+    label.classList.remove("due-late");
+    var h = have(p.code);
+    cell.textContent = fmt(h[0]);
+    if (adjust) {
+      var cost = row.querySelector("[name=unit_cost]");
+      var avg = h[0] > 0 ? h[1] / h[0] : (p.cost || 0);
+      cost.placeholder = avg ? avg.toFixed(2) : "";
+    }
+    return h;
+  }
+  function sync(row, from) {
+    var h = show(row);
+    if (!adjust || !h) return;
+    var change = row.querySelector("[name=change]"), next = row.querySelector("[name=new_qty]");
+    if (from === "change" && change.value !== "") next.value = String(Math.round((h[0] + parseFloat(change.value)) * 10000) / 10000);
+    if (from === "new_qty" && next.value !== "") change.value = String(Math.round((parseFloat(next.value) - h[0]) * 10000) / 10000);
+    if (from === "change" && change.value === "") next.value = "";
+    if (from === "new_qty" && next.value === "") change.value = "";
+  }
+  body.addEventListener("change", function (e) {
+    if (e.target.matches(".line-product")) sync(e.target.closest("[data-line]"), "product");
+  });
+  body.addEventListener("input", function (e) {
+    var row = e.target.closest("[data-line]");
+    if (e.target.matches(".line-product") && byCode[e.target.value.trim().toLowerCase()] &&
+        e.inputType !== "insertText" && e.inputType !== "deleteContentBackward") show(row);
+    if (e.target.name === "change" || e.target.name === "new_qty") sync(row, e.target.name);
+  });
+  body.addEventListener("click", function (e) {
+    var remove = e.target.closest("[data-remove-line]");
+    if (!remove) return;
+    var row = remove.closest("[data-line]");
+    if (body.querySelectorAll("[data-line]").length > 1) { row.remove(); return; }
+    row.querySelectorAll("input").forEach(function (el) { el.value = ""; });
+    show(row);
+  });
+  form.querySelector("[data-add-line]").addEventListener("click", function () {
+    var row = fromTemplate("stock-line-template", {});
+    body.appendChild(row);
+    row.querySelector(".line-product").focus();
+  });
+  warehouse.addEventListener("change", function () {
+    body.querySelectorAll("[data-line]").forEach(function (row) { sync(row, "new_qty"); });
+  });
+  body.querySelectorAll("[data-line]").forEach(function (row) {
+    if (row.querySelector(".line-product").value) sync(row, row.querySelector("[name=new_qty]") && row.querySelector("[name=new_qty]").value ? "new_qty" : "change");
+  });
+})();

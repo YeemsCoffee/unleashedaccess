@@ -1,27 +1,48 @@
 {% extends "dash/base.html" %}
-{% from "dash/_macros.html" import range_filters, doc_link %}
+{% from "dash/_macros.html" import doc_link, stock_nav, status_pill %}
 {% block title %}Transactions{% endblock %}
 {% block content %}
+{{ stock_nav('dash.transactions') }}
 <div class="page-head">
-  <h1>Transaction history</h1>
-  {% call range_filters(start, end, csv_url=csv_url) %}
-    <label>Type <select name="type"><option value="">All</option>
-      {% for t in ('Purchase', 'Production', 'Sale', 'Credit', 'Supplier return', 'Adjustment') %}<option {{ 'selected' if t == doc_type }}>{{ t }}</option>{% endfor %}</select></label>
-    <label>Product <select name="product"><option value="">All</option>
-      {% for p in products %}<option value="{{ p.ProductCode }}" {{ 'selected' if p.ProductCode == product }}>{{ p.ProductCode }}</option>{% endfor %}</select></label>
-  {% endcall %}
+  <h1>Transactions</h1>
+  <div class="action-row">
+    <a class="btn btn-primary" href="{{ url_for('dash.adjustment_new') }}">+ Adjustment</a>
+    <a class="btn btn-primary" href="{{ url_for('dash.stock_count_new') }}">+ Stock count</a>
+    <a class="btn btn-primary" href="{{ url_for('dash.transfer_new') }}">+ Transfer</a>
+  </div>
 </div>
-<p class="muted">Every stock-affecting document from Unleashed: purchase receipts, completed production (components used, products made), completed sales, stock adjustments. Newest first.</p>
+
+{% if open_transfers or counting %}
 <section class="card">
+  <h2>Waiting to finish</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Supplier / customer / reason</th><th>Product</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
+    <thead><tr><th>What</th><th>Number</th><th>Where</th><th>Status</th><th class="num">Lines</th></tr></thead>
+    <tbody>
+    {% for t in open_transfers %}
+    <tr><td>Transfer</td><td><a href="{{ url_for('dash.transfer_detail', number=t.number) }}">{{ t.number }}</a></td>
+      <td>{{ t.source_name }} → {{ t.destination_name }}</td><td>{{ status_pill(t.status) }}</td><td class="num">{{ t.lines|length }}</td></tr>
+    {% endfor %}
+    {% for c in counting %}
+    <tr><td>Stock count</td><td><a href="{{ url_for('dash.stock_count', count_id=c.id) }}">{{ c.name }}</a></td>
+      <td>{{ names.get(c.warehouse, c.warehouse) }}</td><td><span class="pill pill-placed">Counting</span></td>
+      <td class="num">{{ c.counted }} of {{ c.lines }} counted</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>{{ start|d }} to {{ today|d }}</h2>
+    <a href="{{ url_for('dash.transactions_history') }}">Earlier, and filters →</a></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Supplier / customer / reason</th><th class="wide-only">Warehouse</th><th>Product</th><th class="num">Qty</th><th class="num">Value</th></tr></thead>
     <tbody>
     {% for t in rows %}
-    <tr><td>{{ t.date|d }}</td><td>{{ t.type }}</td>
-      <td>{{ doc_link(t) }}</td>
-      <td>{{ t.party }}</td><td>{{ t.description or t.product_code }}</td>
+    <tr><td class="nowrap">{{ t.date|d }}</td><td>{{ t.type }}</td><td>{{ doc_link(t) }}</td>
+      <td>{{ t.party }}</td><td class="wide-only">{{ t.warehouse or '' }}</td><td>{{ t.description or t.product_code }}</td>
       <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.value|money }}</td></tr>
-    {% else %}<tr><td colspan="7" class="muted">No transactions in this period.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="8" class="muted">No stock moved today or yesterday.</td></tr>{% endfor %}
     </tbody>
   </table></div>
 </section>

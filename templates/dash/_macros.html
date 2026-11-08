@@ -13,7 +13,9 @@
 {% endmacro %}
 
 {% macro doc_link(t) %}
-{%- set endpoint = {'Purchase': 'dash.purchase_detail', 'Sale': 'dash.sales_detail', 'Production': 'dash.production_order'}.get(t.type) -%}
+{%- set endpoint = {'Purchase': 'dash.purchase_detail', 'Sale': 'dash.sales_detail', 'Production': 'dash.production_order',
+                    'Adjustment': 'dash.adjustment_detail', 'Transfer': 'dash.transfer_detail',
+                    'Credit': 'dash.credit_detail', 'Supplier return': 'dash.supplier_return_detail'}.get(t.type) -%}
 {%- if endpoint %}<a href="{{ url_for(endpoint, number=t.number) }}">{{ t.number }}</a>{% else %}{{ t.number }}{% endif -%}
 {% endmacro %}
 
@@ -47,4 +49,15 @@
   <p class="muted">To complete the order, save {% for s in run.blocking %}<a href="#step-{{ s.index }}">step {{ s.index + 1 }} ({{ s.name }})</a>{{ ', ' if not loop.last }}{% endfor %}.</p>
   {% endif %}
 </div>
+{% endmacro %}
+
+{# The Transactions tab's pages, in a row under the tab. #}
+{% macro stock_nav(active) %}
+<nav class="sub-pills" aria-label="Transactions">
+  {% for endpoint, label in (('dash.transactions', 'Recent'), ('dash.transactions_history', 'History'),
+                             ('dash.stock_movement', 'Stock movement'), ('dash.adjustments', 'Adjustments'),
+                             ('dash.transfers', 'Transfers'), ('dash.stock_counts', 'Stock counts')) %}
+  <a href="{{ url_for(endpoint) }}" class="{{ 'active' if endpoint == active }}"{{ ' aria-current=page' if endpoint == active }}>{{ label }}</a>
+  {% endfor %}
+</nav>
 {% endmacro %}

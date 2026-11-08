@@ -360,4 +360,37 @@ CREATE TABLE IF NOT EXISTS maint_files (
     data         BLOB NOT NULL,
     uploaded_by  TEXT,
     uploaded_at  TEXT NOT NULL
+);
+
+-- Stock counts, kept in Core (Unleashed's API only lists its own): what each product in a
+-- warehouse should be when the count started, what was counted, and when it was posted to
+-- Unleashed as a stock adjustment of the differences.
+CREATE TABLE IF NOT EXISTS stock_counts (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT NOT NULL,
+    warehouse         TEXT NOT NULL,         -- Unleashed warehouse code
+    product_group     TEXT,                  -- counted only this group (none: every product)
+    status            TEXT NOT NULL,         -- counting | posted | cancelled
+    created_by        TEXT,
+    created_at        TEXT NOT NULL,
+    posted_by         TEXT,
+    posted_at         TEXT,
+    reason            TEXT,                  -- the adjustment reason it was posted with
+    adjustment_number TEXT                   -- the adjustment it was posted as
+);
+
+-- One line per product (per batch, for a batch-tracked product) being counted.
+CREATE TABLE IF NOT EXISTS stock_count_lines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    count_id     INTEGER NOT NULL,
+    product_code TEXT NOT NULL,
+    description  TEXT,
+    product_group TEXT,
+    batch_number TEXT,
+    expiry_date  TEXT,
+    expected_qty REAL NOT NULL,              -- in the warehouse when the count started
+    avg_cost     REAL,                       -- then
+    counted_qty  REAL,                       -- none: not counted yet
+    counted_by   TEXT,
+    counted_at   TEXT
 )

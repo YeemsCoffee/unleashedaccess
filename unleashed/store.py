@@ -22,12 +22,13 @@ REFERENCE_ENDPOINTS = {
     "Suppliers": "Guid", "Customers": "Guid", "BillOfMaterials": "Guid",
 }
 DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments", "Assemblies", "CreditNotes",
-                      "SupplierReturns")
+                      "SupplierReturns", "WarehouseStockTransfers")
 # Production endpoints: an account (or API user) without access to them still syncs
 # everything else, and the Production pages say why they're empty.
-OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies", "CreditNotes", "SupplierReturns"}
-# Copied whole rather than from a date window: parked assemblies can be older than any window.
-UNWINDOWED_ENDPOINTS = {"Assemblies"}
+OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies", "CreditNotes", "SupplierReturns", "WarehouseStockTransfers"}
+# Copied whole rather than from a date window: parked assemblies can be older than any window,
+# and transfers can only be asked for by when they changed.
+UNWINDOWED_ENDPOINTS = {"Assemblies", "WarehouseStockTransfers"}
 ALL_DATES = "all"  # the stored window of an unwindowed endpoint
 CURRENT = "current"
 # Settings kept with the copy, since they name things in this Unleashed account: the
@@ -102,8 +103,20 @@ def document_columns(endpoint, d):
     if endpoint == "SupplierReturns":
         return (d.get("SupplierReturnNumber"), d.get("Status"), _iso(d.get("ReturnDate")),
                 (d.get("Supplier") or {}).get("SupplierCode"), _iso(d.get("ReturnDate")))
+    if endpoint == "WarehouseStockTransfers":
+        return (d.get("TransferOrderNumber"), d.get("TransferStatus"), _iso(d.get("OrderDate")),
+                (d.get("SourceWarehouse") or {}).get("WarehouseCode"), _iso(transfer_moved(d)))
     return (d.get("AdjustmentNumber"), d.get("Status"), _iso(d.get("AdjustmentDate")), None,
             _iso(d.get("AdjustmentDate")))
+
+
+def transfer_moved(d):
+    """When a transfer moved stock: completed, which the API doesn't date (its reference has
+    no completed date), so when it last changed, as completed transfers can't change; for one
+    not completed, its order date."""
+    if (d.get("TransferStatus") or "").lower() == "completed":
+        return d.get("CompletedDate") or d.get("LastModifiedOn") or d.get("DeliveryDate") or d.get("OrderDate")
+    return d.get("OrderDate")
 
 
 class SourceMismatch(Exception):
@@ -489,7 +502,7 @@ class LocalStoreClient:
             return self._live(endpoint, params,
                               f"Dates before {window} aren't in the shared copy of Unleashed data")
         status = params.get("orderStatus") or params.get("assemblyStatus") or params.get("creditStatus") \
-            or params.get("supplierReturnStatus")
+            or params.get("supplierReturnStatus") or params.get("transferStatus")
         statuses = [s.strip() for s in status.split(",")] if status else None
         number = params.get("orderNumber") or params.get("adjustmentNumber") \
             or params.get("assemblyNumber") or params.get("creditNumber") or params.get("supplierReturnNumber")

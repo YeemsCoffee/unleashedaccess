@@ -1,0 +1,30 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import stock_nav, status_pill, range_filters %}
+{% block title %}Transfers{% endblock %}
+{% block content %}
+{{ stock_nav('dash.transfers') }}
+<div class="page-head">
+  <h1>Warehouse transfers</h1>
+  {% call range_filters(start, end) %}{% endcall %}
+</div>
+<div class="page-actions"><a class="btn btn-primary" href="{{ url_for('dash.transfer_new') }}">+ New transfer</a></div>
+{% macro rows(list, empty) %}
+<div class="table-wrap"><table>
+  <thead><tr><th>Number</th><th>Date</th><th>From</th><th>To</th><th>Status</th><th class="num">Lines</th><th class="num">Value</th></tr></thead>
+  <tbody>{% for t in list %}
+  <tr><td><a href="{{ url_for('dash.transfer_detail', number=t.number) }}">{{ t.number }}</a></td>
+    <td class="nowrap">{{ (t.date or t.order_date)|d if (t.date or t.order_date) else '—' }}</td>
+    <td>{{ t.source_name }}</td><td>{{ t.destination_name }}</td><td>{{ status_pill(t.status) }}</td>
+    <td class="num">{{ t.lines|length }}</td><td class="num">{{ t.value|money if t.completed else '—' }}</td></tr>
+  {% else %}<tr><td colspan="7" class="muted">{{ empty }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endmacro %}
+<section class="card">
+  <h2>Waiting to complete</h2>
+  {{ rows(open, "None: every transfer is completed.") }}
+</section>
+<section class="card">
+  <h2>Completed {{ start|d }} to {{ end|d }}</h2>
+  {{ rows(done|selectattr('completed')|list, "No transfers completed in this period.") }}
+</section>
+{% endblock %}

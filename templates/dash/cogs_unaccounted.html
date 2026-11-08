@@ -116,8 +116,12 @@
     <tr><td>{{ r.date|d }}</td><td><a href="{{ url_for('dash.supplier_return_detail', number=r.number) }}">{{ r.number }}</a></td>
       <td>{{ r.supplier_name }}</td><td>Sent back</td><td class="num">−{{ r.value|money }}</td><td></td><td class="num">−{{ r.value|money }}</td></tr>
     {% endfor %}
+    {% for t in c.transfers_in %}
+    <tr><td>{{ t.date|d }}</td><td><a href="{{ url_for('dash.transfer_detail', number=t.number) }}">{{ t.number }}</a></td>
+      <td>From {{ t.source_name }}</td><td>Transferred in</td><td class="num">{{ t.value|money }}</td><td></td><td class="num">{{ t.value|money }}</td></tr>
+    {% endfor %}
     </tbody>
-    <tfoot><tr><td colspan="4">Total{% if c.returned %}, less what went back{% endif %}</td><td class="num">{{ (c.goods - c.returned)|money }}</td><td class="num">{{ c.shipping|money }}</td><td class="num">{{ c.purchases|money }}</td></tr></tfoot>
+    <tfoot><tr><td colspan="4">Total{% if c.returned %}, less what went back{% endif %}{% if c.transferred %}, with what was transferred in{% endif %}</td><td class="num">{{ (c.goods - c.returned + c.transferred)|money }}</td><td class="num">{{ c.shipping|money }}</td><td class="num">{{ c.purchases|money }}</td></tr></tfoot>
   </table>
   </div>
 </section>

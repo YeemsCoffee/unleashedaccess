@@ -3,6 +3,7 @@ import copy
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -27,7 +28,7 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "access_profiles", "app_user_profiles", "maint_locations", "maint_tasks",
               "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
-              "maint_order_costs", "maint_files", "prod_step_pictures")
+              "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines")
 
 
 def sqlite_database(testcase):
@@ -150,6 +151,9 @@ class ReportsTests(unittest.TestCase):
             def _completed_returns(self, endpoint, start, through, warehouses=None):
                 return []
 
+            def transfers(self, start=None, end=None, status=None):
+                return []
+
             def _completed_assemblies(self, start, end):
                 return [{"completed": True, "completed_date": dt.date(2026, 10, 9), "number": "ASM-1",
                          "product_code": "LATTE", "cost": 8.0, "supplier_costs": 2.5,
@@ -223,6 +227,9 @@ class ReportsTests(unittest.TestCase):
                 return []
 
             def _completed_returns(self, endpoint, start, through, warehouses=None):
+                return []
+
+            def transfers(self, start=None, end=None, status=None):
                 return []
 
             def customers(self):
@@ -347,11 +354,15 @@ class DashboardPageTests(unittest.TestCase):
         self.assertEqual(overview[:5], ["Finance", "Warehouse", "Production", "Maintenance", "Settings"])
         self.assertEqual(overview[5:], ["Overview", "COGS"])  # Finance's pages
         self.assertEqual(links("/", active=True), ["Finance", "Overview"])
-        warehouse = ["Stock on hand", "Purchases", "Sales", "Transactions", "Stock movement",
-                     "Adjustments"]
-        for path in ("/stock-on-hand", "/transactions", "/stock-movement", "/adjustments"):
-            self.assertEqual(links(path)[5:], warehouse, path)
-        self.assertEqual(links("/stock-movement", active=True), ["Warehouse", "Stock movement"])
+        # Stock movement and adjustments are under Transactions, with transfers and stock counts.
+        warehouse = ["Stock on hand", "Purchases", "Sales", "Transactions"]
+        for path in ("/stock-on-hand", "/transactions", "/stock-movement", "/adjustments", "/transfers",
+                     "/stock-counts", "/transactions/history", "/adjustments/new", "/transfers/new"):
+            self.assertEqual(links(path)[5:9], warehouse, path)
+        for path in ("/stock-movement", "/adjustments", "/transfers", "/stock-counts", "/transactions/history"):
+            self.assertEqual(links(path, active=True), ["Warehouse", "Transactions"], path)
+        sub = self.client.get("/stock-movement").get_data(as_text=True)
+        self.assertIn('class="active" aria-current=page>Stock movement</a>', sub)
         for path in ("/connection", "/api-log"):
             self.assertEqual(links(path)[-3:], ["Connection", "COGS", "API log"], path)  # no Team without accounts
         self.assertEqual(links("/api-log", active=True), ["Settings", "API log"])
@@ -767,6 +778,208 @@ class OrderPageTests(unittest.TestCase):
         self.assertAlmostEqual(cogs["cogs"], self.reports.cogs_reconciliation(TODAY)["total"], delta=1.0)
         self.assertIn("sent back to suppliers", self.c.get("/cogs").get_data(as_text=True))
         self.assertIn(ret, self.c.get("/cogs/not-on-an-order").get_data(as_text=True))
+
+
+class StockTransactionTests(unittest.TestCase):
+    """Stock adjustments, warehouse transfers and stock counts made from Core's Transactions tab,
+    written to (the mock) Unleashed and kept in the shared copy."""
+
+    def setUp(self):
+        self.app = make_app(self, UNLEASHED_MODE="mock", TODAY=TODAY)
+        self.c = self.app.test_client()
+        ext = self.app.extensions["unleashed"]
+        self.ds = ext["client"].transport.app.config["DATASET"]
+        self.reports = ext["reports"]
+
+    def _post(self, path, **data):
+        res = self.c.post(path, data=data)
+        self.assertIn(res.status_code, (302, 303), res.get_data(as_text=True)[-3000:])
+        return res
+
+    def _qty(self, code, warehouse=None):
+        return self.ds.stock_in(code, warehouse)[0] if warehouse else self.ds.stock_qty(code)
+
+    def test_the_transactions_page_shows_two_days_and_what_to_make(self):
+        html = self.c.get("/transactions").get_data(as_text=True)
+        for text in ("+ Adjustment", "+ Stock count", "+ Transfer", "Earlier, and filters",
+                     f"{(TODAY - dt.timedelta(days=1)):%b} {(TODAY - dt.timedelta(days=1)).day}, {TODAY.year} to"):
+            self.assertIn(text, html)
+        days = {d for d in re.findall(r'<td class="nowrap">([^<]+)</td>', html)}
+        self.assertTrue(days)
+        self.assertLessEqual(len(days), 2)
+        history = self.c.get("/transactions/history?type=Transfer").get_data(as_text=True)
+        self.assertIn("<option selected>Transfer</option>", history)
+
+    def test_an_adjustment_moves_stock_at_average_cost_and_is_listed(self):
+        form = self.c.get("/adjustments/new").get_data(as_text=True)
+        for text in ('list="stock-products"', '"code": "MILK-WHL-GAL"', "<option>Damaged</option>", "Commissary",
+                     "made completed"):
+            self.assertIn(text, form)
+        self.assertNotIn('"code": "FREIGHT"', form)  # charges hold no stock
+        before, avg = self._qty("MILK-WHL-GAL"), self.ds.average_cost("MILK-WHL-GAL")
+        bad = self.c.post("/adjustments/new", data={"warehouse": "GDN", "reason": "Damaged", "product": ["nope"],
+                                                    "change": ["-1"], "new_qty": [""], "unit_cost": [""], "line_comment": [""]})
+        self.assertIn("nope: not a product that holds stock", bad.get_data(as_text=True))
+        below = self.c.post("/adjustments/new", data={"warehouse": "GDN", "reason": "Damaged", "product": ["MILK-WHL-GAL"],
+                                                      "change": [str(-before - 5)], "new_qty": [""], "unit_cost": [""],
+                                                      "line_comment": [""]})
+        self.assertIn("be less than 0", below.get_data(as_text=True))
+        res = self._post("/adjustments/new", warehouse="GDN", reason="Damaged", product=["milk-whl-gal", ""],
+                         change=["-2", ""], new_qty=["", ""], unit_cost=["", ""], line_comment=["Dropped two", ""])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        self.assertAlmostEqual(self._qty("MILK-WHL-GAL"), before - 2)
+        sa = next(a for a in self.ds.stock_adjustments if a["AdjustmentNumber"] == number)
+        self.assertEqual((sa["Status"], sa["AdjustmentReason"], sa["WarehouseCode"]), ("Completed", "Damaged", "GDN"))
+        self.assertAlmostEqual(sa["Lines"][0]["ValueChange"], -2 * avg, places=2)
+        page = self.c.get(f"/adjustments/{number}").get_data(as_text=True)
+        for text in ("Dropped two", "Damaged", "Gardena Store", "Completed", "make another"):
+            self.assertIn(text, page)
+        self.assertIn(f'>{number}</a>', self.c.get("/transactions").get_data(as_text=True))
+        self.assertIn(f'>{number}</a>', self.c.get("/adjustments").get_data(as_text=True))
+        # Found stock goes in at the unit cost given.
+        self._post("/adjustments/new", warehouse="GDN", reason="Found", product=["MILK-OAT-QT"], change=[""],
+                   new_qty=[str(self._qty("MILK-OAT-QT") + 4)], unit_cost=["2.50"], line_comment=[""])
+        found = self.ds.stock_adjustments[-1]["Lines"][0]
+        self.assertEqual((found["QuantityChange"], round(found["ValueChange"], 2)), (4.0, 10.0))
+
+    def test_a_batch_tracked_adjustment_says_which_batches(self):
+        batches = {b["Number"]: b["Quantity"] for b in self.ds.batches
+                   if b["ProductCode"] == "VSC-HG" and b["WarehouseCode"] == "GDN" and b["Quantity"] > 0}
+        self.assertTrue(batches)
+        first, have = sorted(batches.items())[0]
+        ask = self.c.post("/adjustments/new", data={"warehouse": "GDN", "reason": "Expired", "product": ["VSC-HG"],
+                                                    "change": ["-1"], "new_qty": [""], "unit_cost": [""], "line_comment": [""]})
+        html = ask.get_data(as_text=True)
+        self.assertIn("tracked by batch", html)
+        self.assertIn(f'name="batch-number-VSC-HG" value="{first}"', html)
+        rows = sorted(batches.items())
+        data = {"warehouse": "GDN", "reason": "Expired", "product": ["VSC-HG"], "change": ["-1"], "new_qty": [""],
+                "unit_cost": [""], "line_comment": [""], "batches-shown-VSC-HG": "1",
+                "batch-number-VSC-HG": [n for n, _ in rows] + ["NEW-1"],
+                "batch-qty-VSC-HG": ["0" if n == first else f"{q:g}" for n, q in rows] + ["2"],
+                "batch-expiry-VSC-HG": ["" for _ in rows] + ["2026-08-01"]}
+        res = self._post("/adjustments/new", **data)
+        self.assertIn("/adjustments/SA-", res.headers["Location"])
+        left = {b["Number"]: b["Quantity"] for b in self.ds.batches if b["ProductCode"] == "VSC-HG" and b["WarehouseCode"] == "GDN"}
+        self.assertEqual((left[first], left["NEW-1"]), (0.0, 2.0))
+        line = self.ds.stock_adjustments[-1]["Lines"][0]
+        self.assertAlmostEqual(line["NewQuantity"], sum(batches.values()) - have + 2)
+
+    def test_a_transfer_is_parked_changed_and_completed_between_warehouses(self):
+        form = self.c.get("/transfers/new").get_data(as_text=True)
+        self.assertIn('<option value="COM" selected>Commissary</option>', form)  # to the other warehouse
+        same = self.c.post("/transfers/new", data={"source": "GDN", "destination": "GDN", "product": ["MILK-WHL-GAL"],
+                                                   "qty": ["1"], "line_guid": [""], "line_comment": [""], "then": "park"})
+        self.assertIn("different warehouse", same.get_data(as_text=True))
+        too_much = self.c.post("/transfers/new", data={"source": "GDN", "destination": "COM", "product": ["MILK-WHL-GAL"],
+                                                       "qty": ["99999"], "line_guid": [""], "line_comment": [""],
+                                                       "then": "complete"})
+        self.assertIn("enough of MILK-WHL-GAL (", too_much.get_data(as_text=True))
+        self.assertEqual(self.ds.transfers, [])  # nothing made
+        res = self._post("/transfers/new", source="GDN", destination="COM", product=["MILK-WHL-GAL", "MILK-OAT-QT"],
+                         qty=["4", "2"], line_guid=["", ""], line_comment=["For the kitchen", ""], comments="Monday run",
+                         then="park")
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        page = self.c.get(f"/transfers/{number}").get_data(as_text=True)
+        for text in ("Parked", "Gardena Store", "Commissary", "For the kitchen", "Monday run", "Complete: move the stock"):
+            self.assertIn(text, page)
+        self.assertIn(f">{number}</a>", self.c.get("/transactions").get_data(as_text=True))  # waiting to finish
+        self.assertEqual(self._qty("MILK-WHL-GAL", "COM"), 0.0)  # parked moves nothing
+        edit = self.c.get(f"/transfers/{number}/edit").get_data(as_text=True)
+        guids = re.findall(r'name="line_guid" value="([^"]+)"', edit)
+        self.assertEqual(len(guids), 2)
+        total, gdn = self._qty("MILK-WHL-GAL"), self._qty("MILK-WHL-GAL", "GDN")
+        blank = self.c.post(f"/transfers/{number}/edit", data={"source": "GDN", "destination": "COM",
+                                                              "product": ["MILK-WHL-GAL", "CRM-HVY-HG"], "qty": ["5", ""],
+                                                              "line_guid": [guids[0], ""], "line_comment": ["", ""],
+                                                              "comments": "", "then": "save"})
+        self.assertIn("Enter how much CRM-HVY-HG to move", blank.get_data(as_text=True))
+        # The oat milk line removed, the milk changed, and completed in one go.
+        self._post(f"/transfers/{number}/edit", source="GDN", destination="COM", product=["MILK-WHL-GAL"],
+                   qty=["5"], line_guid=[guids[0]], line_comment=[""], comments="", then="complete")
+        t = self.ds.transfers[0]
+        self.assertEqual((t["TransferStatus"], [(l["ProductCode"], l["Quantity"]) for l in t["Lines"]]),
+                         ("Completed", [("MILK-WHL-GAL", 5.0)]))
+        self.assertEqual(self._qty("MILK-WHL-GAL", "COM"), 5.0)
+        self.assertAlmostEqual(self._qty("MILK-WHL-GAL", "GDN"), gdn - 5)
+        self.assertAlmostEqual(self._qty("MILK-WHL-GAL"), total)  # only moved
+        recent = self.c.get("/transactions").get_data(as_text=True)
+        self.assertEqual(recent.count("Gardena Store → Commissary"), 2)  # out of one, into the other
+        stored = self.app.extensions["unleashed"]["store"].query_documents("WarehouseStockTransfers")
+        self.assertEqual([d["TransferStatus"] for d in stored], ["Completed"])
+        # COGS of every warehouse doesn't change; a COGS of the Commissary alone counts it as bought.
+        com = self.reports.cogs(TODAY, warehouses=["COM"])
+        self.assertAlmostEqual(com["transferred"], 5 * t["Lines"][0]["Cost"], places=2)
+        self.assertAlmostEqual(com["cogs"], com["opening"] + com["purchases"] - com["closing"], places=6)
+        self.assertEqual(self.reports.cogs(TODAY)["transferred"], 0.0)
+        self.assertIn("Completed", self.c.get(f"/transfers/{number}").get_data(as_text=True))
+        self.assertEqual(self.c.post(f"/transfers/{number}/delete").status_code, 302)
+        self.assertEqual(self.ds.transfers[0]["TransferStatus"], "Completed")  # a completed one stays
+
+    def test_a_parked_transfer_is_deleted(self):
+        res = self._post("/transfers/new", source="GDN", destination="COM", product=["MILK-WHL-GAL"], qty=["1"],
+                         line_guid=[""], line_comment=[""], then="place")
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        self.assertIn("Placed", self.c.get(f"/transfers/{number}").get_data(as_text=True))
+        self._post(f"/transfers/{number}/delete")
+        self.assertEqual(self.ds.transfers[0]["TransferStatus"], "Deleted")
+        self.assertEqual(self.c.get(f"/transfers/{number}").status_code, 404)
+
+    def test_a_stock_count_posts_its_differences_as_one_adjustment(self):
+        counts = self.app.extensions["stock_counts"]
+        new = self.c.get("/stock-counts/new").get_data(as_text=True)
+        self.assertIn("<option>Dairy</option>", new)
+        res = self._post("/stock-counts/new", warehouse="GDN", group="Dairy", include_zero="1", name="Cooler")
+        count_id = int(res.headers["Location"].rsplit("/", 1)[1])
+        c = counts.count(count_id)
+        codes = {l["product_code"] for l in c["lines"]}
+        self.assertIn("MILK-WHL-GAL", codes)
+        self.assertNotIn("COF-ESP-5LB", codes)  # another group
+        crm = [l for l in c["lines"] if l["product_code"] == "CRM-HVY-HG"]
+        self.assertTrue(crm and all(l["batch_number"] for l in crm))  # a line per batch
+        milk = next(l for l in c["lines"] if l["product_code"] == "MILK-WHL-GAL")
+        oat = next(l for l in c["lines"] if l["product_code"] == "MILK-OAT-QT")
+        page = self.c.get(f"/stock-counts/{count_id}").get_data(as_text=True)
+        self.assertIn(f'name="counted-{milk["id"]}"', page)
+        self.assertIn("Hide what Unleashed says", page)
+        self.assertNotIn(f"{milk['expected_qty']:g}</td>", self.c.get(f"/stock-counts/{count_id}?blind=1").get_data(as_text=True)
+                         .split("<tbody>")[1].split(milk["product_code"])[1].split("</tr>")[0])
+        # Two people save at once: each only changes the lines they typed in.
+        self._post(f"/stock-counts/{count_id}", **{f"counted-{milk['id']}": f"{milk['expected_qty'] - 3:g}", f"orig-{milk['id']}": "",
+                                                   f"counted-{oat['id']}": "", f"orig-{oat['id']}": ""})
+        self._post(f"/stock-counts/{count_id}", **{f"counted-{milk['id']}": "", f"orig-{milk['id']}": "",
+                                                   f"counted-{oat['id']}": f"{oat['expected_qty']:g}", f"orig-{oat['id']}": ""})
+        c = counts.count(count_id)
+        self.assertEqual(c["counted"], 2)
+        self.assertEqual([l["product_code"] for l in c["differences"]], ["MILK-WHL-GAL"])
+        # Stock sold while counting stands: the difference moves the stock there now.
+        self.ds.move_stock(TODAY, "Sale", "SO-X", "X", "MILK-WHL-GAL", -1, -1 * self.ds.average_cost("MILK-WHL-GAL"))
+        before = self._qty("MILK-WHL-GAL", "GDN")
+        self._post(f"/stock-counts/{count_id}/post", reason="Stock count")
+        c = counts.count(count_id)
+        self.assertEqual(c["status"], "posted")
+        sa = self.ds.stock_adjustments[-1]
+        self.assertEqual((c["adjustment_number"], sa["AdjustmentReason"], len(sa["Lines"])),
+                         (sa["AdjustmentNumber"], "Stock count", 1))
+        self.assertAlmostEqual(self._qty("MILK-WHL-GAL", "GDN"), before - 3)
+        page = self.c.get(f"/stock-counts/{count_id}").get_data(as_text=True)
+        self.assertIn(f'>{sa["AdjustmentNumber"]}</a>', page)
+        self.assertNotIn('name="counted-', page)  # done: read only
+        again = self.c.post(f"/stock-counts/{count_id}/post", data={"reason": "Stock count"}, follow_redirects=True)
+        self.assertIn("This count is posted", again.get_data(as_text=True))
+        self.assertEqual(self.ds.stock_adjustments[-1]["AdjustmentNumber"], sa["AdjustmentNumber"])
+
+    def test_a_count_that_matches_needs_no_adjustment(self):
+        res = self._post("/stock-counts/new", warehouse="GDN", group="Syrups & Sauces", include_zero="", name="")
+        count_id = int(res.headers["Location"].rsplit("/", 1)[1])
+        c = self.app.extensions["stock_counts"].count(count_id)
+        line = c["lines"][0]
+        self._post(f"/stock-counts/{count_id}", **{f"counted-{line['id']}": f"{line['expected_qty']:g}", f"orig-{line['id']}": ""})
+        n = len(self.ds.stock_adjustments)
+        done = self.c.post(f"/stock-counts/{count_id}/post", data={"reason": "Stock count"}, follow_redirects=True)
+        self.assertIn("nothing to adjust", done.get_data(as_text=True))
+        self.assertEqual(len(self.ds.stock_adjustments), n)
+        self.assertEqual(self.app.extensions["stock_counts"].count(count_id)["status"], "posted")
 
 
 class ProductionTests(unittest.TestCase):

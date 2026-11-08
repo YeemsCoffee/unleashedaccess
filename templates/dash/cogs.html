@@ -45,7 +45,7 @@
       {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
     <div class="op">+</div>
     <div><span class="f-label"><a href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#purchases">Purchases received</a></span><span class="f-val">{{ c.purchases|money }}</span>
-      <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping{% if c.returned %} − {{ c.returned|money }} sent back to suppliers{% endif %}</span></div>
+      <span class="f-sub">{{ c.goods|money }} goods + {{ c.shipping|money }} shipping{% if c.returned %} − {{ c.returned|money }} sent back to suppliers{% endif %}{% if c.transferred %} + {{ c.transferred|money }} transferred in from other warehouses{% endif %}</span></div>
     <div class="op">−</div>
     <div><span class="f-label">{{ 'Current inventory value' if c.is_current else 'Ending inventory ' ~ (c.through|d) }}</span><span class="f-val">{{ c.closing|money }}</span>
       {% if warehouse_name %}<span class="f-sub">in {{ warehouse_name }}</span>{% endif %}</div>
