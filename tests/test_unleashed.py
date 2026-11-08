@@ -1711,7 +1711,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_pages_wear_the_yeems_brand(self):
         page = self.c.get("/maintenance/").get_data(as_text=True)
-        for text in ('rel="icon" href="/static/favicon.svg"', 'aria-label="Yeems coffee"',
+        for text in ('rel="icon" href="/static/favicon.svg?v=', 'aria-label="Yeems coffee"',
                      'class="brand-name">Yeems Core</strong>', "/static/fonts/inter-latin-400-normal.woff2"):
             self.assertIn(text, page)
         for asset in ("favicon.svg", "fonts/inter-latin-400-normal.woff2",

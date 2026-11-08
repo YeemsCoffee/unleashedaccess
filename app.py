@@ -52,9 +52,27 @@ def create_app(test_config=None):
         # Set SECURE_COOKIES=1 when the dashboard is served over HTTPS.
         SESSION_COOKIE_SECURE=env("SECURE_COOKIES", "") == "1",
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # maintenance attachments are up to 16 MB
+        # Browsers keep the stylesheet, script, icon and fonts for a year: pages link them with a
+        # fingerprint of their contents (static_version), so a changed file is fetched afresh.
+        SEND_FILE_MAX_AGE_DEFAULT=365 * 24 * 3600,
     )
     if test_config:
         app.config.update(test_config)
+
+    fingerprints = {}
+
+    @app.url_defaults
+    def static_version(endpoint, values):
+        if endpoint == "static" and "filename" in values and "v" not in values:
+            name = values["filename"]
+            if name not in fingerprints:
+                try:
+                    with open(os.path.join(app.static_folder, name), "rb") as f:
+                        fingerprints[name] = hashlib.sha256(f.read()).hexdigest()[:10]
+                except OSError:
+                    fingerprints[name] = None
+            if fingerprints[name]:
+                values["v"] = fingerprints[name]
 
     cfg = app.config
     cfg["DATABASE"] = cfg["DATABASE_URL"] or cfg["DATABASE_PATH"]

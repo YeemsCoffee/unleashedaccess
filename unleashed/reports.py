@@ -192,7 +192,8 @@ class Reports:
             "endDate": end.isoformat() if end else None,
             "orderStatus": status, "supplierCode": supplier,
         })
-        return [self._po(i) for i in self._with_cost_lines(items)]
+        charges = self.charge_codes()  # once: it reads the settings
+        return [self._po(i, charges) for i in self._with_cost_lines(items)]
 
     def purchase_order(self, order_number):
         items = self.client.get_all("PurchaseOrders", {"orderNumber": order_number})
@@ -242,8 +243,8 @@ class Reports:
                        if o["received_date"] and start <= o["received_date"] <= end),
                       key=lambda o: (o["received_date"], o["number"]))
 
-    def _po(self, i):
-        charges = self.charge_codes()
+    def _po(self, i, charges=None):
+        charges = self.charge_codes() if charges is None else charges
         goods, lines, cost_lines = 0.0, [], []
         for l in i.get("PurchaseOrderLines", []):
             prod = l.get("Product") or {}
@@ -1324,7 +1325,14 @@ class Reports:
                 c["by_store"] = self.cogs_by_store(c)
             return c
 
-        return self._map(month_row, [add_months(first, i) for i in range(months)])
+        memo = getattr(self.client, "memo", None)
+        if memo is not None:  # kept until the copy changes (a sync, or a write from Core), per settings
+            settings = self.cogs_settings()
+            key = ("cogs_history", self.today, warehouses and tuple(warehouses), by_store,
+                   repr(sorted((k, repr(v)) for k, v in settings.items())))
+            row = month_row
+            month_row = lambda m: memo(key + (m,), lambda: row(m))  # noqa: E731
+        return [dict(c) for c in self._map(month_row, [add_months(first, i) for i in range(months)])]
 
 
 def with_po_costs(client, items, map_fn=lambda f, xs: [f(x) for x in xs], previous=None):

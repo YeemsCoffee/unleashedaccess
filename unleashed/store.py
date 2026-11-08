@@ -415,6 +415,10 @@ class LocalStoreClient:
             self._cache = {}
             self._checked_at = 0.0
 
+    def memo(self, key, fn):
+        """`fn()`, kept until the copy changes (a sync finishes, or clear_cache after a write)."""
+        return self._memo(("report",) + tuple(key), fn)
+
     def current_stock_at(self):
         """When the stored current stock on hand was read from Unleashed (None: not known)."""
         return self._memo(("current_stock_at",), lambda: self.store.snapshot_taken_at(CURRENT))

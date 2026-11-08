@@ -55,31 +55,49 @@ def _stock_products():
     return sorted(out, key=lambda p: p["code"].lower())
 
 
-def _stock_in(warehouse):
+def _stock_in(warehouse, fresh=True):
     """{product code: {"qty", "value", "avg"}} in `warehouse` now, read from Unleashed itself
     (not the copy, which can be a sync behind): an adjustment sets the quantity there should be,
-    so it has to start from what's there."""
-    from unleashed.reports import Reports
+    so it has to start from what's there. `fresh=False` (what a form shows) takes an answer
+    Unleashed gave in the last couple of minutes."""
     client = _ext()["client"]
     if client is None:  # an instance without the API key reads the copy
         rows = reports().stock_on_hand(warehouse=warehouse)["rows"]
     else:
-        client.clear_cache()
-        rows = Reports(client, today_fn=_ext()["today_fn"]).stock_on_hand(warehouse=warehouse)["rows"]
+        if fresh:
+            client.clear_cache()
+        rows = _live_stock(client, _ext()["today_fn"], warehouse)
+    return _by_product(rows)
+
+
+def _live_stock(client, today_fn, warehouse):
+    from unleashed.reports import Reports
+    return Reports(client, today_fn=today_fn).stock_on_hand(warehouse=warehouse)["rows"]
+
+
+def _by_product(rows):
     return {r["product_code"]: {"qty": r["qty"], "value": r["value"],
                                 "avg": (r["value"] / r["qty"]) if r["qty"] else (r["avg_cost"] or 0)} for r in rows}
 
 
 def _stock_levels(warehouses):
-    """{warehouse: {product code: [qty, value]}} for the forms to show what's there."""
-    levels = {}
-    for w in warehouses:
-        code = w.get("WarehouseCode")
+    """{warehouse: {product code: [qty, value]}} for the forms to show what's there: every
+    warehouse asked of Unleashed at once (each answer takes it a moment)."""
+    from concurrent.futures import ThreadPoolExecutor
+    codes = [w.get("WarehouseCode") for w in warehouses]
+    client, today_fn = _ext()["client"], _ext()["today_fn"]
+
+    def one(code):
         try:
-            levels[code] = {k: [round(v["qty"], 4), round(v["value"], 4)] for k, v in _stock_in(code).items()}
+            found = _by_product(_live_stock(client, today_fn, code)) if client is not None else _stock_in(code, fresh=False)
         except UnleashedError:
-            levels[code] = {}
-    return levels
+            return code, {}
+        return code, {k: [round(v["qty"], 4), round(v["value"], 4)] for k, v in found.items()}
+
+    if client is None or len(codes) < 2:
+        return dict(one(c) for c in codes)
+    with ThreadPoolExecutor(max_workers=min(len(codes), 6)) as pool:
+        return dict(pool.map(one, codes))
 
 
 def _batches(code, warehouse):
