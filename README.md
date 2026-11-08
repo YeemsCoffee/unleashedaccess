@@ -525,7 +525,7 @@ and the API key and database password stay on the server.
 1. Create the PostgreSQL database and copy its connection string.
 2. Deploy this repository as a web service. Elastic Beanstalk, Render, Railway,
    Heroku and similar read the `Procfile` (`gunicorn run:app`, configured by
-   `gunicorn.conf.py`); container services use the `Dockerfile`.
+   `gunicorn.conf.py`).
 3. Set these environment variables on the service:
 
    | Variable | Value |
@@ -646,19 +646,14 @@ Don't share the dashboard over plain HTTP: passwords would travel unencrypted.
 ### 4. Open it
 
 Go to the address, sign in, and wait a minute or two for the first copy. Deploy
-updates with a new zip, or with the EB CLI (`eb init`, `eb create`, `eb deploy`).
+updates with a new zip.
 
 ### Other AWS options
 
-- **ECS on Fargate:** build the `Dockerfile` (it listens on port 8000), push
-  it to ECR, and run **one task** as a service behind a load balancer with health
-  check path `/healthz`. ECS can inject the RDS secret from Secrets Manager as
-  `DB_SECRET` (plus `DB_HOST` if the secret holds only the login).
 - **App Runner:** works for serving pages, but App Runner limits CPU for idle
   instances, which can stall the background sync. If you use it, also run
-  `python sync_once.py` on a schedule (e.g. an ECS scheduled task every 15 minutes).
-- **EC2 or Lightsail:** run `gunicorn run:app` (or the Docker image) behind a
-  reverse proxy with HTTPS.
+  `python sync_once.py` on a schedule (e.g. every 15 minutes).
+- **EC2 or Lightsail:** run `gunicorn run:app` behind a reverse proxy with HTTPS.
 
 Rough monthly cost for the recommended setup (`db.t4g.micro`, one small
 instance, a load balancer) is in the tens of dollars; check the AWS Pricing
@@ -716,7 +711,6 @@ unleashedaccess/
 ├── mock_unleashed.py   # run the mock Unleashed API standalone
 ├── Procfile            # start command for hosting services: gunicorn run:app
 ├── gunicorn.conf.py    # port (PORT, default 8000), workers, threads
-├── Dockerfile          # container image for ECS/Fargate, App Runner, EB Docker
 ├── .ebextensions/      # Elastic Beanstalk settings (/healthz health check, TIMEZONE)
 ├── .platform/          # Elastic Beanstalk nginx: uploads up to 20 MB (maintenance files)
 ├── schema.sql          # data copy, sync history and lock, API log, accounts, profiles, production, maintenance and stock count tables
@@ -738,7 +732,7 @@ unleashedaccess/
 │   └── charts.py       # server-side SVG charts
 ├── templates/dash/     # page templates
 ├── templates/maint/    # Maintenance page templates
-├── templates/brand/    # Yeems logo, submark and icons (SVG, from the brand manual)
+├── templates/brand/    # Yeems logo and home icon (SVG, from the brand manual)
 ├── static/             # dash.css (the Yeems look), dash.js, favicon.svg, fonts/ (Inter, Montserrat Alternates; SIL OFL)
 └── tests/test_unleashed.py
 ```
