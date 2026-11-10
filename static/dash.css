@@ -589,3 +589,14 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .gap-working summary { cursor: pointer; font-size: 13px; }
 .working-table { width: auto; min-width: min(520px, 100%); margin: 6px 0; font-size: 13px; }
 .working-table td, .working-table th { padding: 4px 8px; }
+
+/* Tasks: a list of equipment to tick, and the bulk bar on the Tasks list */
+.equip-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 14px; max-height: 220px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 6px 0; }
+.equip-checks label { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+.equip-checks label.taken { color: var(--text-secondary); }
+.equip-checks label[hidden] { display: none; }
+.check-col { width: 28px; }
+.bulk-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 0; }
+.state-banner { border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; background: var(--warn-bg); color: var(--warn-ink); }
+.state-banner.obsolete { background: var(--bad-bg); color: var(--bad-ink); }

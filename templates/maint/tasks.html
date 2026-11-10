@@ -7,6 +7,10 @@
   <form method="get" class="filters">
     {% if location %}<input type="hidden" name="location" value="{{ location.id }}">{% endif %}
     <label>Find <input name="q" value="{{ q }}" placeholder="Task, code, equipment, part"></label>
+    <label>State <select name="state">
+      <option value="active" {{ 'selected' if state == 'active' }}>Active</option>
+      {% for key, label in states.items() if key != 'active' %}<option value="{{ key }}" {{ 'selected' if state == key }}>{{ label }}</option>{% endfor %}
+      <option value="all" {{ 'selected' if state == 'all' }}>All</option></select></label>
     <label>Show <select name="status"><option value="">Every task</option>
       {% for key, label in statuses.items() %}<option value="{{ key }}" {{ 'selected' if key == status }}>{{ label }}</option>{% endfor %}</select></label>
     {% if people %}<label>Assigned to <select name="person"><option value="">Anyone</option>
@@ -39,8 +43,17 @@
 
 <section class="card">
   {% if location and location.description %}<p class="instructions">{{ location.description }}</p>{% endif %}
-  {{ task_table(tasks, show_location=true, empty="No tasks match. Add one with New task.") }}
-  <p class="muted small">{{ tasks|length }} task{{ 's' if tasks|length != 1 }}{{ ' here and in the locations under it' if location }}.</p>
+  {{ task_table(tasks, show_location=true, empty="No tasks match. Add one with New task.", select=true) }}
+  <form method="post" action="{{ url_for('maint.tasks_state') }}" id="bulk-tasks" class="bulk-bar">
+    <input type="hidden" name="back" value="{{ request.full_path|trim('?') }}">
+    <span class="muted small">Tick tasks, then:</span>
+    <input class="text-input" name="note" maxlength="300" placeholder="Note (optional)" aria-label="Note">
+    <button class="btn" name="state" value="active">Make active</button>
+    <button class="btn" name="state" value="inactive">Make inactive</button>
+    <button class="btn btn-quiet" name="state" value="obsolete">Make obsolete</button>
+  </form>
+  <p class="muted small">{{ tasks|length }} {{ state if state != 'all' else '' }} task{{ 's' if tasks|length != 1 }}{{ ' here and in the locations under it' if location }}.
+    {% if paused and state == 'active' %}<a href="{{ url_for('maint.tasks', state='inactive', location=location.id if location else None) }}">{{ paused }} inactive or obsolete task{{ 's' if paused != 1 }} →</a>{% endif %}</p>
 </section>
 </div>
 {% endblock %}

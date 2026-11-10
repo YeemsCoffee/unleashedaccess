@@ -1,0 +1,25 @@
+{% extends "dash/base.html" %}
+{% block title %}Copy {{ task.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Copy {{ task.name }} to other equipment</h1>
+  <a href="{{ url_for('maint.task', task_id=task.id) }}">← Back to the task</a>
+</div>
+<form method="post" class="card maint-form">
+  <p class="muted">The same task on each piece of equipment you tick: the same schedule, steps, SIMPTWW (with its pictures), part and
+    files. Each copy has its own due date and its own history{% if task.counter_id %}, and its own counter: {{ task.usage.counter if task.usage else 'the task\'s counter' }}
+    is matched by name on each{% endif %}. Change one afterwards without touching the others.</p>
+  <div class="filters new-order">
+    <label>First due {% if task.frequency_days %}<input type="date" name="next_due" value="{{ due.isoformat() }}" required>{% else %}<input type="date" name="next_due" value="{{ due.isoformat() }}">{% endif %}</label>
+  </div>
+  {% if equipment|length > 8 %}<input type="search" class="text-input" data-filter-list="equip-checks" placeholder="Find equipment" aria-label="Find equipment">{% endif %}
+  <div class="equip-checks" id="equip-checks">{% for e in equipment %}
+    <label class="{{ 'taken' if e.id in have }}"><input type="checkbox" name="equipment" value="{{ e.id }}" {{ 'checked' if e.id|string in ticked }}>
+      {{ e.name }}{{ ' · ' ~ e.location if e.location else ' (' ~ e.status_label|lower ~ ')' }}{% if e.id in have %} <span class="muted small">already has a task by this name</span>{% endif %}</label>{% else %}
+    <span class="muted small">There's no other equipment to copy it to.</span>{% endfor %}</div>
+  <div class="run-actions">
+    <button class="btn btn-primary">Copy</button>
+    <a class="btn" href="{{ url_for('maint.task', task_id=task.id) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

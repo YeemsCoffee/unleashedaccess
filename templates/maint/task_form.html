@@ -89,17 +89,29 @@
   <fieldset class="simptww-part">
     {{ part_head('where') }}
     <div class="filters new-order">
+      {% if task %}
       <label>Equipment
         <select name="equipment_id">
           <option value="">None: a location</option>
           {{ equipment_options(equipment, form.equipment_id or '') }}
         </select></label>
+      {% endif %}
       <label>Location
         <select name="location_id">
           <option value="">None</option>
           {{ location_options(locations, form.location_id or '') }}
         </select></label>
     </div>
+    {% if not task %}
+    <div class="block"><span>Equipment <span class="muted small">(tick every one this task is for; leave empty for a task at a location)</span></span>
+      {% if equipment|length > 8 %}<input type="search" class="text-input" data-filter-list="equip-checks" placeholder="Find equipment" aria-label="Find equipment">{% endif %}
+      <div class="equip-checks" id="equip-checks">{% for e in equipment %}
+        <label><input type="checkbox" name="equipment_id" value="{{ e.id }}" {{ 'checked' if e.id|string in ticked }}>
+          {{ e.name }}{{ ' · ' ~ e.location if e.location else ' (' ~ e.status_label|lower ~ ')' }}</label>{% else %}
+        <span class="muted small">No equipment yet.</span>{% endfor %}</div>
+      <p class="muted small">Tick several to make the same task on each: every one gets its own due date and history, and its own
+        counter, matched by name when the task is by usage. Pictures are copied to each.</p></div>
+    {% endif %}
     <p class="muted small">A task on equipment is wherever the equipment is installed, and moves with it.</p>
     <label class="block">Getting to it <input class="text-input wide" name="where_notes" value="{{ form.where_notes or '' }}" maxlength="1000" placeholder="Optional, e.g. Behind the bar, pull the machine forward; the shutoff valve is under the sink"></label>
     {{ pictures('where', 'where it is, access points') }}

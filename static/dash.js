@@ -738,3 +738,24 @@ function fromTemplate(id, values) {
     if (row.querySelector(".line-product").value) sync(row, row.querySelector("[name=new_qty]") && row.querySelector("[name=new_qty]").value ? "new_qty" : "change");
   });
 })();
+
+/* A long list of equipment (or anything else ticked from a list) narrowed by typing. */
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-filter-list]").forEach(function (input) {
+    var list = document.getElementById(input.dataset.filterList);
+    if (!list) return;
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      list.querySelectorAll("label").forEach(function (label) {
+        label.hidden = !!q && label.textContent.toLowerCase().indexOf(q) < 0;
+      });
+    });
+  });
+  // "Tick every task" on the Tasks list.
+  document.querySelectorAll("[data-select-all]").forEach(function (all) {
+    all.addEventListener("change", function () {
+      document.querySelectorAll('input[name="task"]').forEach(function (box) { box.checked = all.checked; });
+    });
+  });
+})();

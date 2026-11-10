@@ -26,6 +26,7 @@ import math
 
 from maintenance_assets import Assets
 from maintenance_common import (CRITICALITIES, form_steps, DUE_SOON_DAYS, MaintenanceError, SIMPTWW, SIMPTWW_KEYS,
+                                TASK_STATES,
                                 checked_file, code, date, fmt_number, long_text, number, text, whole)
 from maintenance_work import Work
 from unleashed.store import utc_now
@@ -40,7 +41,8 @@ NEW_COLUMNS = {
                     "usage_interval": "REAL", "last_reading": "REAL", "steps": "TEXT",
                     # SIMPTWW: what the task's other fields don't already cover
                     "safety": "TEXT", "materials": "TEXT", "people_needed": "INTEGER", "skills": "TEXT",
-                    "tools": "TEXT", "where_notes": "TEXT", "when_notes": "TEXT"},
+                    "tools": "TEXT", "where_notes": "TEXT", "when_notes": "TEXT",
+                    "state": "TEXT", "state_note": "TEXT", "state_by": "TEXT", "state_at": "TEXT"},
     "maint_completions": {"parts_cost": "REAL", "reading": "REAL", "checklist": "TEXT"},
     "maint_attachments": {"section": "TEXT"},  # a SIMPTWW key, for a picture filed under it
 }
@@ -265,7 +267,8 @@ class Maintenance(Assets, Work):
                 new_ids[loc["id"]] = self.save_location(None, child)
             copied = 0
             if with_tasks:
-                for t in self.db.query("SELECT * FROM maint_tasks WHERE equipment_id IS NULL"):
+                for t in self.db.query("SELECT * FROM maint_tasks WHERE equipment_id IS NULL"
+                                       " AND COALESCE(state, 'active') = 'active'"):
                     if t["location_id"] in new_ids:
                         plan = ("people_needed",) + tuple(c for c, _ in SIMPTWW_TEXT)
                         self.db.execute(
@@ -309,10 +312,12 @@ class Maintenance(Assets, Work):
                  " (SELECT COUNT(*) FROM maint_attachments a WHERE a.task_id = t.id) AS files"
                  " FROM maint_tasks t LEFT JOIN app_users u ON u.id = t.assigned_to")
 
-    def tasks(self, today, location_id=None, equipment_id=None, include_templates=False):
+    def tasks(self, today, location_id=None, equipment_id=None, include_templates=False, state="active"):
         """Tasks, soonest due first, with status, location, equipment, assignee and how often
         they've been done: all of them, or those at `location_id` and below, or on
-        `equipment_id`. Tasks in templates only show when asked for, or when looking inside one."""
+        `equipment_id`. Tasks in templates only show when asked for, or when looking inside one.
+        `state`: "active" (the default: the ones that come due), "inactive", "obsolete", several
+        joined by commas, or "all"."""
         ctx = self._task_context(today)
         rows = self.db.query(self._TASK_SQL)
         if location_id is not None:
@@ -324,6 +329,9 @@ class Maintenance(Assets, Work):
         tasks = [_task(r, ctx) for r in rows]
         if not include_templates:
             tasks = [t for t in tasks if not t["in_template"]]
+        if state != "all":
+            wanted = set(state.split(","))
+            tasks = [t for t in tasks if t["state"] in wanted]
         return sorted(tasks, key=lambda t: (t["next_due"] or dt.date.max, t["name"].lower()))
 
     def task(self, task_id, today):
@@ -405,6 +413,139 @@ class Maintenance(Assets, Work):
             values + (last_reading, task_id))
         return task_id
 
+    def save_new_tasks(self, form, assignable, by, today=None):
+        """Create the task from the form: one task, or when several equipment are ticked
+        (`equipment_id` more than once) the same task on each, every one with its own due date
+        and history. A counter picked for them is matched by name on each. Returns their ids;
+        if any can't be made, none are."""
+        wanted = []
+        for value in form.getlist("equipment_id") if hasattr(form, "getlist") else [form.get("equipment_id")]:
+            found = whole(value, "Equipment")
+            if found is not None and found not in wanted:
+                wanted.append(found)
+        if len(wanted) <= 1:
+            return [self.save_task(None, form, assignable, by, today)]
+        counter_name = None
+        counter_id = whole(form.get("counter_id"), "Counter")
+        if counter_id is not None:
+            rows = self.db.query("SELECT name FROM maint_counters WHERE id = ?", (counter_id,))
+            if not rows:
+                raise MaintenanceError("That counter doesn't exist any more.")
+            counter_name = rows[0]["name"]
+        plan = []
+        for equipment_id in wanted:
+            item = self.db.query("SELECT name, status FROM maint_equipment WHERE id = ?", (equipment_id,))
+            if not item:
+                raise MaintenanceError("One of the equipment doesn't exist any more.")
+            if item[0]["status"] == "retired":
+                raise MaintenanceError(f"{item[0]['name']} is retired.")
+            matched = None
+            if counter_name is not None:
+                found = self.db.query("SELECT id FROM maint_counters WHERE equipment_id = ? AND lower(name) = lower(?)",
+                                      (equipment_id, counter_name))
+                if not found:
+                    raise MaintenanceError(f"{item[0]['name']} has no counter called “{counter_name}”: add it on its page, "
+                                           "or leave it out.")
+                matched = found[0]["id"]
+            plan.append((equipment_id, matched))
+        made = []
+        try:
+            for equipment_id, matched in plan:
+                each = dict(form.items()) if hasattr(form, "items") else dict(form)
+                each["equipment_id"] = str(equipment_id)
+                each["counter_id"] = str(matched) if matched else ""
+                made.append(self.save_task(None, each, assignable, by, today))
+        except MaintenanceError:
+            for task_id in made:  # all or none
+                self.delete_task(task_id)
+            raise
+        return made
+
+    def copy_task(self, task_id, equipment_ids, next_due, by):
+        """The same task on other equipment: each copy has the task's schedule, steps, job plan,
+        part, pictures and files, and its own due date (`next_due`, or the task's), history and
+        counter (matched by name). Returns the new ids; if any can't be made, none are."""
+        rows = self.db.query("SELECT * FROM maint_tasks WHERE id = ?", (task_id,))
+        if not rows:
+            raise MaintenanceError("That task doesn't exist any more.")
+        src = rows[0]
+        if not equipment_ids:
+            raise MaintenanceError("Tick the equipment to copy it to.")
+        counter_name = None
+        if src["counter_id"]:
+            named = self.db.query("SELECT name FROM maint_counters WHERE id = ?", (src["counter_id"],))
+            counter_name = named[0]["name"] if named else None
+        plan = []
+        for equipment_id in dict.fromkeys(equipment_ids):
+            item = self.db.query("SELECT name, status, location_id FROM maint_equipment WHERE id = ?", (equipment_id,))
+            if not item:
+                raise MaintenanceError("One of the equipment doesn't exist any more.")
+            if item[0]["status"] == "retired":
+                raise MaintenanceError(f"{item[0]['name']} is retired.")
+            if equipment_id == src["equipment_id"]:
+                raise MaintenanceError("It's already on that equipment.")
+            matched, reading = None, None
+            if counter_name is not None:
+                found = self.db.query("SELECT id FROM maint_counters WHERE equipment_id = ? AND lower(name) = lower(?)",
+                                      (equipment_id, counter_name))
+                if not found:
+                    raise MaintenanceError(f"{item[0]['name']} has no counter called “{counter_name}”: add it on its "
+                                           "page, or leave it out.")
+                matched = found[0]["id"]
+                reading = self.counter_states().get(matched, {}).get("value", 0)
+            plan.append((equipment_id, item[0]["location_id"], matched, reading))
+        same = ("name", "frequency_days", "assigned_to", "part_name", "vendor", "vendor_part_number", "lead_time_days",
+                "instructions", "steps", "usage_interval", "people_needed", "safety", "materials", "skills", "tools",
+                "where_notes", "when_notes")
+        made = []
+        with self.db.connect() as conn:
+            for equipment_id, location_id, counter_id, reading in plan:
+                new_id = conn.query(
+                    f"INSERT INTO maint_tasks ({', '.join(same)}, equipment_id, location_id, counter_id, last_reading,"
+                    " next_due, in_progress, created_by, created_at)"
+                    f" VALUES ({', '.join('?' * len(same))}, ?, ?, ?, ?, ?, 0, ?, ?) RETURNING id",
+                    tuple(src[c] for c in same) + (equipment_id, location_id, counter_id, reading,
+                                                   next_due.isoformat() if next_due else src["next_due"], by,
+                                                   utc_now()))[0]["id"]
+                conn.execute(
+                    "INSERT INTO maint_attachments (task_id, filename, content_type, size, data, uploaded_by, uploaded_at,"
+                    " section) SELECT ?, filename, content_type, size, data, uploaded_by, uploaded_at, section"
+                    " FROM maint_attachments WHERE task_id = ?", (new_id, task_id))
+                made.append(new_id)
+        return made
+
+    def set_task_state(self, task_ids, state, note, by, today):
+        """Make tasks active, inactive or obsolete. Inactive and obsolete tasks never come due and
+        can't be recorded; either can be made active again, which restarts them from today: a
+        time-based task whose date passed while it was off goes to the next date on its schedule,
+        and a usage-based one counts from the counter's reading now. Returns [{"name",
+        "state", "next_due" (when made active)}] for the ones that changed."""
+        if state not in TASK_STATES:
+            raise MaintenanceError("Choose active, inactive or obsolete.")
+        note = " ".join((note or "").split())[:300] or None
+        changed = []
+        for task_id in dict.fromkeys(task_ids):
+            task = self.task(task_id, today)
+            if task is None or task["state"] == state:
+                continue
+            fields = {"state": None if state == "active" else state, "state_note": note, "state_by": by,
+                      "state_at": utc_now()}
+            result = {"name": task["name"], "state": state, "next_due": None}
+            if state != "active":
+                fields["in_progress"] = 0
+            else:
+                stored = dt.date.fromisoformat(task["stored_due"])
+                if task["frequency_days"] and stored < today:
+                    fields["next_due"] = next_due_after(stored, task["frequency_days"], today).isoformat()
+                if task["usage"] and task["usage"]["reached"]:
+                    fields["last_reading"] = task["usage"]["current"]
+            self.db.execute(f"UPDATE maint_tasks SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?",
+                            tuple(fields.values()) + (task_id,))
+            if state == "active":
+                result["next_due"] = self.task(task_id, today)["next_due"]
+            changed.append(result)
+        return changed
+
     def reschedule(self, task_id, from_date, to_date):
         """Move the task's next due date from `from_date` to `to_date` (as on the calendar).
         Refused if it's no longer due on `from_date`: someone else moved or recorded it."""
@@ -430,6 +571,8 @@ class Maintenance(Assets, Work):
             raise MaintenanceError("That task doesn't exist any more.")
         if task["in_template"]:
             raise MaintenanceError("This task is in a template: copy the template to use it.")
+        if task["state"] != "active":
+            raise MaintenanceError(f"This task is {task['state']}: make it active to record work.")
         status = form.get("status") or "completed"
         if status not in COMPLETION_STATUSES:
             raise MaintenanceError("Mark it completed or skipped.")
@@ -722,6 +865,14 @@ def _task(row, ctx):
     task["order_by"] = (due - dt.timedelta(days=row["lead_time_days"])
                         if due and row["part_name"] and row["lead_time_days"] else None)
     task["order_now"] = task["order_by"] is not None and task["order_by"] <= today + dt.timedelta(days=DUE_SOON_DAYS)
+    # Inactive and obsolete tasks never come due: nothing overdue, soon, planned or to order. What
+    # their schedule held stays (stored_due, time_due, usage) for when one is made active again.
+    task["state"] = row.get("state") or "active"
+    task["state_label"] = TASK_STATES.get(task["state"], task["state"])
+    if task["state"] != "active":
+        task.update(status=task["state"], next_due=None, due_soon=False, movable=False, order_by=None,
+                    order_now=False, due_label="Never comes due" if task["state"] == "inactive" else "Retired",
+                    in_progress=0)
     return task
 
 

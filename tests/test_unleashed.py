@@ -2120,7 +2120,7 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertEqual([m["action"] for m in self.store.equipment(grinder)["moves"]], ["installed", "dismantled", "installed"])
         self.assertIn("Swapped with grinder 2", self.c.get(f"/maintenance/equipment/{grinder}").get_data(as_text=True))
         refused = self.c.post(f"/maintenance/equipment/{grinder}/move", data={"action": "retire"}, follow_redirects=True)
-        self.assertIn("has 1 task", refused.get_data(as_text=True))
+        self.assertIn("has 1 active task", refused.get_data(as_text=True))
         self._post(f"/maintenance/equipment/{grinder}/move", action="storage")
         self.assertEqual(self.store.equipment(grinder)["status"], "storage")
         self.assertIsNone(self.store.tasks(TODAY, equipment_id=grinder)[0]["location"])
@@ -2304,6 +2304,191 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertEqual((t["pictures"]["safety"], t["safety"]), ([], None))  # cleared fields stay cleared
         csv = self.c.get("/maintenance/tasks?format=csv").get_data(as_text=True)
         self.assertIn("SIMPTWW filled in", csv.splitlines()[0])
+
+    def _equipment(self, name, location, counter=None):
+        item = self._new_id(self._post("/maintenance/equipment/new", name=name, location_id=str(location)))
+        if counter:
+            self.c.post(f"/maintenance/equipment/{item}/counters", data={"name": counter, "unit": "shots"})
+        return item
+
+    def test_tasks_are_made_active_inactive_or_obsolete(self):
+        gar, kit, esp = self._store_tree()
+        late = self._new_id(self._post("/maintenance/tasks/new", name="Descale", frequency_days="30",
+                                       next_due=(TODAY - dt.timedelta(days=5)).isoformat(), location_id=str(kit),
+                                       part_name="Descaler", lead_time_days="14"))
+        other = self._new_id(self._post("/maintenance/tasks/new", name="Mop", frequency_days="1",
+                                        next_due=TODAY.isoformat(), location_id=str(kit)))
+        self.assertEqual(self.store.task(late, TODAY)["status"], "overdue")
+        overview = lambda: self.c.get("/maintenance/").get_data(as_text=True)
+        self.assertIn("Descale", overview())
+
+        res = self.c.post(f"/maintenance/tasks/{late}/state", data={"state": "inactive", "note": "Machine out of service"},
+                          follow_redirects=True)
+        page = res.get_data(as_text=True)
+        self.assertIn("is inactive: never coming due", page)
+        for text in ("Machine out of service", "never comes due and can't be recorded", "Make active", "Inactive"):
+            self.assertIn(text, page)
+        self.assertNotIn('id="record"', page)  # nothing to record on a paused task
+        t = self.store.task(late, TODAY)
+        self.assertEqual((t["state"], t["status"], t["next_due"], t["due_soon"], t["order_now"]), ("inactive", "inactive", None, False, False))
+        self.assertEqual(t["stored_due"], (TODAY - dt.timedelta(days=5)).isoformat())  # its schedule is kept
+        # It's gone from everything that's about what's coming up, and from the default list, but can be found.
+        self.assertNotIn("Descale", overview())
+        self.assertNotIn("Descale", self.c.get("/maintenance/tasks").get_data(as_text=True))
+        self.assertIn("1 inactive or obsolete task", self.c.get("/maintenance/tasks").get_data(as_text=True))
+        self.assertIn("Descale", self.c.get("/maintenance/tasks?state=inactive").get_data(as_text=True))
+        self.assertIn("Descale", self.c.get("/maintenance/tasks?state=all").get_data(as_text=True))
+        self.assertEqual([x["name"] for x in self.store.tasks(TODAY)], ["Mop"])
+        self.assertEqual(self.store.workload([], TODAY)[0]["tasks"], 1)
+        calendar = self.store.calendar(TODAY.replace(day=1), TODAY, lambda d: d, "1900-01-01 00:00:00", "2100-01-01 00:00:00")
+        self.assertTrue(all("task" not in e or e["task"]["name"] != "Descale" for es in calendar.values() for e in es))
+        refused = self.c.post(f"/maintenance/tasks/{late}/complete", data={"status": "completed"}, follow_redirects=True)
+        self.assertIn("is inactive: make it active to record work", refused.get_data(as_text=True))
+        self.assertEqual(self.store.task(late, TODAY)["times_done"], 0)
+        self.assertIn("Inactive", self.c.get("/maintenance/tasks?state=inactive&format=csv").get_data(as_text=True))
+
+        # Made active again, it doesn't come back overdue: it's on its schedule from today.
+        res = self.c.post(f"/maintenance/tasks/{late}/state", data={"state": "active"}, follow_redirects=True)
+        self.assertIn("is active again. It&#39;s next due", res.get_data(as_text=True))
+        t = self.store.task(late, TODAY)
+        self.assertEqual((t["state"], t["status"]), ("active", "pending"))
+        self.assertGreater(t["next_due"], TODAY)
+        self.assertEqual((t["next_due"] - (TODAY - dt.timedelta(days=5))).days % 30, 0)  # still on its 30-day rhythm
+        self.assertIn("Descale", self.c.get("/maintenance/tasks").get_data(as_text=True))
+
+        # Obsolete: retired, with its history; restorable.
+        self._post(f"/maintenance/tasks/{other}/complete", status="completed")
+        self.c.post(f"/maintenance/tasks/{other}/state", data={"state": "obsolete", "note": "Replaced by the new floor"})
+        t = self.store.task(other, TODAY)
+        self.assertEqual((t["state"], t["status"], t["times_done"]), ("obsolete", "obsolete", 1))
+        page = self.c.get(f"/maintenance/tasks/{other}").get_data(as_text=True)
+        for text in ("Obsolete", "Replaced by the new floor", "retired: kept for its history", "Not yet" if False else "✓ Completed"):
+            self.assertIn(text, page)
+        self.assertNotIn("Mop", self.c.get("/maintenance/").get_data(as_text=True))
+        self.assertEqual(len(self.store.completions(task_id=other)), 1)  # what was done stays in the history
+        self.assertIn("Mop", self.c.get("/maintenance/history?start=2026-01-01&end=2026-12-31").get_data(as_text=True))
+        again = self.c.post(f"/maintenance/tasks/{other}/state", data={"state": "obsolete"}, follow_redirects=True)
+        self.assertIn("already obsolete", again.get_data(as_text=True))
+        self.assertIn("Choose active, inactive or obsolete", self.c.post(
+            f"/maintenance/tasks/{other}/state", data={"state": "gone"}, follow_redirects=True).get_data(as_text=True))
+        self.c.post(f"/maintenance/tasks/{other}/state", data={"state": "active"})
+        self.assertEqual(self.store.task(other, TODAY)["state"], "active")
+
+        # Several at once, from the list.
+        res = self.c.post("/maintenance/tasks/state", data={"task": [str(late), str(other)], "state": "inactive",
+                                                            "back": "/maintenance/tasks?q=mop"}, follow_redirects=False)
+        self.assertEqual(res.headers["Location"], "/maintenance/tasks?q=mop")
+        self.assertEqual([self.store.task(i, TODAY)["state"] for i in (late, other)], ["inactive", "inactive"])
+        self.assertIn("Tick the tasks", self.c.post("/maintenance/tasks/state", data={"state": "active"},
+                                                    follow_redirects=True).get_data(as_text=True))
+        # Paused tasks aren't copied with a template, and don't hold up retiring equipment.
+        tpl = self._location("Store template", code="TPL", is_template="1")
+        on = self._new_id(self._post("/maintenance/tasks/new", name="Sweep", frequency_days="1", next_due=TODAY.isoformat(),
+                                     location_id=str(tpl)))
+        off = self._new_id(self._post("/maintenance/tasks/new", name="Polish", frequency_days="1", next_due=TODAY.isoformat(),
+                                      location_id=str(tpl)))
+        self.c.post(f"/maintenance/tasks/{off}/state", data={"state": "inactive"})
+        self._post(f"/maintenance/locations/{tpl}/copy", name="New store", code="NEW", with_tasks="1",
+                   first_due=TODAY.isoformat())
+        self.assertEqual([t["name"] for t in self.store.tasks(TODAY, include_templates=False) if t["location"] and t["location"].startswith("New store")],
+                         ["Sweep"])
+        grinder = self._equipment("Grinder", esp)
+        job = self._new_id(self._post("/maintenance/tasks/new", name="Clean burrs", frequency_days="7", next_due=TODAY.isoformat(),
+                                      equipment_id=str(grinder)))
+        self.assertIn("has 1 active task", self.c.post(f"/maintenance/equipment/{grinder}/move", data={"action": "retire"},
+                                                        follow_redirects=True).get_data(as_text=True))
+        self.c.post(f"/maintenance/tasks/{job}/state", data={"state": "obsolete"})
+        self._post(f"/maintenance/equipment/{grinder}/move", action="retire")
+        self.assertEqual(self.store.equipment(grinder)["status"], "retired")
+        self.assertIn("Clean burrs", self.c.get(f"/maintenance/equipment/{grinder}").get_data(as_text=True))  # kept with it
+
+    def test_the_same_task_is_made_on_several_equipment_at_once(self):
+        import io
+        gar, kit, esp = self._store_tree()
+        a = self._equipment("Grinder 1", esp, counter="Shots")
+        b = self._equipment("Grinder 2", kit, counter="shots")
+        c3 = self._equipment("Grinder 3", kit)  # no counter
+        form = self.c.get("/maintenance/tasks/new").get_data(as_text=True)
+        self.assertEqual(form.count('name="equipment_id"'), 3)  # a tick for each
+        self.assertIn("Tick several to make the same task on each", form)
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 40
+        data = {"name": "Clean burrs", "frequency_days": "7", "next_due": TODAY.isoformat(), "equipment_id": [str(a), str(b)],
+                "safety": "Unplug it", "rows": "1", "op-text-0": "Remove the hopper", "pictures-safety": [(io.BytesIO(png), "plug.png")]}
+        res = self.c.post("/maintenance/tasks/new", data=data, content_type="multipart/form-data", follow_redirects=True)
+        page = res.get_data(as_text=True)
+        self.assertIn("Added Clean burrs on 2 equipment", page)
+        made = [t for t in self.store.tasks(TODAY) if t["name"] == "Clean burrs"]
+        self.assertEqual(sorted(t["equipment_name"] for t in made), ["Grinder 1", "Grinder 2"])
+        self.assertEqual({t["location"] for t in made}, {"Gardena › Kitchen › Espresso station", "Gardena › Kitchen"})  # where each is
+        for t in made:
+            full = self.store.task(t["id"], TODAY)
+            self.assertEqual((full["safety"], [s["text"] for s in full["steps"]], [f["filename"] for f in full["pictures"]["safety"]]),
+                             ("Unplug it", ["Remove the hopper"], ["plug.png"]))  # each has the plan and the picture
+        # Their own history: recording one doesn't move the other.
+        first, second = made[0]["id"], made[1]["id"]
+        self._post(f"/maintenance/tasks/{first}/complete", status="completed")
+        self.assertGreater(self.store.task(first, TODAY)["next_due"], TODAY)
+        self.assertEqual(self.store.task(second, TODAY)["next_due"], TODAY)
+
+        # By usage, the counter is matched by name on each; one without it stops them all.
+        counter = self.store.db.query("SELECT id FROM maint_counters WHERE equipment_id = ?", (a,))[0]["id"]
+        usage = {"name": "Replace gaskets", "usage_interval": "10000", "counter_id": str(counter), "equipment_id": [str(a), str(b)]}
+        self._post("/maintenance/tasks/new", **usage)
+        by_usage = {t["equipment_name"]: t for t in self.store.tasks(TODAY) if t["name"] == "Replace gaskets"}
+        counters = {r["equipment_id"]: r["id"] for r in self.store.db.query("SELECT id, equipment_id FROM maint_counters")}
+        self.assertEqual([by_usage[n]["counter_id"] for n in ("Grinder 1", "Grinder 2")], [counters[a], counters[b]])
+        before = len(self.store.tasks(TODAY))
+        bad = self.c.post("/maintenance/tasks/new", data=dict(usage, name="Other", equipment_id=[str(a), str(c3)]))
+        self.assertIn("Grinder 3 has no counter called", bad.get_data(as_text=True))
+        self.assertEqual(len(self.store.tasks(TODAY)), before)  # none made
+        self.assertIn(f'value="{a}" checked', bad.get_data(as_text=True))  # what was ticked is kept
+        retired = self._equipment("Old grinder", kit)
+        self._post(f"/maintenance/equipment/{retired}/move", action="retire")
+        self.assertIn("Old grinder is retired", self.c.post("/maintenance/tasks/new", data={
+            "name": "X", "frequency_days": "1", "next_due": TODAY.isoformat(), "equipment_id": [str(a), str(retired)]}).get_data(as_text=True))
+
+    def test_a_task_is_copied_to_other_equipment(self):
+        gar, kit, esp = self._store_tree()
+        a, b, c3 = (self._equipment(n, kit, counter="Shots") for n in ("Grinder 1", "Grinder 2", "Grinder 3"))
+        counter = self.store.db.query("SELECT id FROM maint_counters WHERE equipment_id = ?", (a,))[0]["id"]
+        src = self._new_id(self._post("/maintenance/tasks/new", name="Replace burrs", usage_interval="5000", counter_id=str(counter),
+                                      frequency_days="90", next_due="2026-08-01", equipment_id=str(a), part_name="Burr set",
+                                      vendor="Mazzer", assigned_to="", safety="Unplug first", rows="1", **{"op-text-0": "Open the case"}))
+        self.store.add_attachment(src, "manual.pdf", b"%PDF-1.4 manual", "x")
+        page = self.c.get(f"/maintenance/tasks/{src}/copy").get_data(as_text=True)
+        self.assertIn("Grinder 2", page)
+        self.assertNotIn("Grinder 1 ·", page)  # not onto itself
+        self.assertEqual(page.count('name="equipment"'), 2)
+        self.assertIn('value="2026-08-01"', page)
+        res = self.c.post(f"/maintenance/tasks/{src}/copy", data={"equipment": [str(b), str(c3)], "next_due": "2026-09-01"},
+                          follow_redirects=True)
+        self.assertIn("Copied Replace burrs to 2 equipment", res.get_data(as_text=True))
+        copies = [t for t in self.store.tasks(TODAY) if t["name"] == "Replace burrs" and t["id"] != src]
+        self.assertEqual(sorted(t["equipment_name"] for t in copies), ["Grinder 2", "Grinder 3"])
+        for t in copies:
+            full = self.store.task(t["id"], TODAY)
+            self.assertEqual((full["part_name"], full["vendor"], full["safety"], full["frequency_days"], full["usage_interval"],
+                              [s["text"] for s in full["steps"]], full["stored_due"]),
+                             ("Burr set", "Mazzer", "Unplug first", 90, 5000.0, ["Open the case"], "2026-09-01"))
+            self.assertEqual(self.store.counters_of(full["equipment_id"]) if hasattr(self.store, "counters_of") else full["counter_id"],
+                             full["counter_id"])
+            self.assertEqual(full["usage"]["counter"], "Shots")
+            self.assertEqual([x["filename"] for x in full["attachments"]], ["manual.pdf"])  # its files come too
+            self.assertNotEqual(full["counter_id"], counter)  # its own counter, not the source's
+        self.assertEqual(self.store.task(src, TODAY)["stored_due"], "2026-08-01")  # the original is unchanged
+        # Already has one by that name: marked, still allowed. A piece of equipment can't be copied onto itself.
+        again = self.c.get(f"/maintenance/tasks/{src}/copy").get_data(as_text=True)
+        self.assertIn("already has a task by this name", again)
+        self.assertIn("Tick the equipment to copy it to", self.c.post(f"/maintenance/tasks/{src}/copy", data={
+            "next_due": "2026-09-01"}, follow_redirects=True).get_data(as_text=True))
+        self.assertIn("already on that equipment", self.c.post(f"/maintenance/tasks/{src}/copy", data={
+            "equipment": [str(a)], "next_due": "2026-09-01"}, follow_redirects=True).get_data(as_text=True))
+        # A piece of equipment without the counter stops the copy, and nothing is made.
+        bare = self._equipment("Bare grinder", kit)
+        n = len(self.store.tasks(TODAY, state="all"))
+        self.assertIn("Bare grinder has no counter called", self.c.post(f"/maintenance/tasks/{src}/copy", data={
+            "equipment": [str(bare)], "next_due": "2026-09-01"}, follow_redirects=True).get_data(as_text=True))
+        self.assertEqual(len(self.store.tasks(TODAY, state="all")), n)
 
     def test_work_order_form_picks_location_then_equipment_and_takes_pictures(self):
         import io

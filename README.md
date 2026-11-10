@@ -230,6 +230,19 @@ The maintenance scheduler, brought into Core and kept in its database (the
   and have a part with its vendor, part number and lead time: the part shows under
   **Parts to order** from the date it should be ordered (due date less the lead
   time), a week ahead.
+- **Active, inactive or obsolete**: a task can be made **inactive** (paused: it never
+  comes due or shows as overdue, and can be switched back on) or **obsolete** (retired,
+  kept for its history), with a note, from its page, or for several at once with the
+  tick boxes and the bar on the Tasks list (Show → State, or the "inactive or obsolete"
+  link, finds them). Making one active again moves a time-based task whose date has
+  passed on to the next date on its schedule, and a usage-based one counts from the
+  counter's reading then, so it doesn't come back overdue. Work can only be recorded on
+  an active task. Retiring equipment needs its active tasks made obsolete (or inactive)
+  or moved first; location templates copy only active tasks.
+- **The same task on several pieces of equipment**: when adding a task, tick every
+  piece of equipment it is for and each gets its own task, due date and history (a
+  usage-based task uses each one's counter of the same name; pictures are copied).
+  On an existing task, **Copy to other equipment** does the same.
 - **Steps** are written on the task itself when adding or editing it (a burr clean:
   unplug, remove the burrs, vacuum, reassemble), each with optional minutes; rows
   are added with **+ Add a step**, and a new task can start from another task's

@@ -92,6 +92,9 @@
 <section class="card">
   <div class="card-head"><h2>Tasks</h2>{% if item.status != 'retired' %}<a href="{{ url_for('maint.task_new', equipment=item.id) }}">+ Task</a>{% endif %}</div>
   {{ task_table(tasks, show_location=false, empty="No tasks on this equipment.") }}
+  {% if paused %}<h3>Inactive and obsolete</h3>
+  <p class="muted small">Not coming due. They stay with this equipment for their history.</p>
+  {{ task_table(paused, show_location=false) }}{% endif %}
 </section>
 
 {% if requests or orders %}

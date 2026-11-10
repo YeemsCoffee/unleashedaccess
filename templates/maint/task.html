@@ -6,6 +6,12 @@
   <h1>{{ task.name }} {{ task_pill(task) }}</h1>
   <a href="{{ url_for('maint.tasks', location=task.location_id) }}">← {{ task.location or 'All tasks' }}</a>
 </div>
+{% if task.state != 'active' %}
+<div class="state-banner {{ task.state }}"><strong>{{ 'Inactive' if task.state == 'inactive' else 'Obsolete' }}.</strong>
+  {% if task.state == 'inactive' %}It never comes due and can't be recorded, until it's made active again.
+  {% else %}It's retired: kept for its history, and never comes due.{% endif %}
+  {% if task.state_at %}{{ task.state_by or 'Someone' }} on {{ task.state_at|local }}{% if task.state_note %}: “{{ task.state_note }}”{% endif %}.{% endif %}</div>
+{% endif %}
 {% if task.in_template %}<p class="recon recon-warn">! This task is in a template: it never comes due. Copy the template to use it.</p>{% endif %}
 
 <section class="card">
@@ -25,6 +31,7 @@
   {% endif %}
   <div class="run-actions">
     <a class="btn" href="{{ url_for('maint.task_edit', task_id=task.id) }}">Edit task</a>
+    <a class="btn" href="{{ url_for('maint.task_copy', task_id=task.id) }}">Copy to other equipment</a>
     {% if can_delete %}
     <form method="post" action="{{ url_for('maint.task_delete', task_id=task.id) }}"
           onsubmit='return confirm({{ ("Delete " ~ task.name ~ ", its history and its files? This can’t be undone.")|tojson }})'>
@@ -69,14 +76,30 @@
         {% endif %}
         {% if task.pictures[part.key] %}<div class="file-pictures">{% for f in task.pictures[part.key] %}
           <a href="{{ url_for('maint.attachment', attachment_id=f.id, view=1) }}" target="_blank" rel="noopener"><img src="{{ url_for('maint.attachment', attachment_id=f.id, view=1) }}" alt="{{ f.filename }}" loading="lazy"></a>{% endfor %}</div>{% endif %}
-        {% if not part.filled %}<div class="muted small">Not filled in: {{ part.hint|lower }}.</div>{% endif %}
+        {% if not part.filled %}<div class="muted small">Not filled in: {{ part.hint[0]|lower ~ part.hint[1:] }}.</div>{% endif %}
       </div>
     </div>
   {% endfor %}
   </div>
 </section>
 
-{% if not task.in_template %}
+<section class="card" id="state">
+  <h2>Active, inactive or obsolete</h2>
+  <p class="muted">An <strong>inactive</strong> task is paused: it never comes due, and leaves the overview, calendar and parts to
+    order until it's made active again. An <strong>obsolete</strong> task is retired (the equipment is gone, or the job is done
+    differently now): it's kept with its history, and can still be brought back. Either way, what's been done stays in the history.</p>
+  <form method="post" action="{{ url_for('maint.task_state', task_id=task.id) }}" class="filters">
+    <label class="grow">Note <span class="muted small">(optional)</span>
+      <input name="note" maxlength="300" placeholder="{{ 'e.g. Machine out of service until the new boiler' if task.state == 'active' else 'e.g. Back in service' }}"></label>
+    {% if task.state != 'active' %}<button class="btn btn-primary" name="state" value="active">Make active</button>{% endif %}
+    {% if task.state == 'active' %}<button class="btn" name="state" value="inactive">Make inactive</button>{% endif %}
+    {% if task.state != 'obsolete' %}<button class="btn" name="state" value="obsolete"
+      onclick='return confirm({{ ("Make " ~ task.name ~ " obsolete? It stays in the history and can be made active again.")|tojson }})'>Make obsolete</button>{% endif %}
+  </form>
+  {% if task.state != 'active' %}<p class="muted small">Made active again, a time-based task whose date has passed moves to the next date on its schedule, and a usage-based one counts from the counter's reading then, so it doesn't come back overdue.</p>{% endif %}
+</section>
+
+{% if task.state == 'active' and not task.in_template %}
 <section class="card" id="record">
   <h2>Record work</h2>
   {% if task.safety %}<div class="simptww-safety"><strong>⚠ Safety first</strong><p class="instructions">{{ task.safety }}</p></div>{% endif %}

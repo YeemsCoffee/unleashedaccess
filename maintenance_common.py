@@ -18,6 +18,9 @@ PRIORITIES = {1: "Very high", 2: "High", 3: "Medium", 4: "Low"}
 # The priority a new request starts with, from the criticality of what it's about.
 PRIORITY_FOR_CRITICALITY = {"A": 2, "B": 3, "C": 4}
 CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9._/-]*$")
+# Where a task is in its life: active tasks come due; inactive ones are paused (they never come
+# due, and can be switched back on); obsolete ones are retired, kept for their history.
+TASK_STATES = {"active": "Active", "inactive": "Inactive", "obsolete": "Obsolete"}
 # A task's job plan, SIMPTWW: what to know before starting. (key, letter, heading, what it
 # covers); pictures attached to a task can be filed under one of the keys.
 SIMPTWW = (

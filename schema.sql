@@ -206,7 +206,11 @@ CREATE TABLE IF NOT EXISTS maint_tasks (
     tasklist_id        INTEGER,
     counter_id         INTEGER,
     usage_interval     REAL,
-    last_reading       REAL
+    last_reading       REAL,
+    state              TEXT,               -- active (none) | inactive | obsolete
+    state_note         TEXT,
+    state_by           TEXT,
+    state_at           TEXT
 );
 
 -- Each time a task was done (or skipped), which moved it on to its next due date.

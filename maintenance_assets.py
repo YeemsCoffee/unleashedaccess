@@ -122,10 +122,13 @@ class Assets:
                 raise MaintenanceError(f"{item['name']} is already in storage.")
             status, where = "storage", None
         elif action == "retire":
-            tasks = self.db.query("SELECT COUNT(*) AS n FROM maint_tasks WHERE equipment_id = ?", (equipment_id,))[0]["n"]
+            # Tasks made inactive or obsolete stay with it, for their history.
+            tasks = self.db.query("SELECT COUNT(*) AS n FROM maint_tasks WHERE equipment_id = ?"
+                                  " AND COALESCE(state, 'active') = 'active'", (equipment_id,))[0]["n"]
             if tasks:
-                raise MaintenanceError(f"{item['name']} has {tasks} task{'s' if tasks != 1 else ''}. Delete them, or "
-                                       "move them to other equipment, before retiring it.")
+                raise MaintenanceError(f"{item['name']} has {tasks} active task{'s' if tasks != 1 else ''}. Make "
+                                       f"{'it' if tasks == 1 else 'them'} obsolete (or inactive), or move "
+                                       f"{'it' if tasks == 1 else 'them'} to other equipment, before retiring it.")
             status, where = "retired", None
         else:
             raise MaintenanceError("Choose where it goes.")

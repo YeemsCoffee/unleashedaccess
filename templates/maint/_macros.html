@@ -1,5 +1,7 @@
 {% macro task_pill(t) -%}
 {%- if t.status == 'overdue' %}<span class="pill pill-short">Overdue</span>
+{%- elif t.status == 'inactive' %}<span class="pill pill-parked">Inactive</span>
+{%- elif t.status == 'obsolete' %}<span class="pill pill-deleted">Obsolete</span>
 {%- elif t.status == 'in_progress' %}<span class="pill pill-receipted">In progress</span>
 {%- else %}<span class="pill">Pending</span>{% endif -%}
 {%- endmacro %}
@@ -19,11 +21,12 @@
   {%- for p in t.simptww %}<span class="{{ 'on' if p.filled }}">{{ p.letter }}</span>{% endfor %}</div>{% endif %}
 {%- endmacro %}
 
-{% macro task_table(tasks, show_location=true, empty='No tasks.') %}
+{% macro task_table(tasks, show_location=true, empty='No tasks.', select=false) %}
 <div class="table-wrap"><table class="maint-tasks maint-wrap">
-  <thead><tr><th>Task</th>{% if show_location %}<th class="wide-only">Location</th>{% endif %}<th>Next due</th><th class="wide-only">Every</th><th>Assigned to</th><th class="wide-only">Status</th></tr></thead>
+  <thead><tr>{% if select %}<th class="check-col"><input type="checkbox" data-select-all aria-label="Tick every task"></th>{% endif %}<th>Task</th>{% if show_location %}<th class="wide-only">Location</th>{% endif %}<th>Next due</th><th class="wide-only">Every</th><th>Assigned to</th><th class="wide-only">Status</th></tr></thead>
   <tbody>{% for t in tasks %}
   <tr class="{{ 'row-warn' if t.status == 'overdue' }}">
+    {% if select %}<td class="check-col"><input type="checkbox" name="task" value="{{ t.id }}" form="bulk-tasks" aria-label="Tick {{ t.name }}"></td>{% endif %}
     <td><a href="{{ url_for('maint.task', task_id=t.id) }}">{{ t.name }}</a>
       {% if t.status == 'in_progress' %}<span class="narrow-only"> {{ task_pill(t) }}</span>{% endif %}
       {% if t.equipment_name %}<div class="muted small">{{ t.equipment_name }}</div>{% endif %}
@@ -35,7 +38,7 @@
     <td>{{ t.assignee_name or '—' }}</td>
     <td class="wide-only">{{ task_pill(t) }}</td>
   </tr>
-  {% else %}<tr><td colspan="6" class="muted">{{ empty }}</td></tr>{% endfor %}</tbody>
+  {% else %}<tr><td colspan="{{ 7 if select else 6 }}" class="muted">{{ empty }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endmacro %}
 

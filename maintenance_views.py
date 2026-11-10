@@ -67,6 +67,7 @@ def equipment(equipment_id):
     done = store.work_done(equipment_id=equipment_id)
     return render_template(
         "maint/equipment.html", item=item, today=today, tasks=store.tasks(today, equipment_id=equipment_id),
+        paused=store.tasks(today, equipment_id=equipment_id, state="inactive,obsolete"),
         requests=store.requests(equipment_id=equipment_id)[:10],
         orders=store.orders(equipment_id=equipment_id, today=today)[:10], done=done[:15],
         cost=sum(r["cost"] for r in done), hours=sum(r["labor_hours"] for r in done),
