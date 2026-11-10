@@ -25,6 +25,10 @@ WAREHOUSES = [
     {"WarehouseCode": "COM", "WarehouseName": "Commissary", "IsDefault": False},
 ]
 
+# Products bought in another unit than they're stocked in: code -> (purchasing unit, how many
+# stock units one is). Orders made through the API can be in it; the simulated history isn't.
+PURCHASE_UNITS = {"MILK-OAT-QT": ("Case", 12)}
+
 # code, description, group, unit, supplier, base cost, sell price, avg daily use.
 # Products without a supplier are made in-house (see BILLS_OF_MATERIALS).
 PRODUCTS = [
@@ -417,9 +421,10 @@ class MockDataset:
                 line["Received"] = line["ReceiptQuantity"] = want
             elif new > 1e-9:
                 code = line["ProductCode"]
-                self._move(self.today, "Purchase", po["OrderNumber"], po["SupplierCode"], code, new,
+                rate = line.get("Rate") or 1  # the line is in its purchasing unit: stock moves in stock units
+                self._move(self.today, "Purchase", po["OrderNumber"], po["SupplierCode"], code, new * rate,
                            new * line["UnitPrice"], po.get("WarehouseCode"))
-                self._on_order[code] -= new
+                self._on_order[code] -= new * rate
                 for b in line.get("PendingBatchNumbers") or []:
                     self._add_batch(code, po.get("WarehouseCode") or "GDN", b["Number"], b["Quantity"],
                                     b.get("ExpiryDate"))

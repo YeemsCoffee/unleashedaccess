@@ -33,7 +33,7 @@
   <div class="run-actions"><a class="btn" href="{{ url_for('dash.purchase_order_return', number=po.number) }}">Return to supplier…</a></div>{% endif %}
   <div class="table-wrap"><table>
     <thead><tr><th>Product</th><th>Description</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Unit price</th><th class="num">Line total</th></tr></thead>
-    <tbody>{% for l in po.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.qty|qty }}</td><td class="num">{{ l.received_qty|qty }}</td><td class="num">{{ l.unit_price|money }}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for l in po.lines %}<tr><td>{{ l.product_code }}</td><td>{{ l.description }}</td><td class="num">{{ l.order_qty|qty }}{% if l.stock_per_unit %} {{ l.order_unit }}<div class="muted small">{{ l.qty|qty }} into stock ({{ l.stock_per_unit|qty }} in each)</div>{% endif %}</td><td class="num">{{ l.order_received|qty }}</td><td class="num">{{ l.order_price|money }}{% if l.stock_per_unit %}<div class="muted small">per {{ l.order_unit }}</div>{% endif %}</td><td class="num">{{ l.line_total|money }}</td></tr>{% endfor %}</tbody>
     <tfoot>
       <tr><td colspan="5">Goods</td><td class="num">{{ po.goods|money }}</td></tr>
       {% for c in po.cost_lines %}

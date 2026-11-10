@@ -613,6 +613,77 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("Batch CRM-HVY-HG-A (3)", page)
         self.assertIn("can&#39;t be changed", self.c.get(f"/sales/{number}/edit", follow_redirects=True).get_data(as_text=True))
 
+    def _case_order(self, cases="2", price="37.20"):
+        res = self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(),
+                         line_guid=["", ""], product=["MILK-OAT-QT", "MILK-WHL-GAL"], qty=[cases, "5"],
+                         price=[price, "4.20"], place="1")
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        return number, next(p for p in self.ds.purchase_orders if p["OrderNumber"] == number)
+
+    def test_a_purchase_order_is_in_the_products_purchasing_unit(self):
+        """Oat milk is stocked by the carton and bought by the case of 12."""
+        form = self.c.get("/purchases/new").get_data(as_text=True)
+        data = json.loads(re.search(r'id="order-product-data">(.*?)</script>', form, re.S).group(1))
+        oat = next(p for p in data if p["code"] == "MILK-OAT-QT")
+        self.assertEqual((oat["unit"], oat["stock_unit"], oat["price"]), ("Case", "Each", 37.2))  # the supplier's price for a case
+        milk = next(p for p in data if p["code"] == "MILK-WHL-GAL")
+        self.assertEqual((milk["unit"], milk.get("stock_unit")), ("Each", None))  # bought as it's stocked
+
+        number, po = self._case_order()
+        oat_line, milk_line = po["Lines"]
+        self.assertEqual((oat_line["Unit"], oat_line["Rate"], oat_line["OrderQuantity"], oat_line["UnitPrice"]),
+                         ("Case", 12, 2.0, 37.2))  # sent as 2 cases, not 2 cartons
+        self.assertNotIn("Unit", milk_line)  # no unit sent: its stock unit
+        sent = self.reports.purchase_order(number)["lines"][0]
+        self.assertEqual((sent["order_qty"], sent["order_unit"], sent["qty"], sent["stock_per_unit"]), (2.0, "Case", 24.0, 12.0))
+        self.assertAlmostEqual(sent["order_price"], 37.2)
+        page = self.c.get(f"/purchases/{number}").get_data(as_text=True)
+        for text in ("2 Case", "24 into stock (12 in each)", "per Case", "$74.40"):
+            self.assertIn(text, page)
+        # The next order's price comes from what was last paid for a case, and says how many are in one.
+        self.ds.products["MILK-OAT-QT"]["SupplierCode"] = None
+        self.app.extensions["unleashed"]["syncer"].sync(full=True)
+        again = json.loads(re.search(r'id="order-product-data">(.*?)</script>',
+                                     self.c.get("/purchases/new").get_data(as_text=True), re.S).group(1))
+        oat = next(p for p in again if p["code"] == "MILK-OAT-QT")
+        self.assertEqual((oat["price"], oat["stock_per_unit"]), (37.2, 12.0))
+
+        # Changing the cases takes the line off and puts it on again in cases (a line's unit can't change).
+        edit = self.c.get(f"/purchases/{number}/edit").get_data(as_text=True)
+        guids = re.findall(r'name="line_guid" value="([^"]+)"', edit)
+        self.assertIn('name="qty" value="2"', edit)  # cases, not 24
+        self._post(f"/purchases/{number}/edit", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(),
+                   line_guid=guids[:2], product=["MILK-OAT-QT", "MILK-WHL-GAL"], qty=["3", "5"], price=["37.20", "4.20"],
+                   place="1")
+        lines = {l["ProductCode"]: l for l in po["Lines"]}
+        self.assertEqual((lines["MILK-OAT-QT"]["Unit"], lines["MILK-OAT-QT"]["OrderQuantity"]), ("Case", 3.0))
+        self.assertEqual(len(po["Lines"]), 2)
+
+        # Receiving 3 cases puts 36 cartons into stock, at what the cases cost.
+        before, value = self.ds.stock_qty("MILK-OAT-QT"), self.ds._value["MILK-OAT-QT"]
+        receive = self.c.get(f"/purchases/{number}/receive").get_data(as_text=True)
+        self.assertIn("ordered 3 Case (12 in each: 36 into stock)", receive)
+        got = {l["product_code"]: l["guid"] for l in self.reports.purchase_order(number)["lines"]}
+        self._post(f"/purchases/{number}/receive", **{f"qty-{got['MILK-OAT-QT']}": "3", f"qty-{got['MILK-WHL-GAL']}": "5",
+                                                      "complete": "1"})
+        self.assertAlmostEqual(self.ds.stock_qty("MILK-OAT-QT"), before + 36)
+        self.assertAlmostEqual(self.ds._value["MILK-OAT-QT"], value + 3 * 37.2)
+        rows = [t for t in self.reports.transactions(TODAY, TODAY, product="MILK-OAT-QT") if t["number"] == number]
+        self.assertEqual([(t["qty"], round(t["value"], 2)) for t in rows], [(36.0, 111.6)])  # stock units in the history
+
+    def test_receiving_in_a_purchasing_unit_checks_how_unleashed_read_it(self):
+        """The reference doesn't say which unit a changed line's quantities are read in. If Unleashed
+        reads them as stock units, Core sees the order quantity move and sends them that way instead."""
+        number, po = self._case_order()
+        self.ds.put_lines_in_base = True
+        before = self.ds.stock_qty("MILK-OAT-QT")
+        got = {l["product_code"]: l["guid"] for l in self.reports.purchase_order(number)["lines"]}
+        self._post(f"/purchases/{number}/receive", **{f"qty-{got['MILK-OAT-QT']}": "1", f"qty-{got['MILK-WHL-GAL']}": "5"})
+        oat = next(l for l in po["Lines"] if l["ProductCode"] == "MILK-OAT-QT")
+        self.assertEqual((oat["OrderQuantity"], oat["ReceiptQuantity"], oat["UnitPrice"]), (2.0, 1.0, 37.2))  # still 2 cases ordered
+        self.assertAlmostEqual(self.ds.stock_qty("MILK-OAT-QT"), before + 12)  # one case arrived
+        self.assertEqual(po["OrderStatus"], "Receipted")
+
     def test_a_purchase_into_a_warehouse_cogs_doesnt_count_says_so(self):
         res = self._post("/purchases/new", supplier="SUP-ROAST", warehouse="COM", order_date=TODAY.isoformat(),
                          line_guid=[""], product=["COF-ESP-5LB"], qty=["10"], price=["26.95"], place="1")

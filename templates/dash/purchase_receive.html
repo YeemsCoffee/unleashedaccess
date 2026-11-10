@@ -13,9 +13,9 @@
   {% for l in rows %}
   <div class="receive-line">
     <div class="receive-head"><strong>{{ l.product_code }}</strong> {{ l.description }}
-      <span class="muted small">· ordered {{ l.qty|qty }} at {{ l.unit_price|money }}</span></div>
+      <span class="muted small">· ordered {{ l.order_qty|qty }}{% if l.stock_per_unit %} {{ l.order_unit }} ({{ l.stock_per_unit|qty }} in each: {{ l.qty|qty }} into stock){% endif %} at {{ l.order_price|money }}</span></div>
     <div class="filters">
-      <label>Arrived <input class="qty-input" type="number" name="qty-{{ l.guid }}" value="{{ l.typed }}" min="0" step="any" required></label>
+      <label>Arrived{% if l.stock_per_unit %} ({{ l.order_unit }}){% endif %} <input class="qty-input" type="number" name="qty-{{ l.guid }}" value="{{ l.typed }}" min="0" step="any" required></label>
     </div>
     {% if l.tracked %}
     <div data-order-batches class="receive-batches">

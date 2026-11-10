@@ -106,15 +106,56 @@ def _check_lines(lines):
             raise OrderError(f"Enter a price for {l['product_code']} (0 or more).")
 
 
+def purchase_unit(product):
+    """The unit a product is bought in when that isn't its stock unit ({"Guid", "Name"}, as
+    Unleashed's DefaultPurchasesUnitOfMeasure gives it); None when it's bought in its stock unit."""
+    base, unit = product.get("UnitOfMeasure") or {}, product.get("DefaultPurchasesUnitOfMeasure") or {}
+    if unit.get("Obsolete") or not (unit.get("Guid") or unit.get("Name")):
+        return None
+    same = (unit.get("Guid") and unit.get("Guid") == base.get("Guid")) or \
+        (unit.get("Name") and (unit.get("Name") or "").lower() == (base.get("Name") or "").lower())
+    return None if same else {k: unit[k] for k in ("Guid", "Name") if unit.get(k)}
+
+
+def ordered(line):
+    """A purchase order line's quantity in the unit it was ordered in (PurchaseUnitOrderQuantity
+    beside OrderQuantity in stock units; the same when it's ordered in its stock unit)."""
+    bought = line.get("PurchaseUnitOrderQuantity")
+    return float(bought if bought is not None else line.get("OrderQuantity") or 0)
+
+
+def taken_in(line):
+    got = line.get("PurchaseUnitReceiptQuantity")
+    return float(got if got is not None else line.get("ReceiptQuantity") or 0)
+
+
+def in_purchase_unit(line):
+    """Whether the line is in a purchasing unit other than the product's stock unit."""
+    bought = line.get("PurchaseUnitOrderQuantity")
+    return bought is not None and abs(float(bought) - float(line.get("OrderQuantity") or 0)) > TOLERANCE
+
+
+def _price(line):
+    """A line's price per unit ordered. Which unit Unleashed's UnitPrice is per isn't documented for a
+    line in a purchasing unit, so there it's the line's total over the quantity ordered."""
+    if not in_purchase_unit(line):
+        return float(line.get("UnitPrice") or 0)
+    qty, off = ordered(line), 1 - float(line.get("DiscountRate") or 0)
+    return float(line.get("LineTotal") or 0) / qty / off if qty and off else 0.0
+
+
 def _same_lines(doc_lines, wanted):
-    """Whether Unleashed's lines are the ones wanted (product, quantity, price)."""
+    """Whether Unleashed's lines are the ones wanted (product, quantity, price): the quantity in
+    the unit ordered, and the price by the unit price or, for a line in a purchasing unit, the
+    line's total."""
     def key(code, qty, price):
         return (code, round(float(qty or 0), 3), round(float(price or 0), 3))
-    have = sorted(key((l.get("Product") or {}).get("ProductCode"), l.get("OrderQuantity"), l.get("UnitPrice"))
+    have = sorted(key((l.get("Product") or {}).get("ProductCode"), ordered(l), _price(l))
                   for l in doc_lines or [])
     want = sorted(key(l["product_code"], l["qty"], l["unit_price"]) for l in wanted)
     return len(have) == len(want) and all(
-        h[0] == w[0] and abs(h[1] - w[1]) <= TOLERANCE and abs(h[2] - w[2]) <= 0.005 for h, w in zip(have, want))
+        h[0] == w[0] and abs(h[1] - w[1]) <= TOLERANCE and
+        (abs(h[2] - w[2]) <= 0.005 or abs(h[1] * h[2] - w[1] * w[2]) <= 0.011) for h, w in zip(have, want))
 
 
 def _status(doc):
@@ -199,14 +240,31 @@ def update_sales_order(client, guid, order, products):
     return changed
 
 
-def _change_lines(client, path, current, wanted, rate, taxable, sales):
+def _change_lines(client, path, current, wanted, rate, taxable, sales, units=None):
     """Add, change and remove lines (each wanted line with "guid" when it's a current one):
-    new lines first, so an order is never left without one."""
+    new lines first, so an order is never left without one. `units`: {product code: its
+    purchasing unit} (purchase_unit), which new purchase order lines are in."""
     by_guid = {l.get("Guid"): l for l in current if l.get("Guid")}
-    # A line's product can't be changed: a line given another product replaces it.
-    wanted = [dict(l, guid=None) if l.get("guid") in by_guid and
-              (by_guid[l["guid"]].get("Product") or {}).get("ProductCode") != l["product_code"] else l
-              for l in wanted]
+    units = units or {}
+
+    def replaced(l):
+        old = by_guid.get(l.get("guid"))
+        if old is None:
+            return l
+        # A line's product can't be changed: a line given another product replaces it.
+        if (old.get("Product") or {}).get("ProductCode") != l["product_code"]:
+            return dict(l, guid=None)
+        # Nor can its unit, and which unit a changed quantity would be read in isn't documented:
+        # a changed line in a purchasing unit is taken off and put on again in that unit.
+        if not sales and in_purchase_unit(old) and (
+                abs(ordered(old) - l["qty"]) > TOLERANCE or abs(_price(old) - l["unit_price"]) > 0.005
+                or ("comments" in l and (l["comments"] or None) != (old.get("Comments") or None))):
+            unit = old.get("UnitOfMeasure") or {}
+            return dict(l, guid=None, unit={k: unit[k] for k in ("Guid", "Name") if unit.get(k)} or None,
+                        comments=l["comments"] if "comments" in l else old.get("Comments"))
+        return l
+
+    wanted = [replaced(l) for l in wanted]
     kept = {l["guid"] for l in wanted if l.get("guid")}
     unknown = kept - set(by_guid)
     if unknown:
@@ -219,6 +277,9 @@ def _change_lines(client, path, current, wanted, rate, taxable, sales):
         body = {"Guid": str(uuid.uuid4()), "LineNumber": next_number, "Product": {"ProductCode": l["product_code"]},
                 "OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
                 "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None}
+        unit = l.get("unit") or units.get(l["product_code"])
+        if unit and not sales:
+            body["UnitOfMeasure"] = unit
         next_number += 1
         client.post(f"{path}/Lines", body)
     for l in priced:
@@ -226,6 +287,8 @@ def _change_lines(client, path, current, wanted, rate, taxable, sales):
         if old is None:
             continue
         comments = l["comments"] if "comments" in l else old.get("Comments")
+        if not sales and in_purchase_unit(old):
+            continue  # unchanged (a changed one was replaced above)
         if abs((old.get("OrderQuantity") or 0) - l["qty"]) <= TOLERANCE and \
                 abs((old.get("UnitPrice") or 0) - l["unit_price"]) <= 0.00005 and (comments or None) == (old.get("Comments") or None):
             continue
@@ -305,6 +368,9 @@ def create_purchase_order(client, order, products, place=True):
     tax = _tax(client, supplier, revenue=False)
     currency = _currency(client, supplier, supplier.get("SupplierName") or order["supplier"])
     lines, sub, tax_total = _priced(order["lines"], tax["rate"], _taxable(products, "TaxablePurchase"))
+    # Each line in the unit the product is bought in: left out, Unleashed takes the quantity as
+    # stock units ("If not provided, defaults to the product's base unit").
+    units = purchase_units(products)
     guid = str(uuid.uuid4())
     body = {
         "Guid": guid, "OrderStatus": "Placed" if place else "Parked", "OrderDate": body_date(order["order_date"]),
@@ -315,7 +381,8 @@ def create_purchase_order(client, order, products, place=True):
         "SupplierRef": order.get("reference") or None, "Comments": order.get("comments") or None,
         "PurchaseOrderLines": [{"Guid": str(uuid.uuid4()), "LineNumber": i, "Product": {"ProductCode": l["product_code"]},
                                 "OrderQuantity": l["qty"], "UnitPrice": l["unit_price"], "LineTotal": l["line_total"],
-                                "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None}
+                                "LineTax": l["line_tax"], "DiscountRate": 0, "Comments": l.get("comments") or None,
+                                **({"UnitOfMeasure": units[l["product_code"]]} if l["product_code"] in units else {})}
                                for i, l in enumerate(lines, 1)],
         "SubTotal": sub, "TaxTotal": tax_total, "Total": money(sub + tax_total),
     }
@@ -327,7 +394,30 @@ def create_purchase_order(client, order, products, place=True):
     if not _same_lines(made.get("PurchaseOrderLines"), order["lines"]):
         raise OrderError(f"Unleashed made {made.get('OrderNumber')} but its lines aren't as entered. Open it and "
                          "check them before receiving it.")
+    wrong = _wrong_units(made.get("PurchaseOrderLines"), units)
+    if wrong:
+        raise OrderError(f"Unleashed made {made.get('OrderNumber')}, but not in the purchasing unit for {', '.join(wrong)}. "
+                         "Open it and check its quantities before receiving it.")
     return made
+
+
+def purchase_units(products):
+    """{product code: its purchasing unit} for the products bought in another unit than stocked."""
+    found = {p.get("ProductCode"): purchase_unit(p) for p in products}
+    return {code: unit for code, unit in found.items() if unit}
+
+
+def _wrong_units(doc_lines, units):
+    """The products whose line isn't in the purchasing unit asked for (when Unleashed says)."""
+    wrong = []
+    for l in doc_lines or []:
+        code = (l.get("Product") or {}).get("ProductCode")
+        want, got = units.get(code), l.get("UnitOfMeasure") or {}
+        if want and got and not (
+                (want.get("Guid") and want.get("Guid") == got.get("Guid"))
+                or (want.get("Name") and (want.get("Name") or "").lower() == (got.get("Name") or "").lower())):
+            wrong.append(code)
+    return wrong
 
 
 def update_purchase_order(client, guid, order, products, place=None):
@@ -354,7 +444,7 @@ def update_purchase_order(client, guid, order, products, place=None):
         body["OrderStatus"] = "Placed"
     client.put(f"PurchaseOrders/{guid}", body)
     _change_lines(client, f"PurchaseOrders/{guid}", current.get("PurchaseOrderLines") or [], order["lines"], rate,
-                  _taxable(products, "TaxablePurchase"), sales=False)
+                  _taxable(products, "TaxablePurchase"), sales=False, units=purchase_units(products))
     changed = _get(client, "PurchaseOrders", guid)
     if changed is None or not _same_lines(changed.get("PurchaseOrderLines"), order["lines"]):
         raise OrderError(f"Unleashed didn't keep all the changes to {number}. Open it and check its lines.")
@@ -384,25 +474,42 @@ def receive_purchase_order(client, guid, receipts, complete=False):
         if line is None:
             raise OrderError(f"A line of {number} changed in Unleashed since this page was opened. Reload it.")
         code = (line.get("Product") or {}).get("ProductCode")
-        if r["qty"] < 0 or r["qty"] > (line.get("OrderQuantity") or 0) + TOLERANCE:
-            raise OrderError(f"{code}: receive between 0 and the {line.get('OrderQuantity'):g} ordered. "
+        # Quantities here are in the unit the line was ordered in (cases, for a product bought by the case).
+        if r["qty"] < 0 or r["qty"] > ordered(line) + TOLERANCE:
+            raise OrderError(f"{code}: receive between 0 and the {ordered(line):g} ordered. "
                              "To receive more, change the order first.")
         if r.get("batches") and abs(sum(b["qty"] for b in r["batches"]) - r["qty"]) > TOLERANCE:
             raise OrderError(f"The batches for {code} add up to {sum(b['qty'] for b in r['batches']):g}, "
                              f"not the {r['qty']:g} received.")
-        body = {"OrderQuantity": line.get("OrderQuantity"), "UnitPrice": line.get("UnitPrice"),
-                "LineTotal": line.get("LineTotal"), "LineTax": line.get("LineTax") or 0,
-                "DiscountRate": line.get("DiscountRate") or 0, "Comments": line.get("Comments"),
-                "ReceiptQuantity": r["qty"]}
+        extra = {"LineTax": line.get("LineTax") or 0, "DiscountRate": line.get("DiscountRate") or 0,
+                 "Comments": line.get("Comments"), "LineTotal": line.get("LineTotal")}
         if r.get("batches"):
-            body["PendingBatchNumbers"] = [{"Number": b["number"], "Quantity": b["qty"],
-                                            "ExpiryDate": body_date(b["expiry"]) if b.get("expiry") else None}
-                                           for b in r["batches"]]
-        client.put(f"PurchaseOrders/{guid}/Lines/{line_guid}", body)
+            extra["PendingBatchNumbers"] = [{"Number": b["number"], "Quantity": b["qty"],
+                                             "ExpiryDate": body_date(b["expiry"]) if b.get("expiry") else None}
+                                            for b in r["batches"]]
+        path = f"PurchaseOrders/{guid}/Lines/{line_guid}"
+        if not in_purchase_unit(line):
+            client.put(path, {"OrderQuantity": line.get("OrderQuantity"), "UnitPrice": line.get("UnitPrice"),
+                              "ReceiptQuantity": r["qty"], **extra})
+            continue
+        # A line in a purchasing unit. The reference says a new line's quantities are read in that
+        # unit; for a change to an existing line it doesn't say. So: send them in the purchasing
+        # unit, read the line back, and if Unleashed took them as stock units (the order quantity
+        # moved), send them in stock units instead, which also puts the order quantity back.
+        per = float(line.get("OrderQuantity") or 0) / ordered(line)  # stock units in one, from the line itself
+        client.put(path, {"OrderQuantity": ordered(line), "UnitPrice": round(_price(line), 4),
+                          "ReceiptQuantity": r["qty"], **extra})
+        if not _received_as(_line(client, guid, line_guid), line, r["qty"]):
+            client.put(path, {"OrderQuantity": line.get("OrderQuantity"), "UnitPrice": line.get("UnitPrice"),
+                              "ReceiptQuantity": round(r["qty"] * per, 4), **extra})
+            if not _received_as(_line(client, guid, line_guid), line, r["qty"]):
+                raise OrderError(f"Unleashed didn't keep the quantity received for {code} on {number} "
+                                 f"({line.get('UnitOfMeasure', {}).get('Name') or 'its purchasing unit'}), so nothing was "
+                                 "received. Open the order in Unleashed and check that line's quantity before trying again.")
     ready = _get(client, "PurchaseOrders", guid) or {}
     for l in ready.get("PurchaseOrderLines") or []:
         r = receipts.get(l.get("Guid"))
-        if r and abs((l.get("ReceiptQuantity") or 0) - r["qty"]) > TOLERANCE:
+        if r and abs(taken_in(l) - r["qty"]) > TOLERANCE:
             raise OrderError(f"Unleashed didn't keep the quantity received for "
                              f"{(l.get('Product') or {}).get('ProductCode')} on {number}, so nothing was received. "
                              "Check it and try again.")
@@ -413,6 +520,19 @@ def receive_purchase_order(client, guid, receipts, complete=False):
     if complete:
         return complete_purchase_order(client, guid)
     return received
+
+
+def _line(client, guid, line_guid):
+    """One line of a purchase order as Unleashed holds it now."""
+    order = _get(client, "PurchaseOrders", guid) or {}
+    return next((l for l in order.get("PurchaseOrderLines") or [] if l.get("Guid") == line_guid), {})
+
+
+def _received_as(now, before, qty):
+    """Whether the line still orders what it did and now has `qty` (in its purchasing unit) to receive."""
+    return abs(ordered(now) - ordered(before)) <= TOLERANCE and \
+        abs(float(now.get("OrderQuantity") or 0) - float(before.get("OrderQuantity") or 0)) <= TOLERANCE and \
+        abs(taken_in(now) - qty) <= TOLERANCE
 
 
 def complete_purchase_order(client, guid):

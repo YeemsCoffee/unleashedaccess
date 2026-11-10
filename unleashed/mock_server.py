@@ -12,7 +12,7 @@ from flask import Flask, jsonify, request
 
 from .client import sign
 from . import mock_orders, mock_returns, mock_stock
-from .mock_data import BATCH_TRACKED, MockDataset
+from .mock_data import BATCH_TRACKED, PURCHASE_UNITS, MockDataset
 
 MOCK_API_ID = "mock-api-id"
 MOCK_API_KEY = "mock-api-key"
@@ -400,14 +400,26 @@ def _product(ds, p):
         "Guid": p["Guid"], "ProductCode": p["ProductCode"],
         "ProductDescription": p["ProductDescription"],
         "ProductGroup": {"GroupName": p["ProductGroup"]},
-        "UnitOfMeasure": {"Name": p["UnitOfMeasure"]},
+        "UnitOfMeasure": {"Guid": mock_orders.unit_guid(p["UnitOfMeasure"]), "Name": p["UnitOfMeasure"]},
         "DefaultPurchasePrice": p["BaseCost"], "DefaultSellPrice": p["SellPrice"],
-        "Supplier": _supplier_ref(ds, p["SupplierCode"]) if p["SupplierCode"] else None,
+        **_purchasing(ds, p),
         "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None and not p.get("NonStock"),
         "NeverDiminishing": bool(p.get("NonStock")),
         "IsBatchTracked": p["ProductCode"] in BATCH_TRACKED,
         "Obsolete": False,
     }
+
+
+def _purchasing(ds, p):
+    """A product's purchasing unit (its base unit unless it's bought in another), the other units
+    it can be bought in, and its supplier with the price in the purchasing unit."""
+    unit, rate = PURCHASE_UNITS.get(p["ProductCode"], (p["UnitOfMeasure"], 1))
+    ref = {"Guid": mock_orders.unit_guid(unit), "Name": unit}
+    supplier = dict(_supplier_ref(ds, p["SupplierCode"]), UnitOfMeasure=ref,
+                    SupplierProductPrice=round(p["BaseCost"] * rate, 4)) if p["SupplierCode"] else None
+    return {"DefaultPurchasesUnitOfMeasure": dict(ref, Obsolete=False),
+            "AlternateUnitsOfMeasure": [dict(ref, ConversionRate=float(rate), ForPurchases=True)] if rate != 1 else [],
+            "Supplier": supplier}
 
 
 def _supplier_ref(ds, code):
@@ -427,11 +439,21 @@ def _purchase_order(ds, po):
     tax = po.get("Tax") or {"TaxCode": "NONE", "TaxRate": 0.0}
     lines = []
     for i, l in enumerate(ds.lines_with_guids(po), 1):
+        # A line in a purchasing unit: OrderQuantity and ReceiptQuantity in stock units, with the
+        # PurchaseUnit... quantities beside them. Which unit UnitPrice is per isn't documented: per
+        # purchasing unit here, per stock unit with ds.put_lines_in_base (the other reading).
+        rate = l.get("Rate") or 1
+        received = l.get("ReceiptQuantity")
+        price = l["UnitPrice"] / rate if getattr(ds, "put_lines_in_base", False) else l["UnitPrice"]
+        unit = l.get("Unit") or ds.products[l["ProductCode"]]["UnitOfMeasure"]
         lines.append({
             "Guid": l["Guid"], "LineNumber": i, "Product": _product_ref(ds, l["ProductCode"]),
-            "OrderQuantity": l["OrderQuantity"], "ReceiptQuantity": l.get("ReceiptQuantity"),
-            "UnitPrice": l["UnitPrice"], "LineTotal": l["LineTotal"], "LineTax": l.get("LineTax", 0.0),
-            "BCUnitPrice": l["UnitPrice"], "BCSubTotal": l["LineTotal"], "Comments": l.get("Comments"),
+            "OrderQuantity": l["OrderQuantity"] * rate, "PurchaseUnitOrderQuantity": l["OrderQuantity"],
+            "ReceiptQuantity": received * rate if received is not None else None,
+            "PurchaseUnitReceiptQuantity": received,
+            "UnitOfMeasure": {"Guid": mock_orders.unit_guid(unit), "Name": unit},
+            "UnitPrice": price, "LineTotal": l["LineTotal"], "LineTax": l.get("LineTax", 0.0),
+            "BCUnitPrice": price, "BCSubTotal": l["LineTotal"], "Comments": l.get("Comments"),
             "DueDate": _ms(po["RequiredDate"]),
             "PendingBatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"],
                                      "ExpiryDate": _ms(b.get("ExpiryDate"))} for b in l.get("PendingBatchNumbers") or []],

@@ -258,11 +258,26 @@ class Reports:
                                    "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice"))})
                 continue
             goods += total
+            # A line bought in a purchasing unit (a case of 12) carries both: OrderQuantity and
+            # ReceiptQuantity in stock units, PurchaseUnit... in the unit ordered. "qty" stays the
+            # stock quantity (what moved stock); "order_..." is the order as it was written.
+            stock_qty, bought = l.get("OrderQuantity") or 0, l.get("PurchaseUnitOrderQuantity")
+            order_qty = bought if bought is not None else stock_qty
+            got = l.get("PurchaseUnitReceiptQuantity")
+            converted = bought is not None and abs(bought - stock_qty) > 1e-9
+            price = _first(l.get("BCUnitPrice"), l.get("UnitPrice"))
             lines.append({"guid": l.get("Guid"), "product_code": code, "description": prod.get("ProductDescription"),
-                          "qty": l.get("OrderQuantity") or 0,
+                          "qty": stock_qty,
                           "received_qty": l.get("ReceiptQuantity"),
-                          "unit_price": _first(l.get("BCUnitPrice"), l.get("UnitPrice")),
-                          "line_total": total})
+                          "unit_price": price,
+                          "line_total": total,
+                          "order_qty": order_qty,
+                          "order_received": got if got is not None else l.get("ReceiptQuantity"),
+                          "order_unit": (l.get("UnitOfMeasure") or {}).get("Name"),
+                          # Which unit Unleashed's UnitPrice is per isn't documented: the line's
+                          # total over what was ordered is, whichever it is.
+                          "order_price": (total / order_qty if order_qty else None) if converted else price,
+                          "stock_per_unit": stock_qty / bought if converted and bought else None})
         for key in cost_line_keys(i):
             for c in i.get(key) or []:
                 field, amount = cost_line_amount(c)
@@ -1314,8 +1329,8 @@ class Reports:
                     products[l["product_code"]]["received"] += l["line_total"] + o["shipping"] * l["line_total"] / goods
                 if not o["lines"] and o["shipping"]:  # costs with no goods to put them on
                     products["(shipping on orders without goods)"]["received"] += o["shipping"]
-                short = sum((l["qty"] - l["received_qty"]) * (l["unit_price"] or 0) for l in o["lines"]
-                            if l["received_qty"] is not None and l["received_qty"] < l["qty"] - 1e-9)
+                short = sum(l["line_total"] * (1 - l["received_qty"] / l["qty"]) for l in o["lines"]
+                            if l["received_qty"] is not None and l["qty"] and l["received_qty"] < l["qty"] - 1e-9)
                 if short > 0.005:
                     findings["partly_received"].append({"number": o["number"], "value": short})
                 if warehouses and o.get("warehouse") and o["warehouse"] not in warehouses:

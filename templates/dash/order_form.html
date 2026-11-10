@@ -70,7 +70,9 @@
   <script type="application/json" id="order-product-data">{{ product_options|tojson }}</script>
   <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
   <p class="muted small">Picking a product fills in its {{ 'default sell' if sales else 'default purchase' }} price from Unleashed; change it if
-    this order's is different. Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
+    this order's is different.{% if not sales %} A product Unleashed says is bought in another unit than it's stocked in (by the case)
+    is ordered in that unit: the quantity is cases and the price is per case (the supplier's price for one in Unleashed, or
+    what was last paid).{% endif %} Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
     empty are removed.{% endif %}</p>
 
   {% if not sales %}

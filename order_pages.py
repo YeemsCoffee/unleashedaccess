@@ -10,6 +10,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 from dashboard import (_ext, _person, _sync_soon, _write_problem, bp, reports)
 from unleashed.client import UnleashedError, parse_date
 from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHASES, OrderError, complete_credit,
+                                    purchase_unit,
                                     complete_purchase_order, complete_sales_order, complete_supplier_return,
                                     create_credit, create_purchase_order, create_sales_order,
                                     create_supplier_return, delete_credit, delete_purchase_order, delete_sales_order,
@@ -108,9 +109,26 @@ def _choices(kind):
     price = "DefaultSellPrice" if kind == "sales" else "DefaultPurchasePrice"
     charges = r.charge_codes()
 
+    last_paid = _last_paid() if kind == "purchases" else {}
+
     def option(p):
-        return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": p.get(price),
-                "unit": (p.get("UnitOfMeasure") or {}).get("Name")}
+        base = (p.get("UnitOfMeasure") or {}).get("Name")
+        unit = purchase_unit(p) if kind == "purchases" else None
+        if not unit:
+            return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": p.get(price),
+                    "unit": base}
+        # Bought in another unit than it's stocked in (a case of 12): the order is in that unit, at
+        # the supplier's price for it, or what was last paid for one. (The default purchase price is
+        # for a stock unit, and which way Unleashed's conversion rate runs isn't documented.)
+        supplier = p.get("Supplier") or {}
+        theirs = supplier.get("UnitOfMeasure") or {}
+        same = (theirs.get("Guid") and theirs.get("Guid") == unit.get("Guid")) or \
+            (theirs.get("Name") and (theirs.get("Name") or "").lower() == (unit.get("Name") or "").lower())
+        paid = last_paid.get((p.get("ProductCode"), (unit.get("Name") or "").lower())) or {}
+        cost = supplier.get("SupplierProductPrice") if same and supplier.get("SupplierProductPrice") is not None \
+            else paid.get("price")
+        return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": cost,
+                "unit": unit.get("Name"), "stock_unit": base, "stock_per_unit": paid.get("per")}
 
     options = sorted((option(p) for p in products if (p.get("ProductCode") or "").upper() not in charges),
                      key=lambda p: (p["code"] or "").lower())
@@ -124,6 +142,24 @@ def _choices(kind):
             "default_warehouse": default, "products_raw": products,
             "codes": {o["code"].lower(): o["code"] for o in options + charge_options if o["code"]},
             "product_names": {o["code"]: o["name"] for o in options + charge_options}}
+
+
+def _last_paid():
+    """{(product code, purchasing unit): {"price": what one was last paid for, "per": the stock
+    units in one}} from the last six months' purchase orders, for products bought by the case."""
+    r, found = reports(), {}
+    try:
+        orders = r.purchase_orders(r.today - dt.timedelta(days=183), r.today)
+    except UnleashedError:
+        return found
+    for o in sorted(orders, key=lambda o: o["order_date"] or dt.date.min):
+        if o["status"] == "Deleted":
+            continue
+        for l in o["lines"]:
+            if l.get("stock_per_unit") and l.get("order_unit") and l.get("order_price") is not None:
+                found[(l["product_code"], l["order_unit"].lower())] = {"price": round(l["order_price"], 4),
+                                                                      "per": l["stock_per_unit"]}
+    return found
 
 
 def _failed(e):
@@ -340,8 +376,10 @@ def _purchase_form(found=None, form=None, error=None):
                   "delivery_date": found["required_date"].isoformat() if found.get("required_date") else "",
                   "reference": found.get("reference") or "", "comments": found.get("comments") or "",
                   "place": "1" if found["status"] == "Placed" else ""}
-        lines = [{"guid": l["guid"], "product_code": l["product_code"], "qty": l["qty"],
-                  "unit_price": l["unit_price"]} for l in found["lines"]]
+        # As ordered: in the unit each line was bought in, at the price for one.
+        lines = [{"guid": l["guid"], "product_code": l["product_code"], "qty": l["order_qty"],
+                  "unit_price": round(l["order_price"], 4) if l["order_price"] is not None else None}
+                 for l in found["lines"]]
         lines += [{"guid": c["guid"], "product_code": c["product_code"], "qty": c["qty"], "unit_price": c["unit_price"],
                    "comments": c["comments"], "charge": True}
                   for c in found["cost_lines"] if c.get("field") == "PurchaseOrderLines" and c.get("guid")]
@@ -448,7 +486,7 @@ def purchase_order_receive(number):
             batches = [{"number": n, "qty": q, "expiry": e} for n, q, e in zip_longest(
                 form.getlist(f"batch-{l['guid']}"), form.getlist(f"batch-qty-{l['guid']}"),
                 form.getlist(f"batch-expiry-{l['guid']}"), fillvalue="")] if form else []
-            rows.append(dict(l, typed=got if got is not None else f"{l['qty']:g}",
+            rows.append(dict(l, typed=got if got is not None else f"{l['order_qty']:g}",
                              tracked=l["guid"] in tracked,
                              batches=batches or [{"number": "", "qty": "", "expiry": ""}]))
         html = render_template("dash/purchase_receive.html", po=po, rows=rows, error=error, today=r.today,
@@ -465,7 +503,7 @@ def purchase_order_receive(number):
         qty = _number(form.get(f"qty-{l['guid']}"))
         if qty is None or qty < 0:
             return page(f"Enter how much of {l['product_code']} arrived (0 if none).")
-        whole = whole and abs(qty - l["qty"]) < 1e-9
+        whole = whole and abs(qty - l["order_qty"]) < 1e-9
         batches = []
         if l["guid"] in tracked and qty > 0:
             for n, q, e in zip_longest(form.getlist(f"batch-{l['guid']}"), form.getlist(f"batch-qty-{l['guid']}"),

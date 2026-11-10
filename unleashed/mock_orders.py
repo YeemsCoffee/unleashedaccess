@@ -24,6 +24,13 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from flask import jsonify, request
 
+from .mock_data import PURCHASE_UNITS
+
+
+def unit_guid(name):
+    """A unit of measure's Guid: the same for a name wherever it's given."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"uom:{name.lower()}"))
+
 OPEN_SO = ("Parked", "Placed", "Backordered")
 OPEN_PO = ("Parked", "Placed")
 TAXES = [
@@ -85,9 +92,26 @@ def register(app, ds, serialize_so, serialize_po, body_date, ms_date_in):
         tax = money(total * rate) if given.get("LineTax") is None else float(given["LineTax"])
         if abs(tax - money(total * rate)) > 0.001 and tax != 0:
             return None, f"LineTax for {code} should be {money(total * rate):.2f}"
-        return {"Guid": given.get("Guid") or str(uuid.uuid4()), "ProductCode": code, "OrderQuantity": qty,
+        line = {"Guid": given.get("Guid") or str(uuid.uuid4()), "ProductCode": code, "OrderQuantity": qty,
                 "UnitPrice": price, "LineTotal": total, "LineTax": tax,
-                "Comments": given.get("Comments")}, None
+                "Comments": given.get("Comments")}
+        # "Must be a valid purchasing unit for the line product. If not provided, defaults to the
+        # product's base unit"; "Quantity will be treated in the purchasing unit if UnitOfMeasure is
+        # provided". The line keeps its quantities and price in that unit, and how many stock units
+        # one is.
+        unit = given.get("UnitOfMeasure")
+        if unit:
+            base = ds.products[code]["UnitOfMeasure"]
+            allowed = {base.lower(): 1}
+            if code in PURCHASE_UNITS:
+                allowed[PURCHASE_UNITS[code][0].lower()] = PURCHASE_UNITS[code][1]
+            by_guid = {unit_guid(name): name for name in allowed}
+            name = (unit.get("Name") or by_guid.get((unit.get("Guid") or "").lower()) or "").lower()
+            if name not in allowed:
+                return None, f"UnitOfMeasure must be a valid purchasing unit for {code}"
+            if allowed[name] != 1:
+                line["Unit"], line["Rate"] = PURCHASE_UNITS[code]
+        return line, None
 
     def totals(doc, b=None):
         sub = money(sum(l["LineTotal"] for l in doc["Lines"]))
@@ -395,7 +419,16 @@ def register(app, ds, serialize_so, serialize_po, body_date, ms_date_in):
             if b.get(field) is None:
                 return _error(f"{field} is required")
         given = dict(b, Product={"ProductCode": line["ProductCode"]})
+        given.pop("UnitOfMeasure", None)  # N/A on PUT: a line keeps its unit
         given.setdefault("UnitPrice", line["UnitPrice"])
+        rate = line.get("Rate") or 1
+        # The reference doesn't say which unit a PUT's quantities are in for a line in a purchasing
+        # unit. Here, the line's own; with ds.put_lines_in_base, stock units (to test that reading).
+        if rate != 1 and getattr(ds, "put_lines_in_base", False):
+            given["OrderQuantity"] = float(given["OrderQuantity"]) / rate
+            given["UnitPrice"] = float(given["UnitPrice"]) * rate
+            if b.get("ReceiptQuantity") is not None:
+                b = dict(b, ReceiptQuantity=float(b["ReceiptQuantity"]) / rate)
         changed, error = check_line(given, po["Tax"]["TaxRate"])
         if error:
             return _error(error)

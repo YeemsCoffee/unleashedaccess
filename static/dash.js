@@ -585,7 +585,10 @@ function fromTemplate(id, values) {
       return;
     }
     input.value = p.code;
-    label.textContent = p.name + (p.unit ? " (" + p.unit + ")" : "");
+    // A product bought in another unit than it's stocked in: the quantity and price are for that unit.
+    label.textContent = p.name + (p.stock_unit && p.unit
+      ? ": ordered by the " + p.unit + (p.stock_per_unit ? " (" + p.stock_per_unit + " " + p.stock_unit + " in one)" : "") + ", priced per " + p.unit
+      : (p.unit ? " (" + p.unit + ")" : ""));
     label.classList.remove("due-late");
     var price = row.querySelector("[name=price]"), qty = row.querySelector("[name=qty]");
     if (p.price !== null && p.price !== undefined && p.price !== "" && !price.value) {
