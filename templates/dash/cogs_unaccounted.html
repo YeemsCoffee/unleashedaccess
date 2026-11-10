@@ -88,7 +88,7 @@
       <td class="num">{% if (daily.total - split.rest)|abs < 0.5 %}✓ matches{% else %}! differs from {{ split.rest|money }}{% endif %}</td></tr></tfoot>
   </table></div>
   <p class="muted small">Days over $25 are highlighted. The stock is Unleashed's, moved to midnight
-    ({{ cutoffs[settings.stock_as_at][0]|lower }}, as set in Settings → COGS).</p>
+    (read as {{ cutoffs[timing.in_use][0]|lower }}{{ ', which Core found matches the documents best' if timing.auto else ', as set in Settings → COGS' }}).</p>
   {% else %}
   <p class="muted">Day by day is kept for this month and last month (Core keeps each day's stock for those).</p>
   {% endif %}
@@ -101,15 +101,15 @@
     month's documents add up to.</p>
   {% set f = why.findings %}
   <ul class="plain-list">
-    {% if timing.verdict and timing.verdict != settings.stock_as_at %}<li>! <strong>Timing:</strong> checked against the last
+    {% if timing.verdict and not timing.in_use_ok %}<li>! <strong>Timing:</strong> checked against the last
       {{ timing.days }} days, Unleashed's stock "as at" a date is <strong>{{ timing.label|lower }}</strong>, not
-      {{ cutoffs[settings.stock_as_at][0]|lower }} as set. Read the wrong way, sales near midnight land in the wrong month (one
-      month negative here, the next positive). {% if is_admin %}Change it in <a href="{{ url_for('dash.cogs_setup') }}#timing">Settings → COGS</a>.{% else %}An admin can
+      {{ cutoffs[timing.in_use][0]|lower }} as set. Read the wrong way, a day's documents land on the day next to it (one
+      day or month negative here, the next positive). {% if is_admin %}Choose Automatic in <a href="{{ url_for('dash.cogs_setup') }}#timing">Settings → COGS</a>.{% else %}An admin can
       change it in Settings → COGS.{% endif %}</li>{% endif %}
-    {% if timing.residual >= 1 %}<li>! <strong>Stock moved with no document:</strong> over the last {{ timing.days }} days,
-      {{ timing.residual|money }} of day-to-day stock changes (at average cost, in and out) isn't explained by any sale, purchase,
-      write-off or production order, most on {{ timing.residual_days[0].date|d }}. Something moves stock that Core doesn't see:
-      transfers to a location COGS doesn't count, credit notes or stock counts. {% if is_admin %}See the days and products in
+    {% if timing.residual >= 1 %}<li>! <strong>Stock changes Core's documents don't explain:</strong> over the last {{ timing.days }} days,
+      {{ timing.residual|money }} of day-to-day stock changes (at average cost, in and out) isn't on any sale, purchase,
+      adjustment, transfer or production order Core reads, most on {{ timing.residual_days[0].date|d }}: a document dated on
+      another day than it moved stock, or a kind Core doesn't read (a stock count completed in Unleashed). {% if is_admin %}See the days and products in
       <a href="{{ url_for('dash.cogs_setup') }}#timing">Settings → COGS</a>.{% endif %}</li>{% endif %}
     {% for o in f.partly_received %}<li>! <a href="{{ url_for('dash.purchase_detail', number=o.number) }}">{{ o.number }}</a> was received
       only in part. COGS counts its whole value, so {{ o.value|money }} not received counts as used.</li>{% endfor %}

@@ -328,8 +328,10 @@ depends on the account: the end or start of the day here, in UTC or in New
 Zealand time. Settings → COGS checks each reading against every day of last
 month and this month, product by product (each day's change in stock against the
 sales completed, purchases received, write-offs and production orders between,
-using their times of day), and says which matches. COGS then takes the date
-nearest midnight and adds or takes away the documents in between, so every sale
+using their times of day), and says which matches. COGS reads it that way
+automatically, checked again whenever the copy changes (**Automatic**, the default; an
+admin can fix one reading instead, and the page says if a fixed one explains clearly less).
+COGS then takes the date nearest midnight and adds or takes away the documents in between, so every sale
 lands in the month it was completed. The current stock is read at the start of
 each sync, before the documents, and what they moved after it is added. Sales and
 production orders count in the month they're completed, however long before

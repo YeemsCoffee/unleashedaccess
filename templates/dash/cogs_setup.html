@@ -31,23 +31,32 @@
       write-offs, production) don't explain, read each way. The right way explains the most.</p>{% endif %}
     <div class="table-wrap"><table class="cutoff-table">
       <thead><tr><th></th><th>Unleashed's stock as at a date is</th>{% if timing.days %}<th class="num">Not explained</th>{% endif %}</tr></thead>
-      <tbody>{% for key, c in cutoffs.items() %}
-      <tr class="{{ 'row-best' if key == timing.verdict }}">
-        <td><input type="radio" name="stock_as_at" value="{{ key }}" id="cut-{{ key }}" {{ 'checked' if settings.stock_as_at == key }}></td>
-        <td><label for="cut-{{ key }}">{{ c[0] }}</label>{% if key == timing.verdict %} <span class="pill pill-ok">Matches the documents</span>{% elif timing.verdict and (timing.scores[key] - timing.scores[timing.verdict])|abs <= timing.scores[timing.verdict] * 0.01 + 0.01 %} <span class="pill" title="The documents' times can't tell this apart from the one that matches">Same, on these documents</span>{% endif %}</td>
+      <tbody>
+      <tr>
+        <td><input type="radio" name="stock_as_at" value="auto" id="cut-auto" {{ 'checked' if timing.auto }}></td>
+        <td><label for="cut-auto"><strong>Automatic</strong>: whichever explains the documents best, checked again with every sync</label>
+          {% if timing.best %}<div class="muted small">Now: {{ cutoffs[timing.best][0]|lower }}</div>{% endif %}</td>
+        {% if timing.days %}<td class="num">{{ timing.scores[timing.best]|money if timing.best else '' }}</td>{% endif %}</tr>
+      {% for key, c in cutoffs.items() %}
+      <tr class="{{ 'row-best' if key == timing.best and timing.verdict }}">
+        <td><input type="radio" name="stock_as_at" value="{{ key }}" id="cut-{{ key }}" {{ 'checked' if not timing.auto and timing.in_use == key }}></td>
+        <td><label for="cut-{{ key }}">{{ c[0] }}</label>{% if key == timing.verdict %} <span class="pill pill-ok">Matches the documents</span>{% elif timing.verdict and timing.scores[key] <= timing.scores[timing.verdict] * 1.25 + 0.01 %} <span class="pill" title="The documents can't tell this apart from the one that matches: little moves in the hours between them">About the same, on these documents</span>{% endif %}</td>
         {% if timing.days %}<td class="num">{{ timing.scores[key]|money }}</td>{% endif %}</tr>
       {% endfor %}</tbody>
     </table></div>
-    {% if timing.verdict %}<p class="recon {{ 'recon-ok' if timing.verdict == settings.stock_as_at else 'recon-warn' }}">
-      {{ '✓' if timing.verdict == settings.stock_as_at else '!' }} Checked against the last {{ timing.days }} days: Unleashed's
-      stock matches the documents when read as <strong>{{ timing.label|lower }}</strong>.{{ '' if timing.verdict == settings.stock_as_at else ' Choose it above and save.' }}</p>
-    {% elif timing.days %}<p class="muted small">Too close to tell from the last {{ timing.days }} days: the readings explain about
+    {% if timing.verdict %}<p class="recon {{ 'recon-ok' if timing.in_use_ok else 'recon-warn' }}">
+      {{ '✓' if timing.in_use_ok else '!' }} Checked against the last {{ timing.days }} days: Unleashed's
+      stock matches the documents when read as <strong>{{ timing.label|lower }}</strong>.
+      {% if timing.auto %}COGS reads it that way.{% elif timing.in_use_ok %}The reading chosen ({{ cutoffs[timing.in_use][0]|lower }}) explains about as much.
+      {% else %}COGS is set to read it as {{ cutoffs[timing.in_use][0]|lower }}, which leaves {{ timing.scores[timing.in_use]|money }} unexplained:
+      choose Automatic above and save.{% endif %}</p>
+    {% elif timing.days %}<p class="muted small">Too close to tell from the last {{ timing.days }} days: every reading explains about
       the same.</p>{% endif %}
     {% if timing.residual_days %}
-    <h3>Stock that changed with no document</h3>
-    <p class="muted">Read {{ 'that' if timing.verdict else 'the chosen' }} way, these days' stock changed by more or less than their
-      documents say: something moved stock that Core doesn't see (a transfer to a location COGS doesn't count, a credit
-      note, a stock count, a document dated on another day) or a document was changed after the stock was read. Positive:
+    <h3>Stock changes the documents Core reads don't explain</h3>
+    <p class="muted">Read {{ cutoffs[timing.in_use][0]|lower }}, these days' stock changed by more or less than their
+      documents say: a document dated on another day than it moved stock, a kind Core doesn't read (a stock count completed
+      in Unleashed), or a document changed after the stock was read. Positive:
       more stock than the documents explain; negative: less.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Day</th><th>Products</th><th class="num">Not explained</th></tr></thead>

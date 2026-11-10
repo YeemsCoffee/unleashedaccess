@@ -780,6 +780,8 @@ def cogs_setup():
         store.set_state(COGS_STORES, json.dumps(stores))
         if request.form.get("stock_as_at") in STOCK_CUTOFFS:
             store.set_state(COGS_STOCK_AS_AT, request.form["stock_as_at"])
+        elif request.form.get("stock_as_at") == "auto":
+            store.set_state(COGS_STOCK_AS_AT, "")
         if request.form.get("charges_shown"):
             product_codes = {p.get("ProductCode") for p in r.products()}
             store.set_state(COGS_CHARGES, json.dumps([c for c in dict.fromkeys(request.form.getlist("charge"))

@@ -39,9 +39,11 @@ CURRENT = "current"
 COGS_WAREHOUSE, COGS_WAREHOUSE_READY, COGS_STORES = "cogs_warehouse", "cogs_warehouse_ready", "cogs_stores"
 # Products that are charges on purchase orders (freight, fuel surcharge), not stock.
 COGS_CHARGES = "cogs_charge_products"
-# Which part of a day Unleashed's stock "as at" that date shows: "end" (Core's first
-# assumption) or "start" (it leaves out that day's sales and receipts).
-COGS_STOCK_AS_AT = "cogs_stock_as_at"
+# Which part of a day Unleashed's stock "as at" that date shows (the end of that day, its
+# start, in which time zone), when an admin has fixed it. Unset, Core works it out from the
+# documents (reports.stock_timing). An earlier key, "cogs_stock_as_at", was saved as "end"
+# with every COGS settings save whether chosen or not, so it's no longer read.
+COGS_STOCK_AS_AT = "cogs_stock_reading"  # a reports.STOCK_CUTOFFS key; unset: automatic
 
 
 def warehouse_codes(value):
@@ -59,7 +61,7 @@ def cogs_settings(store):
     ready = bool(chosen) and set(chosen) <= set(warehouse_codes(store.get_state(COGS_WAREHOUSE_READY)))
     return {"warehouses": chosen if ready else None, "pending": chosen if chosen and not ready else None,
             "stores": json.loads(store.get_state(COGS_STORES) or "[]"),
-            "stock_as_at": store.get_state(COGS_STOCK_AS_AT) or "end",
+            "stock_as_at": store.get_state(COGS_STOCK_AS_AT) or "auto",
             "charges": json.loads(store.get_state(COGS_CHARGES) or "[]")}
 
 

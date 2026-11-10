@@ -248,7 +248,9 @@ class ReportsTests(unittest.TestCase):
             if truth != "end":  # read the wrong way, COGS is off and some of it "not on an order"
                 self.assertNotAlmostEqual(r.cogs(october)["cogs"], october_sales, places=2)
                 self.assertGreater(timing["scores"]["end"], 0)
-            self.assertEqual(timing["residual"], 0)  # read the right way, every day's change is explained
+            # What's left unexplained is for the reading in use: none when that's the right one.
+            self.assertEqual(timing["residual"] == 0, truth == "end")
+            self.assertEqual(timing["in_use_ok"], truth == "end")
             r.settings = dict(r.settings, stock_as_at=truth)
             for month, expected in ((october, october_sales), (today, november_sales)):
                 c = r.cogs(month, daily=True)
@@ -265,6 +267,27 @@ class ReportsTests(unittest.TestCase):
 
             def current_stock_at(self):
                 return self.read_at
+
+        # Left on automatic (nothing chosen), Core reads it the way that matches, whichever it is.
+        for truth in ("end", "start", "nz_end"):
+            r = Account(None, today_fn=lambda: today)
+            r.truth = truth
+            r.settings = dict(r.settings, stock_as_at="auto")
+            timing = r.stock_timing()
+            self.assertEqual((r.stock_reading(), timing["in_use"], timing["auto"], timing["in_use_ok"]),
+                             (truth, truth, True, True))
+            self.assertEqual(timing["residual"], 0)  # read the right way, every day's change is explained
+            for month, expected in ((october, october_sales), (today, november_sales)):
+                c = r.cogs(month)
+                self.assertAlmostEqual(c["cogs"], expected, places=6, msg=(truth, month))
+                self.assertTrue(all(abs(d["value"]) < 1e-6 for d in r.daily_unexplained(c)["days"]), truth)
+        # Fixed on the wrong one, the check says so (and when two readings explain about the same,
+        # being close to the best isn't a reason to stay quiet about one that's far off).
+        r = Account(None, today_fn=lambda: today)
+        r.truth = "start"
+        r.settings = dict(r.settings, stock_as_at="end")
+        timing = r.stock_timing()
+        self.assertEqual((timing["best"], timing["in_use"], timing["auto"], timing["in_use_ok"]), ("start", "end", False, False))
 
         r = Account(Synced(), today_fn=lambda: today)
         r.settings = dict(r.settings, stock_as_at="end")
@@ -2357,12 +2380,24 @@ class StoreSyncTests(unittest.TestCase):
         reports = app.extensions["unleashed"]["reports"]
         self.assertIsNotNone(app.extensions["unleashed"]["store_client"].current_stock_at())  # COGS lines documents up with it
         self.assertEqual(reports.stock_timing()["verdict"], "end")
+        # Nothing chosen: Core reads it the way that matches the documents, and says which.
+        self.assertEqual((reports.cogs_settings()["stock_as_at"], reports.stock_reading()), ("auto", "end"))
         page = app.test_client().get("/settings/cogs").get_data(as_text=True)
-        self.assertIn("✓ Checked against the last", page)
-        self.assertIn('name="stock_as_at" value="end" id="cut-end" checked', page)
+        for text in ("✓ Checked against the last", 'name="stock_as_at" value="auto" id="cut-auto" checked',
+                     "Now: the end of that day", "COGS reads it that way"):
+            self.assertIn(text, page)
+        self.assertNotIn('id="cut-end" checked', page)
+        # An "end" saved by the settings form before there was an automatic isn't taken as a choice.
+        LocalStore(self.app_db).set_state("cogs_stock_as_at", "start")
+        self.assertEqual(reports.stock_reading(), "end")
         app.test_client().post("/settings/cogs", data={"stock_as_at": "start"})
-        self.assertEqual(reports.cogs_settings()["stock_as_at"], "start")
-        self.assertIn("Choose it above and save", app.test_client().get("/settings/cogs").get_data(as_text=True))
+        self.assertEqual((reports.cogs_settings()["stock_as_at"], reports.stock_reading()), ("start", "start"))
+        wrong = app.test_client().get("/settings/cogs").get_data(as_text=True)
+        self.assertIn("choose Automatic above and save", wrong)
+        self.assertIn('id="cut-start" checked', wrong)
+        self.assertIn("Choose Automatic in", app.test_client().get("/cogs/not-on-an-order").get_data(as_text=True))
+        app.test_client().post("/settings/cogs", data={"stock_as_at": "auto"})
+        self.assertEqual((reports.cogs_settings()["stock_as_at"], reports.stock_reading()), ("auto", "end"))
 
     def test_orders_completed_or_deleted_in_unleashed_catch_up(self):
         app = self._app()

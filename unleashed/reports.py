@@ -814,12 +814,25 @@ class Reports:
 
     # ------------------------------------------------------------ stock at a moment
 
+    def stock_reading(self):
+        """How Unleashed's stock "as at" a date is read (a STOCK_CUTOFFS key): the one chosen in
+        Settings -> COGS, or on automatic (the default) the one that explains the last weeks'
+        documents best (stock_timing), worked out again whenever the copy changes."""
+        settings = self.cogs_settings()
+        chosen = settings.get("stock_as_at")
+        if chosen in STOCK_CUTOFFS:
+            return chosen
+        try:
+            return self.stock_timing(settings.get("warehouses"))["best"] or "end"
+        except UnleashedError:  # a day's stock isn't in the copy yet
+            return "end"
+
     def _snapshot_for(self, day):
         """(date to ask Unleashed's stock "as at", the moment that stock is at) for the stock
         at the end of `day`: the date whose stock is nearest that moment (cogs_settings
         "stock_as_at", STOCK_CUTOFFS). (None, None): the stock now, when the nearest date is
         today or later (its stock is only had as it is now)."""
-        key = self.cogs_settings().get("stock_as_at") or "end"
+        key = self.stock_reading()
         target = end_of_day(day)
         best = min((day + dt.timedelta(days=k) for k in (-1, 0, 1, 2)),
                    key=lambda d: abs((stock_cutoff(key, d) - target).total_seconds()))
@@ -927,7 +940,10 @@ class Reports:
         else:
             flows = self._flows(day, day, warehouses) if flows is None else flows
             if cut is None:  # the stock as it was read today: take away what moved since midnight
-                moves = [dict(m, qty=-m["qty"], value=-m["value"]) for m in self._between(flows, target, read_at)]
+                # A document dated today with no time of day is in that stock too (it was in
+                # Unleashed when the copy was made), whenever in the day it's taken to be.
+                moves = [dict(m, qty=-m["qty"], value=-m["value"]) for m in self._between(flows, target, None)
+                         if read_at is None or m["at"] <= read_at or not m.get("timed")]
             elif cut < target:
                 moves = self._between(flows, cut, target)
             elif cut > target:
@@ -964,14 +980,26 @@ class Reports:
         each day of last month and this month against each day's documents, product by
         product: for each way of reading it (STOCK_CUTOFFS), the stock (at average cost) whose
         daily change the documents don't explain. The right reading explains the most:
-        {"days", "scores": {key: $}, "verdict": key or None (too close to tell), "label",
-        "residual": $ unexplained read the best way, "residual_days": the days most of it is
-        on, with their products}."""
+        {"days", "scores": {key: $}, "best": the reading that explains the most, "verdict": it,
+        or None when every reading explains about the same, "label", "in_use": the reading COGS
+        uses, "auto": whether that's chosen automatically, "in_use_ok": whether it explains
+        about as much as the best, "residual": $ unexplained read the way in use,
+        "residual_days": the days most of it is on, with their products}."""
+        chosen = self.cogs_settings().get("stock_as_at")
+        chosen = chosen if chosen in STOCK_CUTOFFS else None
+        memo = getattr(self.client, "memo", None)
+        key = ("stock_timing", self.today, warehouses and tuple(warehouses), chosen)
+        found = memo(key, lambda: self._stock_timing(warehouses, chosen)) if memo else \
+            self._stock_timing(warehouses, chosen)
+        return dict(found)
+
+    def _stock_timing(self, warehouses, chosen):
         today, first = self.today, add_months(month_start(self.today), -1)
         days = [first + dt.timedelta(days=i) for i in range(1, (today - first).days - 1)]
         if len(days) < 5:
             return {"days": 0, "scores": {}, "verdict": None, "label": None, "residual": 0.0,
-                    "residual_days": [], "end": 0.0, "start": 0.0}
+                    "residual_days": [], "end": 0.0, "start": 0.0, "best": None, "in_use": chosen or "end",
+                    "auto": chosen is None, "in_use_ok": True}
         dates = [days[0] - dt.timedelta(days=1)] + days
 
         def stock(d):
@@ -1016,10 +1044,14 @@ class Reports:
         scores = {key: sum(abs(v) for _, found in gaps(key) for _, v in found.values()) for key in STOCK_CUTOFFS}
         ranked = sorted(STOCK_CUTOFFS, key=lambda k: scores[k])  # ties keep STOCK_CUTOFFS' order
         best = ranked[0]
-        different = [scores[k] for k in ranked[1:] if scores[k] > scores[best] * 1.01 + 0.01]
-        verdict = best if scores[best] < 0.01 or (different and scores[best] <= 0.8 * different[0]) else None
+        # Two readings a few hours apart can explain almost the same (little moves overnight): the
+        # best still stands, as long as some reading is clearly worse. None: they're all alike.
+        def close(k):
+            return scores[k] <= scores[best] * 1.25 + 0.01
+        verdict = best if scores[best] < 0.01 or not all(close(k) for k in STOCK_CUTOFFS) else None
+        in_use = chosen or best
         residual_days = []
-        for day, found in gaps(verdict or (self.cogs_settings().get("stock_as_at") or "end")):
+        for day, found in gaps(in_use):
             total = sum(v for _, v in found.values())
             if found:
                 top = sorted(found.items(), key=lambda kv: -abs(kv[1][1]))[:5]
@@ -1027,7 +1059,8 @@ class Reports:
                                       "products": [{"product_code": c, "description": names.get(c), "qty": q,
                                                     "value": v} for c, (q, v) in top]})
         residual_days.sort(key=lambda r: -r["abs"])
-        return {"days": len(days), "scores": scores, "verdict": verdict,
+        return {"days": len(days), "scores": scores, "verdict": verdict, "best": best, "in_use": in_use,
+                "auto": chosen is None, "in_use_ok": close(in_use),
                 "label": STOCK_CUTOFFS[verdict][0] if verdict else None,
                 "residual": sum(r["abs"] for r in residual_days), "residual_days": residual_days[:10],
                 "end": scores["end"], "start": scores["start"]}
