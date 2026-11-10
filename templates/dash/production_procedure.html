@@ -10,6 +10,10 @@
         <td><input class="short" type="number" step="any" name="f-{{ i }}-{{ j }}-min" value="{{ f.min|plain }}" aria-label="Lowest acceptable"></td>
         <td><input class="short" type="number" step="any" name="f-{{ i }}-{{ j }}-max" value="{{ f.max|plain }}" aria-label="Highest acceptable"></td>
         <td><input type="checkbox" name="f-{{ i }}-{{ j }}-required" value="1" {{ 'checked' if f.required }} aria-label="Required"></td>
+        <td><select name="f-{{ i }}-{{ j }}-component" aria-label="Counts as used of">
+            <option value="">Nothing: just recorded</option>
+            {% for l in b.lines %}<option value="{{ l.product_code }}" {{ 'selected' if f.component == l.product_code }}>{{ l.description or l.product_code }}{% if l.unit %} ({{ l.unit }}){% endif %}</option>{% endfor %}</select></td>
+        <td><input class="short" type="number" step="any" min="0" name="f-{{ i }}-{{ j }}-factor" value="{{ (f.factor if f.factor is defined and f.factor else 1)|plain }}" aria-label="Multiply by, to get Unleashed's unit"></td>
       </tr>
 {%- endmacro %}
 
@@ -30,7 +34,9 @@
     <input type="hidden" name="fields-{{ i }}" value="{{ s.fields|length }}" data-field-count>
     <div class="block"><span>To record at this step</span>
     <div class="table-wrap"><table class="proc-fields">
-      <thead><tr><th>Field</th><th>Type</th><th>Unit</th><th>Min</th><th>Max</th><th>Required</th></tr></thead>
+      <thead><tr><th>Field</th><th>Type</th><th>Unit</th><th>Min</th><th>Max</th><th>Required</th>
+        <th title="The number entered counts as how much of this component was used">Counts as used of</th>
+        <th title="What to multiply the number by to get the component's unit in Unleashed: 1 if they're the same, 0.001 for grams when Unleashed counts kg">× to Unleashed's unit</th></tr></thead>
       <tbody data-fields>{% for f in s.fields %}{{ field_row(i, loop.index0, f) }}{% endfor %}</tbody>
     </table></div>
     <div><button type="button" class="btn" data-add-field hidden>+ Add a field</button></div></div>
@@ -54,7 +60,10 @@
 </div>
 <p class="muted">What production techs see when they open a production order for this product: your notes, then each
   step in order with its instructions, the components it uses, and what to record at it (a weight, a temperature, a
-  check). Clear a step's name to remove the step, or a field's label to remove the field. Orders already being recorded
+  check). <strong>A weight tells Unleashed how much was used</strong>: choose the component it counts as, and what to
+  multiply it by to get the component's unit in Unleashed (1 if the scale and Unleashed use the same unit; 0.001 for
+  grams when Unleashed counts kilograms; 0.2 for pounds when Unleashed counts 5 lb bags). Several weights can count
+  for one component: they add up. A component no weight counts for is sent at the recipe's amount for what was made. Clear a step's name to remove the step, or a field's label to remove the field. Orders already being recorded
   keep the procedure they started with.</p>
 <form method="post" class="proc" enctype="multipart/form-data">
   <input type="hidden" name="rows" value="{{ steps|length }}" data-step-count data-max-steps="{{ max_steps }}"
@@ -73,7 +82,8 @@
   <template id="proc-field-template">{{ field_row('__I__', '__J__', blank_field) }}</template>
 
   <p class="muted">Min and max are the acceptable range for a number: entries outside it are flagged on the order and at
-    close-out. A required yes/no field must be ticked to save the step. Empty steps and fields are left out when you
+    close-out. A required yes/no field must be ticked to save the step, and a weight that counts as a component's usage
+    always has to be entered (0 if none was used). Empty steps and fields are left out when you
     save. Pictures (PNG, JPEG, GIF or WebP, up to {{ max_pictures }} a step) are made smaller before they're sent;
     tap one to see it full size.</p>
   <div class="run-actions">

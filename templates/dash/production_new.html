@@ -11,7 +11,8 @@
 {% if error and error != write_problem %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card">
   <p class="muted">The order is started in Unleashed as a parked assembly: Unleashed numbers it and fills in its
-    components from the bill of materials. Your team then records what's actually used at each step and closes it out.
+    components from the bill of materials. Your team records each step as it's done, and how much was made is entered
+    at the end, when the order is completed.
     {% if warehouses|length > 1 %}Components are taken from the <strong>From</strong> warehouse, and what's made goes
     into the <strong>To</strong> warehouse.{% endif %}</p>
   <div class="filters new-order">
@@ -20,8 +21,6 @@
         <option value="">Choose…</option>
         {% for code, desc in products.items() %}<option value="{{ code }}" {{ 'selected' if code == product }}>{{ desc or code }} ({{ code }})</option>{% endfor %}
       </select></label>
-    <label>Quantity to make
-      <input type="number" name="qty" value="{{ qty }}" min="0" step="any" inputmode="decimal" required></label>
     <label>Assemble by
       <input type="date" name="assemble_by" value="{{ due.isoformat() }}" required></label>
     {% if warehouses|length > 1 %}
@@ -40,24 +39,21 @@
   {% if not products %}<p class="muted">No products have a current bill of materials in Unleashed, so there's nothing to make yet.</p>{% endif %}
 
   {% if preview %}
-  <h2>Components needed</h2>
+  <h2>Recipe for 1</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th><th class="num">Available now</th><th class="num">Short</th><th class="num">Cost</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">For 1 made</th><th class="num">Of which wastage</th><th class="num">Available now</th><th class="num" title="How many the stock available now would make">Enough for</th></tr></thead>
     <tbody>{% for r in preview.rows %}
     <tr class="{{ 'row-warn' if r.short > 0.000001 }}"><td>{{ r.product_code }}</td><td>{{ r.description }}</td>
       <td class="num">{{ r.need|qty }}</td><td class="num">{{ r.wastage|qty }}</td><td class="num">{{ r.available|qty }}</td>
-      <td class="num">{{ r.short|qty if r.short > 0.000001 else '' }}</td><td class="num">{{ r.cost|money }}</td></tr>
+      <td class="num">{{ (r.available / r.need)|round(1, 'floor')|qty if r.need > 0 and r.available > 0 else ('0' if r.need > 0 else '—') }}</td></tr>
     {% endfor %}</tbody>
-    <tfoot><tr><td colspan="6">Planned component cost, at today's average costs ({{ preview.bom.number }})</td><td class="num">{{ preview.cost|money }}</td></tr></tfoot>
   </table></div>
-  {% if preview.short %}<p class="recon recon-warn">! Available stock doesn't cover every component. You can still start the
-    order; Material requirements shows what's short across all open orders.</p>
-  {% else %}<p class="muted">Available stock covers it. That's on hand less what Unleashed has set aside for sales
-    orders and other open production orders.</p>{% endif %}
+  <p class="muted small">From {{ preview.bom.number }}. Available is on hand less what Unleashed has set aside for sales orders and
+    other open production orders. Until this order is completed, Unleashed sets aside components for 1.</p>
   {% endif %}
 
   <div class="run-actions">
-    <button class="btn" formmethod="get" name="check" value="1">Check materials</button>
+    <button class="btn" formmethod="get" formnovalidate>Show the recipe</button>
     <button class="btn btn-primary" {{ 'disabled' if write_problem or not products }}>Start order in Unleashed</button>
   </div>
 </form>

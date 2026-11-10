@@ -11,18 +11,18 @@
     what you made goes in{{ ', in the batches below' if batch_tracked }}. Unleashed doesn't let a completed assembly be
     edited or reversed.</p>
   <div class="filters close-fields">
-    <label>Planned
-      <span class="yield-out">{{ o.qty|qty }}</span></label>
+    {% if not run.no_quantity %}<label>Planned
+      <span class="yield-out">{{ o.qty|qty }}</span></label>{% endif %}
     <label>{{ o.description or o.product_code }} made
-      <input id="made" type="number" name="made" value="{{ made if made is not none else o.qty|plain }}" min="0" step="any" inputmode="decimal" required autofocus></label>
-    <label>Product yield
-      <output class="yield-out" data-yield data-flag data-num="1" data-den="{{ o.qty|plain }}">{{ 1|pct }}</output></label>
+      <input id="made" type="number" name="made" value="{{ made if made is not none else ('' if run.no_quantity else o.qty|plain) }}" min="0" step="any" inputmode="decimal" required autofocus></label>
+    {% if not run.no_quantity %}<label>Product yield
+      <output class="yield-out" data-yield data-flag data-num="1" data-den="{{ o.qty|plain }}">{{ 1|pct }}</output></label>{% endif %}
     <label>Completed on
       <input type="date" name="date" value="{{ date or today.isoformat() }}" max="{{ today.isoformat() }}" required></label>
   </div>
-  <p class="muted">Enter what the batch actually made. <strong>Product yield</strong> is made ÷ planned. Each
-    material's <strong>yield</strong> (below) is what the recipe calls for to make that much, wastage allowance
-    included, ÷ what your team recorded using: under 100% means more was used than the recipe allows.</p>
+  <p class="muted">Enter what the batch actually made.{% if not run.no_quantity %} <strong>Product yield</strong> is made ÷ planned.{% endif %}
+    Each material's <strong>yield</strong> (below) is what the recipe calls for to make that much, wastage allowance
+    included, ÷ what your team weighed: under 100% means more was used than the recipe allows.</p>
   {% if run.out_of_range %}
   <p class="recon recon-warn">! Recorded outside the procedure's target:
     {% for f in run.out_of_range %}{{ f.label }} at {{ f.step }} was {{ f.value|qty }}{{ ' ' ~ f.unit if f.unit }} (target {{ f.target }}){{ '; ' if not loop.last }}{% endfor %}.
@@ -48,16 +48,23 @@
 
   <h2>Components to send</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Unleashed's calculation</th><th class="num">Your team recorded</th><th class="num">Difference</th><th class="num">Material yield</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe for 1 made</th><th class="num">Used</th><th>From</th><th class="num">Material yield</th></tr></thead>
     <tbody>{% for t in run.totals %}{% set pu = per_unit.get(t.product_code) %}
-    <tr class="{{ 'row-warn' if t.difference|abs > 0.0005 }}"><td>{{ t.product_code }}</td><td>{{ t.description }}</td>
-      <td class="num">{{ t.recipe|qty }}</td><td class="num"><strong>{{ t.recorded|qty }}</strong></td>
-      <td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td>
-      <td class="num">{% if pu and t.recorded %}<output data-yield data-flag data-num="{{ pu|plain }}" data-den="{{ t.recorded|plain }}">{{ (o.qty * pu / t.recorded)|pct }}</output>{% else %}—{% endif %}</td></tr>
+    <tr><td>{{ t.product_code }}</td><td>{{ t.description }}</td>
+      <td class="num">{{ t.per_unit|qty }}</td>
+      {% if t.source == 'recipe' %}
+      <td class="num"><strong><output data-used data-per="{{ t.per_unit|plain }}">—</output></strong></td>
+      <td class="muted small">Not weighed: the recipe's amount for what was made</td><td class="num">—</td>
+      {% else %}
+      <td class="num"><strong>{{ t.recorded|qty }}</strong></td>
+      <td class="muted small">{{ t.fields|join(', ') if t.source == 'weights' else 'Entered at the steps' }}</td>
+      <td class="num">{% if pu and t.recorded %}<output data-yield data-flag data-num="{{ pu|plain }}" data-den="{{ t.recorded|plain }}">—</output>{% else %}—{% endif %}</td>
+      {% endif %}</tr>
     {% endfor %}</tbody>
   </table></div>
-  <p class="muted">Each component's total over the saved steps, wastage included, becomes its quantity used in Unleashed
-    (with wastage 0). The assembly date becomes the date above.</p>
+  <p class="muted">Each component's quantity used in Unleashed becomes the amount above (wastage included, so wastage is sent
+    as 0): what was weighed at the steps, or for a component nothing weighs, the recipe's amount for the quantity made. The
+    assembly date becomes the date above.</p>
   <div class="run-actions">
     <button class="btn btn-primary">Complete in Unleashed</button>
     <a class="btn" href="{{ url_for('dash.production_order', number=o.number) }}">Cancel</a>

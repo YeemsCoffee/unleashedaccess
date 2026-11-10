@@ -2,6 +2,7 @@
 {% from "dash/_macros.html" import status_pill, production_notice, complete_action, yield_pct %}
 {% block title %}{{ o.number }}{% endblock %}
 {% block content %}
+{% set unplanned = o.open and o.guid in no_qty %}
 <div class="page-head">
   <h1>Production order {{ o.number }} {{ status_pill(o.status) }}</h1>
   <a href="{{ url_for('dash.production_orders') }}">← Production orders</a>
@@ -11,7 +12,7 @@
   <dl class="facts">
     <div><dt>Product</dt><dd>{{ o.description }} ({{ o.product_code }})</dd></div>
     {% if o.planned_qty %}<div><dt>Planned</dt><dd>{{ o.planned_qty|qty }}</dd></div>{% endif %}
-    <div><dt>{{ 'Made' if o.completed else 'Quantity' }}</dt><dd>{{ o.qty|qty }}</dd></div>
+    <div><dt>{{ 'Made' if o.completed else 'Quantity' }}</dt><dd>{% if unplanned %}<span class="muted">Entered when it's completed</span>{% else %}{{ o.qty|qty }}{% endif %}</dd></div>
     {% if o.yield is not none %}<div><dt>Product yield</dt><dd title="Made ÷ planned">{{ yield_pct(o.yield) }}</dd></div>{% endif %}
     <div><dt>Assembly date</dt><dd>{{ o.date|d }}</dd></div>
     <div><dt>Assemble by</dt><dd>{{ o.due|d }}</dd></div>
@@ -28,10 +29,15 @@
     <tbody>{% for b in o.batches %}<tr><td>{{ b.number }}</td><td class="num">{{ b.qty|qty }}</td><td>{{ b.expiry|d }}</td></tr>{% endfor %}</tbody>
   </table></div>
   {% endif %}
-  {% if o.open %}
+  {% if unplanned %}
+  <p class="muted small">Unleashed needs a quantity to open an order, so it holds 1 until this one is completed: it has set
+    aside components for 1, and Material requirements counts it as 1.</p>
+  {% elif o.open %}
   <p class="recon {{ 'recon-warn' if o.short else 'recon-ok' }}">
     {% if o.short %}! Not enough stock for every component once orders due before this one take theirs (see Short
       below and Material requirements).{% else %}✓ Stock covers every component, after orders due before this one take theirs.{% endif %}</p>
+  {% endif %}
+  {% if o.open %}
   {% if can_check %}<form method="post" action="{{ url_for('dash.production_check') }}" class="run-actions">
     <input type="hidden" name="number" value="{{ o.number }}">
     <button class="btn" title="If it was completed or deleted in Unleashed, Core shows that now">Check with Unleashed</button>
@@ -47,9 +53,9 @@
     {% if editable %}<span class="muted">{{ run.steps|selectattr('done')|list|length }} of {{ run.steps|length }} steps saved</span>{% endif %}
   </div>
   {% if editable %}
-  <p class="muted">Work through each step, record what you used and what the step asks for, then save it. Completing
-    the order sends each component's total to Unleashed as the quantity used, in place of what Unleashed calculated
-    from the bill of materials, along with how much was made.</p>
+  <p class="muted">Work through each step, record what it asks for, then save it. Completing the order asks how much was
+    made, and sends Unleashed what was used: the weights recorded for each component, or for one nothing weighs, the
+    recipe's amount for what was made.</p>
   {{ complete_action(o, run, close_problem) }}
   {% endif %}
   {% if run.notes %}<div class="proc-notes"><h3>Before you start</h3><p class="instructions">{{ run.notes }}</p></div>{% endif %}
@@ -93,12 +99,10 @@
     </div>{% endif %}
     {% if s.rows %}
     <div class="table-wrap"><table>
-      <thead><tr><th class="wide-only">Component</th><th>Description</th><th class="num">Recipe<span class="wide-only"> (whole order)</span></th><th class="num">Used<span class="wide-only"> at this step</span></th></tr></thead>
+      <thead><tr><th class="wide-only">Component</th><th>Description</th><th class="num">Recipe for 1 made</th><th>Used</th></tr></thead>
       <tbody>{% for r in s.rows %}
-      <tr><td class="wide-only">{{ r.product_code }}</td><td>{{ r.description or r.product_code }}</td><td class="num">{{ r.recipe|qty }}</td>
-        <td class="num">{% if editable %}<input class="qty-input" type="number" name="qty:{{ r.product_code }}"
-          value="{{ r.qty|plain }}" min="0" step="any" inputmode="decimal" required
-          aria-label="{{ r.description or r.product_code }} used at {{ s.name }}">{% else %}{{ r.qty|qty }}{% endif %}</td></tr>
+      <tr><td class="wide-only">{{ r.product_code }}</td><td>{{ r.description or r.product_code }}</td><td class="num">{{ r.per_unit|qty }}</td>
+        <td class="muted small">{% if r.measured_by %}From {{ r.measured_by|join(', ') }} below{% elif r.qty is not none %}{{ r.qty|qty }} entered{% else %}The recipe's amount for what's made{% endif %}</td></tr>
       {% endfor %}</tbody>
     </table></div>
     {% elif not s.fields %}<p class="muted">Nothing to record at this step{{ ". Save it when it's done" if editable }}.</p>{% endif %}
@@ -112,6 +116,7 @@
         {% if f.type == 'number' %}<input class="qty-input" type="number" step="any" inputmode="decimal" name="field:{{ f.id }}" value="{{ f.value|plain }}" {{ 'required' if f.required }}>
         {% else %}<input class="text-input" name="field:{{ f.id }}" value="{{ f.value or '' }}" maxlength="500" {{ 'required' if f.required }}>{% endif %}
         {% if f.target %}<span class="field-target{{ ' over' if f.out_of_range }}">{{ ('Outside target (' ~ f.target ~ ')') if f.out_of_range else ('Target: ' ~ f.target) }}</span>{% endif %}
+        {% if f.measures %}<span class="field-target">Counts as {{ f.measures }} used</span>{% endif %}
       </label>
       {% endif %}
     {% endfor %}</div>
@@ -130,12 +135,13 @@
   {% endfor %}
 
   {% if o.open %}
-  <h3 class="run-totals">Totals</h3>
+  <h3 class="run-totals">What's been used</h3>
   <div class="table-wrap"><table>
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Unleashed's calculation</th><th class="num">Recorded so far</th><th class="num">Difference</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">Recipe for 1 made</th><th class="num">Recorded so far</th><th>From</th></tr></thead>
     <tbody>{% for t in run.totals %}
-    <tr><td>{{ t.product_code }}</td><td>{{ t.description }}</td><td class="num">{{ t.recipe|qty }}</td>
-      <td class="num">{{ t.recorded|qty }}</td><td class="num">{{ ('+' if t.difference > 0.0005 else '') ~ (t.difference|qty) }}</td></tr>
+    <tr><td>{{ t.product_code }}</td><td>{{ t.description }}</td><td class="num">{{ t.per_unit|qty }}</td>
+      <td class="num">{{ t.recorded|qty if t.recorded is not none else '—' }}</td>
+      <td class="muted small">{% if t.source == 'weights' %}{{ t.fields|join(', ') }}{% elif t.source == 'typed' %}Entered at the steps{% else %}Not weighed: the recipe's amount for what's made, worked out when it's completed{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table></div>
   {% if editable %}{{ complete_action(o, run, close_problem) }}{% endif %}
@@ -164,14 +170,14 @@
       {% endif %}
     </tfoot>
     {% else %}
-    <thead><tr><th>Component</th><th>Description</th><th class="num">Needed</th><th class="num">Of which wastage</th>{% if o.open %}<th class="num" title="On hand, less what's set aside for sales orders and production orders due before this one">Available to it</th><th class="num">Short</th>{% endif %}<th class="num">Unit cost</th><th class="num">Planned cost</th></tr></thead>
+    <thead><tr><th>Component</th><th>Description</th><th class="num">{{ 'For 1 made' if unplanned else 'Needed' }}</th><th class="num">Of which wastage</th>{% if o.open %}<th class="num" title="On hand, less what's set aside for sales orders and production orders due before this one">Available to it</th><th class="num">Short</th>{% endif %}<th class="num">Unit cost</th><th class="num">Planned cost</th></tr></thead>
     <tbody>{% for c in o.components %}
     <tr class="{{ 'row-warn' if c.short }}"><td>{{ c.product_code }}</td><td>{{ c.description }}</td>
       <td class="num">{{ c.consumed|qty }}</td><td class="num">{{ c.wastage|qty }}</td>
       {% if o.open %}<td class="num">{{ c.available|qty if c.available is not none else '—' }}</td><td class="num">{{ c.short|qty if c.short else '' }}</td>{% endif %}
       <td class="num">{{ c.unit_cost|money }}</td><td class="num">{{ c.cost|money }}</td></tr>
     {% else %}<tr><td colspan="8" class="muted">No components on this order, and no bill of materials for the product.</td></tr>{% endfor %}</tbody>
-    <tfoot><tr><td colspan="{{ 7 if o.open else 5 }}">Planned component cost{{ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td></tr></tfoot>
+    <tfoot><tr><td colspan="{{ 7 if o.open else 5 }}">{{ 'Recipe cost for 1' if unplanned else 'Planned component cost' ~ ' (' ~ (o.unit_cost|money) ~ ' per unit)' }}</td><td class="num">{{ o.cost|money }}</td></tr></tfoot>
     {% endif %}
   </table></div>
   {% if not o.completed %}<p class="muted">Planned cost is at today's average costs.</p>

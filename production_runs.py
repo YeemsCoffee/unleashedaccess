@@ -1,14 +1,18 @@
 """Production runs: production techs follow a product's operating procedure on each
-production order, recording what they use and the checks the procedure asks for
-(weights, temperatures, confirmations) step by step. Closing the order out sends the
-component totals to Unleashed as the quantities used (unleashed/assembly_writes.py).
+production order, recording what the procedure asks for (weights, temperatures,
+confirmations) step by step. Closing the order out sends Unleashed how much was made and
+what was used of each component (unleashed/assembly_writes.py): the weights recorded for
+it (a number field can count as a component's usage, times a conversion to Unleashed's
+unit), or for a component nothing measures, the recipe's amount for the quantity made.
+
+An order is opened without a quantity: Unleashed needs one, so it gets a placeholder of 1,
+and the quantity made is entered when the order is completed.
 
 Procedures are kept per made product (its bill of materials), since Unleashed has
 none: general notes, then steps, each with instructions, the components it uses and
 the fields to fill in, and pictures to show. A run keeps the procedure it started with, so
-editing a procedure doesn't change orders already being recorded. Components on the order that
-no step lists are recorded at the last step; a product without a procedure gets a
-single step with every component.
+editing a procedure doesn't change orders already being recorded. A product without a
+procedure gets a single step with nothing to record.
 
 A batch-tracked product's order also records the batches made (number, quantity,
 expiry), which close-out sends to Unleashed. If Unleashed doesn't keep them as sent,
@@ -23,6 +27,8 @@ import uuid
 from unleashed.store import utc_now
 
 DEFAULT_STEP = "Production"
+# Unleashed needs a quantity to open an assembly; this stands in until the order is completed.
+PLACEHOLDER_QUANTITY = 1
 FIELD_TYPES = {"number": "Number", "text": "Text", "check": "Yes / no"}
 # The most steps a procedure, and fields and pictures a step, can have.
 MAX_STEPS, MAX_FIELDS, MAX_PICTURES = 50, 30, 10
@@ -94,11 +100,17 @@ class ProductionRuns:
                     field_id = uuid.uuid4().hex[:8]
                 ids.add(field_id)
                 number = kind == "number"
+                # A number can count as a component's usage: value x factor, in Unleashed's unit.
+                component = (f.get("component") or "").strip() if number else ""
+                factor = _number(f.get("factor")) if component else None
                 fields.append({"id": field_id, "label": label[:100], "type": kind,
                                "unit": (f.get("unit") or "").strip()[:20] if number else "",
                                "min": _number(f.get("min")) if number else None,
                                "max": _number(f.get("max")) if number else None,
-                               "required": bool(f.get("required"))})
+                               "component": component,
+                               "factor": factor if factor and factor > 0 else 1.0,
+                               # What's sent to Unleashed as used has to be entered.
+                               "required": bool(f.get("required")) or bool(component)})
             pictures = [p for p in dict.fromkeys(int(p) for p in s.get("pictures") or [] if str(p).isdigit())
                         if p in owned][:MAX_PICTURES]
             clean.append({"name": name[:100], "instructions": (s.get("instructions") or "").strip()[:5000],
@@ -166,6 +178,22 @@ class ProductionRuns:
         run["sent"] = json.loads(run["sent"]) if run["sent"] else None
         return run
 
+    def open_order(self, guid, number, product_code):
+        """A production order just opened from Core without a quantity: its run starts now, with
+        the product's procedure as it is, marked so the placeholder isn't shown as planned."""
+        procedure = self.procedure_for(product_code)
+        steps = procedure["steps"] or [{"name": DEFAULT_STEP, "instructions": "", "components": [], "fields": []}]
+        self.db.execute(
+            "INSERT INTO prod_runs (assembly_guid, assembly_number, steps, status, updated_at, no_quantity)"
+            " VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT (assembly_guid) DO NOTHING",
+            (guid, number, json.dumps({"notes": procedure["notes"], "steps": steps}), RECORDING, utc_now()))
+
+    def no_quantity_guids(self):
+        """The orders opened without a quantity and not completed from here yet: Unleashed's
+        quantity for them is a placeholder."""
+        return {r["assembly_guid"] for r in self.db.query(
+            "SELECT assembly_guid FROM prod_runs WHERE no_quantity = 1 AND status NOT IN (?, ?)", (CLOSED, SENT))}
+
     def records(self, guid):
         entries = {r["step_index"]: json.loads(r["entries"]) for r in self.db.query(
             "SELECT step_index, entries FROM prod_step_entries WHERE assembly_guid = ?", (guid,))}
@@ -186,12 +214,16 @@ class ProductionRuns:
         definition = procedure["steps"] or [{"name": DEFAULT_STEP, "instructions": "",
                                              "components": [], "fields": []}]
         records = self.records(order["guid"]) if run else {}
+        no_quantity = bool(run and run.get("no_quantity"))
         # The recipe quantity: Unleashed's calculation while open; once completed or sent,
         # the components hold what was used, and "planned" holds the recipe.
         sent = order["completed"] or (run is not None and run["status"] == SENT)
+        batch = order.get("qty") or 1  # what Unleashed worked the recipe out for (1 without a quantity)
         components = {c["product_code"]: dict(c, recipe=c["planned"] if sent
                                               and c.get("planned") is not None else c["consumed"])
                       for c in order["components"]}
+        for c in components.values():
+            c["per_unit"] = (c["recipe"] or 0) / batch
         steps, listed = [], set()
         pictures = self._picture_ids(order["product_code"])  # a removed one stays while orders show it
         for i, s in enumerate(definition):
@@ -200,22 +232,31 @@ class ProductionRuns:
             steps.append({"index": i, "name": s["name"], "instructions": s["instructions"],
                           "codes": codes, "fields": s["fields"],
                           "pictures": [p for p in s.get("pictures", []) if p in pictures]})
-        steps[-1]["codes"] += [c for c in components if c not in listed]
-
-        recorded = {code: 0.0 for code in components}
+        # Which components a field measures, and what's been measured so far.
+        measured_by = {}
+        for s in steps:
+            for f in s["fields"]:
+                if f.get("component") in components:
+                    measured_by.setdefault(f["component"], []).append(f)
+        measured = {code: 0.0 for code in measured_by}
+        typed = {}  # quantities typed against a component, on orders recorded before weights counted
         current = None
         for s in steps:
             rec = records.get(s["index"])
             s["done"] = rec is not None
             s["by"], s["at"] = (rec["by"], rec["at"]) if rec else (None, None)
             s["rows"] = [{"product_code": code, "description": components[code]["description"],
-                          "recipe": components[code]["recipe"],
+                          "per_unit": components[code]["per_unit"], "recipe": components[code]["recipe"],
+                          "measured_by": [f["label"] for f in s["fields"] if f.get("component") == code],
                           "qty": rec["quantities"].get(code) if rec else None} for code in s["codes"]]
-            s["fields"] = [_field_view(f, rec["entries"].get(f["id"]) if rec else None)
+            s["fields"] = [_field_view(f, rec["entries"].get(f["id"]) if rec else None, components)
                            for f in s["fields"]]
+            for f in s["fields"]:
+                if f.get("component") in measured and f["value"] is not None:
+                    measured[f["component"]] += f["value"] * (f.get("factor") or 1.0)
             for code, qty in (rec["quantities"] if rec else {}).items():
-                if code in recorded:
-                    recorded[code] += qty
+                if code in components and qty is not None:
+                    typed[code] = typed.get(code, 0.0) + qty
             s["current"] = not rec and current is None
             if s["current"]:
                 current = s["index"]
@@ -224,38 +265,45 @@ class ProductionRuns:
             status, error = FAILED, ("Completing this order was interrupted before it finished. Check "
                                      "it in Unleashed, then complete it again.")
         # Steps that record something must be saved before completing; the others needn't be.
-        blocking = [s for s in steps if not s["done"]
-                    and (s["rows"] or any(f["required"] for f in s["fields"]))]
+        blocking = [s for s in steps if not s["done"] and any(f["required"] for f in s["fields"])]
+        totals = []
+        for code, c in components.items():
+            # From the weights recorded; else what was typed on an older order; else the recipe
+            # for however much is made (worked out when the order is completed).
+            source = "weights" if code in measured_by else "typed" if code in typed else "recipe"
+            used = measured[code] if source == "weights" else typed.get(code) if source == "typed" else None
+            totals.append({"product_code": code, "description": c["description"], "recipe": c["recipe"],
+                           "per_unit": c["per_unit"], "source": source, "recorded": used,
+                           "fields": [f["label"] for f in measured_by.get(code, [])]})
         return {
             "procedure": {"notes": procedure["notes"], "steps": definition},
-            "notes": procedure["notes"], "steps": steps, "started": run is not None,
+            "notes": procedure["notes"], "steps": steps, "started": bool(records),
+            "no_quantity": no_quantity,
             "status": status, "error": error, "locked": status in (CLOSING, CLOSED, SENT),
             "all_done": current is None, "blocking": blocking, "can_complete": not blocking,
             "closed_by": run["closed_by"] if run else None,
             "closed_at": run["closed_at"] if run else None, "sent": run["sent"] if run else None,
             "out_of_range": [dict(f, step=s["name"]) for s in steps for f in s["fields"]
                              if f["out_of_range"]],
-            "totals": [{"product_code": code, "description": c["description"], "recipe": c["recipe"],
-                        "recorded": recorded[code], "difference": recorded[code] - c["recipe"]}
-                       for code, c in components.items()],
+            "totals": totals,
         }
 
-    def save_step(self, order, index, quantities, entries, user):
-        """Record step `index`: {component code: quantity used} for all its components, and
-        {field id: value as entered} for the fields its procedure asks for."""
+    @staticmethod
+    def quantities(view, made):
+        """{component code: quantity used} to send Unleashed for `made` of the product: what was
+        measured (or typed, on an older order), or the recipe's amount for that many."""
+        return {t["product_code"]: t["recorded"] if t["source"] != "recipe" else t["per_unit"] * made
+                for t in view["totals"]}
+
+    def save_step(self, order, index, entries, user):
+        """Record step `index`: {field id: value as entered} for the fields its procedure asks
+        for. The weights among them are what was used (view's totals)."""
         view = self.view(order)
         step = next((s for s in view["steps"] if s["index"] == index), None)
         if step is None:
             raise RunError("That step isn't part of this order.")
-        values = {}
-        for row in step["rows"]:
-            qty = quantities.get(row["product_code"])
-            if qty is None:
-                raise RunError(f"Enter how much {row['description'] or row['product_code']} was used "
-                               "at this step (0 if none).")
-            if qty < 0:
-                raise RunError("Quantities can't be negative.")
-            values[row["product_code"]] = qty
+        # Quantities typed against components before weights counted stay with the step.
+        values = (self.records(order["guid"]).get(index) or {}).get("quantities") or {}
         checks = {f["id"]: _entry(f, entries.get(f["id"])) for f in step["fields"]}
         guid = order["guid"]
         with self.db.connect() as conn:
@@ -397,6 +445,8 @@ def _entry(field, raw):
             value = _number(text)
             if value is None:
                 raise RunError(f"{label} needs a number.")
+            if field.get("component") and value < 0:  # it's how much was used
+                raise RunError(f"{label} can't be negative.")
     else:
         value = (text or "")[:500] or None
     if field["required"] and value is None:
@@ -404,8 +454,9 @@ def _entry(field, raw):
     return value
 
 
-def _field_view(field, value):
+def _field_view(field, value, components=None):
     low, high, unit = field.get("min"), field.get("max"), field.get("unit") or ""
+    measures = (components or {}).get(field.get("component") or "")
     if low is not None and high is not None:
         target = f"{low:g}–{high:g}"
     elif low is not None:
@@ -416,4 +467,5 @@ def _field_view(field, value):
         target = ""
     out = field["type"] == "number" and value is not None and (
         (low is not None and value < low) or (high is not None and value > high))
-    return dict(field, value=value, out_of_range=out, target=f"{target} {unit}".strip() if target else "")
+    return dict(field, value=value, out_of_range=out, target=f"{target} {unit}".strip() if target else "",
+                measures=(measures.get("description") or field["component"]) if measures else None)

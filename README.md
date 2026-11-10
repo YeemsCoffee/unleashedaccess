@@ -56,7 +56,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 | Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail; make, change, complete (picking batches) and delete sales orders |
 | Warehouse → Transactions | Today's and yesterday's stock transactions, with **+ Adjustment**, **+ Stock count** and **+ Transfer**, and what's waiting to finish (open transfers, counts in progress). Under it: **History** (every receipt, production, sale, credit, supplier return, adjustment and transfer, loaded for the dates, type and product you choose), **Stock movement** (per product, with running balance, reconciled to stock on hand), **Adjustments**, **Transfers** and **Stock counts** |
 | Production → Overview | This month's production value, wastage, open orders and their material status, what was made and its unit cost against the recipe |
-| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders; on open ones, record what's used at each step, then complete them in Unleashed, with yield |
+| Production → Production orders | Assemblies by date, status and product; each order's components, recipe against actually used, and material variance. Start new orders (no quantity up front); on open ones, record each step's weights and checks, then complete them in Unleashed with how much was made, with yield |
 | Production → Material requirements | Open orders' component needs against available stock and incoming purchases; which orders are short |
 | Production → Bills of materials | Recipes with cost per unit at today's costs, how many stock can make now, last made, where a component is used |
 | Production → Component usage | Components used and wasted, and products made, over any period |
@@ -381,51 +381,62 @@ materials** (recipes), organised like an ERP's production module:
 
 Production orders can be started here or in Unleashed. **New production
 order** (Production overview, Production orders, or **Make it** on a bill of
-materials) takes the product, quantity, assemble-by date, the **From**
-warehouse (components are taken from it) and the **To** warehouse (what's made
-goes into it), and comments. It shows what the order needs against available
-stock in all warehouses (**Check materials**), and creates a parked assembly in
-Unleashed (`POST /Assemblies`, with `SourceWarehouse` and
-`DestinationWarehouse`), which Unleashed numbers and fills with components from
-the bill of materials.
+materials) takes the product, assemble-by date, the **From** warehouse
+(components are taken from it) and the **To** warehouse (what's made goes into
+it), and comments. It doesn't ask how much to make: that's entered at the end,
+when the order is completed. Unleashed needs a quantity to open an assembly
+(`POST /Assemblies`, with `SourceWarehouse` and `DestinationWarehouse`), so Core
+sends **1** as a stand-in and replaces it at close-out. Until then Unleashed
+sets aside components for 1 and Material requirements counts the order as 1; the
+order and the lists show "entered when it's completed" in place of the 1. The
+form shows the recipe for 1 against available stock.
 
-Unleashed fills a parked assembly's component quantities from the bill of
-materials. Here, the team records what they **actually** use, step by step, and
-closing the order out replaces Unleashed's figures with those.
+Closing the order out sends Unleashed the quantity made and what was used of
+each component, in place of what Unleashed worked out from the bill of
+materials.
 
 1. **Operating procedure** (admins, once per product): Bills of materials → a
    bill → **Write the procedure**. Add notes shown at the top of every order
    (equipment, safety, hygiene), then the steps in order. Each step has
-   instructions, the components it uses (a component can be used at several
-   steps; one ticked nowhere is recorded at the last step), and fields the tech
-   fills in: a **number** with a unit and an acceptable range (a weight, a
-   temperature), **text** (a lot code), or **yes / no** (a check). Fields can
-   be required. A step's number sets its order. **+ Add a step** and **+ Add a
+   instructions, the components it uses (shown at the step with the recipe for
+   1), and fields the tech fills in: a **number** with a unit and an acceptable
+   range (a weight, a temperature), **text** (a lot code), or **yes / no** (a
+   check). Fields can be required. **A weight tells Unleashed how much was
+   used**: for a number, choose the component it **counts as used of**, and what
+   to multiply it by to get the component's unit in Unleashed (1 when the scale
+   and Unleashed use the same unit; 0.001 for grams when Unleashed counts
+   kilograms; 0.2 for pounds when Unleashed counts 5 lb bags). Several weights
+   can count for one component (they add up), and a weight that counts always has
+   to be entered. A step's number sets its order. **+ Add a step** and **+ Add a
    field** add more as you write; empty ones are left out when you save. Each
    step can show **pictures** (PNG, JPEG, GIF or WebP, up to 10): the browser
    makes phone photos smaller (1600 px) before sending them, and they're kept in
    the database. An order keeps the pictures its procedure had when it started;
    a picture removed from the procedure is deleted once no order being recorded
    shows it.
-   Without a procedure, an order is recorded in a single step with every
-   component.
+   Without a procedure, an order has a single step with nothing to record.
 2. **Record** (anyone, e.g. production techs): open a parked order under
    Production orders. The procedure is there: notes, then each step's
-   instructions. At each step, enter how much of each component was used,
-   wastage included, fill in the step's fields, and **Save step**. A number
-   outside its range is flagged. A saved step shows who saved it and when, and
-   can be updated until the order is completed. An order keeps the procedure it started
-   with, so editing the procedure doesn't change orders already underway.
+   instructions. At each step, fill in the step's fields (there's no separate
+   "used at this step" to type: the weights are the usage) and **Save step**. A
+   number outside its range is flagged. A saved step shows who saved it and when,
+   and can be updated until the order is completed. **What's been used** lists
+   each component with what's been weighed so far, or that it follows the recipe.
+   An order keeps the procedure it started with, so editing the procedure
+   doesn't change orders already underway.
 3. **Complete** (anyone): **Complete order** appears at the top and bottom of
-   the procedure once every step that records something is saved (steps with
-   nothing to record don't hold it up; until then it lists the steps still to
-   save). Enter how much was made, which shows the product yield and each
-   material's yield (below), and the date, check the totals against
-   Unleashed's calculation, then
-   **Complete in Unleashed**. Anything recorded outside its range is listed
-   there first. For each component, the sum over all steps is
-   sent as the quantity used (wastage 0). The quantity made and the assembly
-   date are set, and the assembly is completed, which moves the stock.
+   the procedure once every step with a required field or a weight that counts
+   is saved (steps with nothing to record don't hold it up; until then it lists
+   the steps still to save). Enter **how much was made** and the date. The page
+   shows what will be sent for each component: what was weighed (times its
+   conversion), or for a component nothing weighs (jugs, labels), the recipe's
+   amount for the quantity made, worked out as you type it, with each weighed
+   material's yield. Anything recorded outside its range is listed there first.
+   **Complete in Unleashed** sends each component's amount as the quantity used
+   (wastage 0), sets the quantity made and the assembly date, and completes the
+   assembly, which moves the stock. The product's own yield (made ÷ planned) is
+   only worked out for orders that had a planned quantity (those started in
+   Unleashed).
 
 **Batch-tracked products** (`IsBatchTracked` on the product in Unleashed): the
 Complete page also asks for the batches made, one row per batch with its number

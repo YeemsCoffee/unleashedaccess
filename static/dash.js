@@ -56,9 +56,14 @@
   "use strict";
   var made = document.getElementById("made");
   if (!made) return;
-  var outs = document.querySelectorAll("[data-yield]");
+  var outs = document.querySelectorAll("[data-yield]"), used = document.querySelectorAll("[data-used]");
   function show() {
     var m = parseFloat(made.value);
+    // A component nothing weighs is used at the recipe's rate: data-per x made.
+    used.forEach(function (out) {
+      var v = m > 0 ? m * parseFloat(out.dataset.per) : NaN;
+      out.textContent = isFinite(v) ? String(Math.round(v * 10000) / 10000) : "—";
+    });
     outs.forEach(function (out) {
       var num = parseFloat(out.dataset.num), den = parseFloat(out.dataset.den);
       var v = m > 0 && num > 0 && den > 0 ? m * num / den : NaN;

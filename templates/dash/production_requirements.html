@@ -50,7 +50,7 @@
     <tbody>
     {% for o in req.orders %}
     <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
-      <td>{{ o.description or o.product_code }}</td><td class="num">{{ o.qty|qty }}</td><td>{{ o.due|d }}</td>
+      <td>{{ o.description or o.product_code }}</td><td class="num">{% if o.guid in no_qty %}<span class="muted" title="No quantity yet: counted as 1 until it's completed">1*</span>{% else %}{{ o.qty|qty }}{% endif %}</td><td>{{ o.due|d }}</td>
       <td class="num">{{ o.planned_cost|money }}</td><td>{{ materials_pill(o) }}</td>
       <td>{% for s in o.shortages %}{{ s.product_code }} {{ s.missing|qty }}{{ ', ' if not loop.last }}{% endfor %}</td></tr>
     {% else %}<tr><td colspan="7" class="muted">No open production orders.</td></tr>{% endfor %}

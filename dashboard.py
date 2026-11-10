@@ -14,7 +14,8 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, redirect, 
 
 from access import AREA_KEYS, AREAS, UNLEASHED_AREAS
 from accounts import AccountError, check_new_password, temporary_password
-from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_PICTURES, MAX_STEPS, SENT, ProductionRuns, RunError,
+from production_runs import (FIELD_TYPES, MAX_FIELDS, MAX_PICTURES, MAX_STEPS, PLACEHOLDER_QUANTITY, SENT,
+                             ProductionRuns, RunError,
                              check_batches, parse_batches)
 from unleashed import charts
 from unleashed.client import HttpTransport, UnleashedClient, UnleashedError, set_business_timezone
@@ -942,8 +943,10 @@ def _production_problem():
 
 
 def _render_production(template, **context):
+    # Orders opened without a quantity: Unleashed's 1 for them is a placeholder, not a plan.
     return render_template(f"dash/{template}.html", problem=_production_problem(),
-                           can_check=_ext()["syncer"] is not None, **context)
+                           can_check=_ext()["syncer"] is not None,
+                           no_qty=current_app.extensions["production_runs"].no_quantity_guids(), **context)
 
 
 @bp.post("/production/orders/check")
@@ -1029,13 +1032,6 @@ def production_new():
     default_wh = next((w for w in warehouses if w.get("IsDefault")), warehouses[0] if warehouses else {})
     form = request.form if request.method == "POST" else request.args
     product = form.get("product") or None
-    qty_text = form.get("qty", "").strip()
-    try:
-        qty = float(qty_text)
-    except ValueError:
-        qty = None
-    if qty is not None and (not math.isfinite(qty) or qty <= 0):
-        qty = None
     try:
         due = dt.date.fromisoformat(form.get("assemble_by", ""))
     except ValueError:
@@ -1045,14 +1041,12 @@ def production_new():
     comments = form.get("comments", "").strip()[:500]
 
     error = None
-    checking = request.method == "POST" or form.get("check")
-    if checking and product not in products:
+    if request.method == "POST" and product not in products:
         error = "Choose a product that has a bill of materials."
-    elif checking and qty is None:
-        error = "Enter how much to make (more than 0)."
-    elif checking and warehouses and {from_wh, to_wh} - {w.get("WarehouseCode") for w in warehouses}:
+    elif request.method == "POST" and warehouses and {from_wh, to_wh} - {w.get("WarehouseCode") for w in warehouses}:
         error = "Choose the warehouses from the list."
-    preview = p.preview(product, qty) if product in products and qty else None
+    # The recipe for one, to see what it takes: how much is made is entered when it's completed.
+    preview = p.preview(product, 1) if product in products else None
 
     if request.method == "POST" and not error:
         if _write_problem():
@@ -1060,16 +1054,20 @@ def production_new():
         else:
             ext = _ext()
             try:
-                order = create_assembly(ext["client"], product, qty, due, from_wh, to_wh, comments or None)
+                # Unleashed needs a quantity to open an assembly: 1 stands in until it's completed.
+                order = create_assembly(ext["client"], product, PLACEHOLDER_QUANTITY, due, from_wh, to_wh,
+                                        comments or None)
             except (CloseOutError, UnleashedError) as e:
                 error = f"Unleashed didn't start the order: {e}"
             else:
                 ext["store"].upsert_documents("Assemblies", [order])  # shows straight away
                 ext["store_client"].clear_cache()
-                flash(f"Started {order['AssemblyNumber']} in Unleashed. Record each step as it's done.", "ok")
+                current_app.extensions["production_runs"].open_order(order["Guid"], order["AssemblyNumber"], product)
+                flash(f"Started {order['AssemblyNumber']} in Unleashed. Record each step as it's done; how much "
+                      "was made is entered when you complete it.", "ok")
                 return redirect(url_for("dash.production_order", number=order["AssemblyNumber"]))
     return _render_production("production_new", products=products, warehouses=warehouses,
-                              product=product, qty=qty_text, due=due, from_wh=from_wh, to_wh=to_wh,
+                              product=product, due=due, from_wh=from_wh, to_wh=to_wh,
                               comments=comments, preview=preview, error=error,
                               write_problem=_write_problem())
 
@@ -1089,26 +1087,14 @@ def production_order(number):
 
 @bp.post("/production/orders/<number>/steps/<int:index>")
 def production_step(number, index):
-    """Record what was used at one step of an open production order."""
+    """Record what one step of an open production order asks for (weights, checks)."""
     order = _open_order(number)
     back = redirect(url_for("dash.production_order", number=number) + f"#step-{index}")
     if order is None:
         return back
-    quantities = {}
-    for key, value in request.form.items():
-        if key.startswith("qty:"):
-            try:
-                qty = float(value) if value.strip() else None
-            except ValueError:
-                qty = math.nan
-            if qty is not None and not math.isfinite(qty):
-                flash(f"\"{value}\" isn't a quantity.", "warn")
-                return back
-            quantities[key[4:]] = qty
     entries = {key[6:]: value for key, value in request.form.items() if key.startswith("field:")}
     try:
-        current_app.extensions["production_runs"].save_step(order, index, quantities, entries,
-                                                            _person())
+        current_app.extensions["production_runs"].save_step(order, index, entries, _person())
     except RunError as e:
         flash(str(e), "warn")
         return back
@@ -1142,6 +1128,8 @@ def production_close(number):
     def page(error=None):
         # Each material's yield, worked out as the quantity made is typed: recipe per unit x made ÷ used.
         per_unit = {l["product_code"]: l["per_unit"] for l in order["bom"]["lines"]} if order["bom"] else {}
+        for t in run["totals"]:  # an order without a bill of materials: Unleashed's own lines
+            per_unit.setdefault(t["product_code"], t["per_unit"])
         rows = [{"number": n, "qty": q, "expiry": e} for n, q, e in typed if n or q or e]
         rows += [{"number": "", "qty": "", "expiry": ""}] * max(3 - len(rows), 1)
         html = _render_production("production_close", o=order, run=run, today=today, per_unit=per_unit,
@@ -1167,7 +1155,7 @@ def production_close(number):
     if not runs.begin_close(order, run):
         flash("Someone is completing this order right now, or it's already completed.", "warn")
         return back
-    quantities = {t["product_code"]: t["recorded"] for t in run["totals"]}
+    quantities = runs.quantities(run, made)
     ext = _ext()
     try:
         done = close_out(ext["client"], order["guid"], quantities, made, on_date, batches=batches)
@@ -1181,7 +1169,9 @@ def production_close(number):
                           "Check the order in Unleashed before trying again.")
         flash("Not completed: something unexpected went wrong. The order page says what.", "warn")
         return back
-    sent = dict(sent_summary(done), planned=order["qty"], **({"batches": batches} if batches else {}))
+    # Opened without a quantity, there's no planned quantity to measure the product's yield against.
+    planned = None if run["no_quantity"] else order["qty"]
+    sent = dict(sent_summary(done), planned=planned, **({"batches": batches} if batches else {}))
     ext["store"].upsert_documents("Assemblies", [done])  # shows straight away
     ext["store_client"].clear_cache()
     if not is_completed(done):  # Unleashed took the quantities but not the batches as sent
@@ -1193,8 +1183,8 @@ def production_close(number):
     runs.closed(order["guid"], sent, _person())
     _sync_soon()  # stock on hand
     made_now = done.get("Quantity") or made
-    flash(f"{order['number']} is completed in Unleashed: made {qty(made_now)} of {qty(order['qty'])} "
-          f"planned, a yield of {pct(made_now / order['qty']) if order['qty'] else '—'}"
+    flash(f"{order['number']} is completed in Unleashed: made {qty(made_now)}"
+          + (f" of {qty(planned)} planned, a yield of {pct(made_now / planned)}" if planned else "")
           + (f", in {len(batches)} batch{'es' if len(batches) > 1 else ''}" if batches else "")
           + ". Each material's yield is on the order.", "ok")
     return back
@@ -1246,7 +1236,10 @@ def production_procedure(number):
             fields = [{"id": form.get(f"f-{i}-{j}-id"), "label": form.get(f"f-{i}-{j}-label", ""),
                        "type": form.get(f"f-{i}-{j}-type"), "unit": form.get(f"f-{i}-{j}-unit"),
                        "min": form.get(f"f-{i}-{j}-min"), "max": form.get(f"f-{i}-{j}-max"),
-                       "required": form.get(f"f-{i}-{j}-required")}
+                       "required": form.get(f"f-{i}-{j}-required"),
+                       "component": form.get(f"f-{i}-{j}-component", "") if form.get(f"f-{i}-{j}-component", "")
+                       in {l["product_code"] for l in bom["lines"]} else "",
+                       "factor": form.get(f"f-{i}-{j}-factor")}
                       for j in range(min(form.get(f"fields-{i}", 0, type=int), MAX_FIELDS))]
             pictures = [p for p in form.getlist(f"pictures-{i}") if p not in removed]
             for upload in request.files.getlist(f"picture-{i}"):
@@ -1270,10 +1263,12 @@ def production_procedure(number):
         return redirect(url_for("dash.production_bom", number=number))
     procedure = runs.procedure_for(bom["product_code"])
     blank_field = {"id": "", "label": "", "type": "number", "unit": "", "min": None, "max": None,
-                   "required": False}
+                   "required": False, "component": "", "factor": 1.0}
     blank_step = {"name": "", "instructions": "", "components": [], "fields": [blank_field] * 3, "pictures": []}
     steps = [dict(s, fields=s["fields"] + [blank_field] * 2) for s in procedure["steps"]]
     steps += [blank_step] * 2
+    units = {x.get("ProductCode"): (x.get("UnitOfMeasure") or {}).get("Name") for x in reports().products()}
+    bom = dict(bom, lines=[dict(l, unit=units.get(l["product_code"])) for l in bom["lines"]])
     return _render_production("production_procedure", b=bom, notes=procedure["notes"], steps=steps,
                               field_types=FIELD_TYPES, blank_step=blank_step, blank_field=blank_field,
                               max_steps=MAX_STEPS, max_fields=MAX_FIELDS, max_pictures=MAX_PICTURES)

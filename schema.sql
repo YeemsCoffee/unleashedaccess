@@ -111,10 +111,12 @@ CREATE TABLE IF NOT EXISTS prod_runs (
     sent            TEXT,               -- JSON: what close-out sent to Unleashed
     closed_by       TEXT,
     closed_at       TEXT,
-    updated_at      TEXT NOT NULL
+    updated_at      TEXT NOT NULL,
+    no_quantity     INTEGER             -- 1: opened without a quantity (Unleashed holds a placeholder of 1)
 );
 
--- What was used at each step: JSON {component code: quantity}.
+-- Quantities typed against components at each step, before usage came from the weights
+-- recorded (prod_step_entries): JSON {component code: quantity}. Kept for those orders.
 CREATE TABLE IF NOT EXISTS prod_step_records (
     assembly_guid TEXT NOT NULL,
     step_index    INTEGER NOT NULL,

@@ -91,6 +91,7 @@ def create_app(test_config=None):
     else:
         db.init_schema(os.path.join(BASE_DIR, "schema.sql"))
         migrate_maintenance(db)  # columns added since the maintenance tables were first made
+        db.ensure_columns("prod_runs", {"no_quantity": "INTEGER"})
     app.extensions["db"] = db
 
     if not cfg["SECRET_KEY"]:

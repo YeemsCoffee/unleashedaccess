@@ -1219,7 +1219,8 @@ class AllocationReports:
 
 
 class ProductionRunTests(unittest.TestCase):
-    """Recording what's used at each step, and closing the order out to Unleashed."""
+    """Recording each step's weights and checks, and closing the order out to Unleashed with how
+    much was made and what the weights say was used."""
 
     def setUp(self):
         self.mock = create_mock_app(today=TODAY)
@@ -1234,14 +1235,23 @@ class ProductionRunTests(unittest.TestCase):
                         UNLEASHED_API_KEY=MOCK_API_KEY, TODAY=TODAY,
                         UNLEASHED_TRANSPORT=transport or WsgiTransport(self.mock))
 
+    # Steps Steep (the coffee weighed counts as espresso used), Filter (nothing), Bottle (the
+    # jugs filled count as jugs used).
+    PROCEDURE = {
+        "rows": 4, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "fields-0": 1,
+        "f-0-0-id": "coffee", "f-0-0-label": "Coffee weighed", "f-0-0-type": "number", "f-0-0-unit": "bag",
+        "f-0-0-component": "COF-ESP-5LB", "f-0-0-factor": "1",
+        "name-1": "Filter",
+        "name-2": "Bottle", "components-2": ["JUG-GAL"], "fields-2": 1,
+        "f-2-0-id": "jugs", "f-2-0-label": "Jugs filled", "f-2-0-type": "number",
+        "f-2-0-component": "JUG-GAL", "f-2-0-factor": "1", "name-3": ""}
+
     def _record(self, c, espresso="1.2", jugs="7"):
-        """Steps Steep (espresso), Filter (nothing), Bottle (jugs), all saved."""
-        c.post("/production/boms/BOM-CB/procedure", data={
-            "rows": 4, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "name-1": "Filter",
-            "name-2": "Bottle", "components-2": ["JUG-GAL"], "name-3": ""})
-        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": espresso})
+        """The procedure above, every step saved."""
+        c.post("/production/boms/BOM-CB/procedure", data=self.PROCEDURE)
+        c.post(self.url + "/steps/0", data={"field:coffee": espresso})
         c.post(self.url + "/steps/1", data={})
-        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": jugs})
+        c.post(self.url + "/steps/2", data={"field:jugs": jugs})
 
     def _close(self, c, made="6.5"):
         return c.post(self.url + "/close", data={"made": made, "date": TODAY.isoformat()},
@@ -1251,17 +1261,23 @@ class ProductionRunTests(unittest.TestCase):
         app = self._app()
         c = app.test_client()
         page = c.get(self.url).get_data(as_text=True)
-        self.assertIn("1. Production", page)  # no steps set up: one step with everything
-        self.assertIn("To complete the order, save", page)
-        self.assertIn("To complete the order, first save step 1 (Production)",
-                      c.get(self.url + "/close", follow_redirects=True).get_data(as_text=True))
+        self.assertIn("1. Production", page)  # no steps set up: one step, nothing to weigh
+        self.assertNotIn('name="qty:', page)  # no "used at this step" to type
+        self.assertIn("Not weighed: the recipe", page)
 
+        c.post("/production/boms/BOM-CB/procedure", data=self.PROCEDURE)
+        page = c.get(self.url).get_data(as_text=True)
+        self.assertIn("To complete the order, save", page)
+        self.assertIn("To complete the order, first save step 1 (Steep), step 3 (Bottle)",
+                      c.get(self.url + "/close", follow_redirects=True).get_data(as_text=True))
+        for text in ("Coffee weighed (bag) *", "Counts as Espresso Blend 5 lb used", "From Coffee weighed below"):
+            self.assertIn(text, page)
         self._record(c, espresso="1.2")
         page = c.get(self.url).get_data(as_text=True)
         for text in ("1. Steep", "2. Filter", "3. Bottle", "3 of 3 steps saved", "Complete order"):
             self.assertIn(text, page)
         missing = c.post(self.url + "/steps/0", data={}, follow_redirects=True).get_data(as_text=True)
-        self.assertIn("Enter how much Espresso Blend 5 lb was used", missing)
+        self.assertIn("Enter Coffee weighed before saving this step", missing)
         confirm = c.get(self.url + "/close").get_data(as_text=True)
         self.assertIn("Complete in Unleashed", confirm)
         self.assertIn("<strong>1.2</strong>", confirm)
@@ -1284,7 +1300,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertTrue(order["completed"])  # the stored copy already shows it
         espresso = next(x for x in order["components"] if x["product_code"] == "COF-ESP-5LB")
         self.assertAlmostEqual(espresso["variance"], 1.2 - 0.36 * 6.5)  # recipe for what was made
-        late = c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1"}, follow_redirects=True)
+        late = c.post(self.url + "/steps/0", data={"field:coffee": "1"}, follow_redirects=True)
         self.assertIn("isn&#39;t open in Unleashed any more", late.get_data(as_text=True))
 
     def test_nothing_completes_if_unleashed_does_not_keep_the_quantities(self):
@@ -1308,7 +1324,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertIn("Not completed", html)
         self.assertIn("Not enough stock of COF-ESP-5LB", html)
         self.assertEqual(self.asm["Status"], "Parked")
-        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.3"})  # fix it and try again
+        c.post(self.url + "/steps/0", data={"field:coffee": "1.3"})  # fix it and try again
         self.assertIn("is completed in Unleashed", self._close(c, made="7"))
         self.assertEqual(self.asm["Lines"][0]["Quantity"], 1.3)
 
@@ -1328,43 +1344,53 @@ class ProductionRunTests(unittest.TestCase):
         form = c.get("/production/orders/new?product=VSC-HG").get_data(as_text=True)
         self.assertIn('value="VSC-HG" selected', form)
         self.assertNotIn('value="MILK-WHL-GAL"', form)  # only products with a bill of materials
-        check = c.get("/production/orders/new?product=VSC-HG&qty=4&assemble_by=2026-07-17&check=1")
-        self.assertIn("Components needed", check.get_data(as_text=True))
-        self.assertIn("CRM-HVY-HG", check.get_data(as_text=True))
-        for data, message in (({"product": "MILK-WHL-GAL", "qty": "1"}, "Choose a product that has a bill"),
-                              ({"product": "VSC-HG", "qty": "0"}, "Enter how much to make")):
-            self.assertIn(message, c.post("/production/orders/new", data=data).get_data(as_text=True))
+        self.assertNotIn('name="qty"', form)  # how much is made is entered at the end
+        self.assertIn("Recipe for 1", form)
+        self.assertIn("CRM-HVY-HG", form)
+        self.assertIn("Choose a product that has a bill",
+                      c.post("/production/orders/new", data={"product": "MILK-WHL-GAL"}).get_data(as_text=True))
         before = len(self.ds.assemblies)
 
-        res = c.post("/production/orders/new", data={"product": "VSC-HG", "qty": "4",
-                                                     "assemble_by": "2026-07-17", "comments": "Weekend batch"})
+        res = c.post("/production/orders/new", data={"product": "VSC-HG", "assemble_by": "2026-07-17",
+                                                     "comments": "Weekend batch"})
         self.assertEqual(len(self.ds.assemblies), before + 1)
         new = self.ds.assemblies[-1]
+        # Unleashed needs a quantity to open it: 1 stands in until it's completed.
         self.assertEqual((new["ProductCode"], new["Quantity"], new["Status"], new["AssembleBy"], new["Comments"]),
-                         ("VSC-HG", 4, "Parked", dt.date(2026, 7, 17), "Weekend batch"))
+                         ("VSC-HG", 1, "Parked", dt.date(2026, 7, 17), "Weekend batch"))
         number = new["AssemblyNumber"]
         self.assertTrue(res.headers["Location"].endswith(f"/production/orders/{number}"))
         page = c.get(res.headers["Location"]).get_data(as_text=True)
-        for text in (f"Started {number} in Unleashed", "Operating procedure", "Weekend batch"):
+        for text in (f"Started {number} in Unleashed", "Operating procedure", "Weekend batch",
+                     "Entered when it's completed", "For 1 made"):
             self.assertIn(text, page)
         self.assertIn(number, c.get("/production/requirements").get_data(as_text=True))  # no sync needed
+        self.assertIn("Entered when it's completed", c.get("/production/orders?status=Open").get_data(as_text=True))
 
-        c.post(f"/production/orders/{number}/steps/0", data={
-            "qty:CRM-HVY-HG": "2", "qty:MILK-WHL-GAL": "1", "qty:SYR-VAN-750": "0.8"})
+        # Nothing is weighed (no procedure), so each component is used at the recipe's rate for what was made.
+        close = c.get(f"/production/orders/{number}/close").get_data(as_text=True)
+        self.assertNotIn("Planned", close.split("Components to send")[0])
+        self.assertIn('name="made" value=""', close)
+        per_unit = {l["ProductCode"]: l["Quantity"] + l["WastageQuantity"] for l in new["Lines"]}
         done = c.post(f"/production/orders/{number}/close", data={
             "made": "4", "date": TODAY.isoformat(), "batch_number": "VSC-0715",
             "batch_qty": "", "batch_expiry": "2026-07-29"}, follow_redirects=True).get_data(as_text=True)
-        self.assertIn("is completed in Unleashed", done)
-        self.assertEqual(new["Status"], "Completed")
+        self.assertIn("is completed in Unleashed: made 4,", done)
+        self.assertNotIn("planned", done.split("is completed in Unleashed")[1].split("</div>")[0])
+        self.assertEqual((new["Status"], new["Quantity"]), ("Completed", 4))
         self.assertEqual(new["Batches"], [{"Number": "VSC-0715", "Quantity": 4, "ExpiryDate": dt.date(2026, 7, 29)}])
+        for line in new["Lines"]:
+            self.assertAlmostEqual(line["Quantity"], per_unit[line["ProductCode"]] * 4, places=3)
+        order = c.application.extensions["unleashed"]["production"].order(
+            number, planned=c.application.extensions["production_runs"].planned_quantities())
+        self.assertIsNone(order["yield"])  # nothing was planned to measure the product's yield against
 
     def _batch_order(self, app):
         """A batch-tracked order (sweet cream, 6), its step saved; its URL."""
         asm = self.ds.create_assembly("VSC-HG", 6, comments="Weekend batch")
         app.extensions["unleashed"]["syncer"].sync()
         url = f"/production/orders/{asm['AssemblyNumber']}"
-        app.test_client().post(url + "/steps/0", data={
-            "qty:CRM-HVY-HG": "3", "qty:MILK-WHL-GAL": "1.5", "qty:SYR-VAN-750": "1.2"})
+        app.test_client().post(url + "/steps/0", data={})
         return asm, url
 
     @staticmethod
@@ -1405,8 +1431,9 @@ class ProductionRunTests(unittest.TestCase):
             {"Number": "VSC-0715-A", "Quantity": 3.5, "ExpiryDate": dt.date(2026, 7, 29)},
             {"Number": "VSC-0715-B", "Quantity": 2.5, "ExpiryDate": dt.date(2026, 7, 30)}])
         self.assertEqual((asm["AssemblyDate"], asm["AssembleBy"]), (TODAY, assemble_by))
+        # Nothing was weighed: each component at the recipe's amount (wastage allowance included) for the 6 made.
         self.assertEqual({l["ProductCode"]: l["Quantity"] for l in asm["Lines"]},
-                         {"CRM-HVY-HG": 3, "MILK-WHL-GAL": 1.5, "SYR-VAN-750": 1.2})
+                         {"CRM-HVY-HG": 3.12, "MILK-WHL-GAL": 1.5, "SYR-VAN-750": 1.2})
         self.assertEqual(asm["Comments"], "Weekend batch")
         for text in ("Unleashed has these batches.", "VSC-0715-B", "Jul 30, 2026"):
             self.assertIn(text, page)
@@ -1497,7 +1524,7 @@ class ProductionRunTests(unittest.TestCase):
 
         def step0(**fields):
             return c.post(self.url + "/steps/0", follow_redirects=True, data={
-                "qty:COF-ESP-5LB": "0.55", **{f"field:{k}": v for k, v in fields.items()}}).get_data(as_text=True)
+                f"field:{k}": v for k, v in fields.items()}).get_data(as_text=True)
 
         self.assertIn("Confirm “Brewer sanitized”", step0(**{weight: "0.55"}))
         self.assertIn("Enter Coffee weight", step0(**{sanitized: "on"}))
@@ -1511,7 +1538,7 @@ class ProductionRunTests(unittest.TestCase):
         self.assertIn("Weigh beans", c.get("/production/boms/BOM-CB").get_data(as_text=True))
 
         c.post(self.url + "/steps/1", data={f"field:{steep['fields'][0]['id']}": "4"})
-        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": "7", f"field:{bottle['fields'][0]['id']}": "CB-1027"})
+        c.post(self.url + "/steps/2", data={f"field:{bottle['fields'][0]['id']}": "CB-1027"})
         confirm = c.get(self.url + "/close").get_data(as_text=True)
         self.assertIn("Coffee weight at Weigh coffee was 0.7 kg (target 0.5–0.6 kg)", confirm)
         self.assertIn("is completed in Unleashed", self._close(c, made="6"))
@@ -1523,7 +1550,7 @@ class ProductionRunTests(unittest.TestCase):
     def test_each_material_has_a_yield_and_the_product_its_own(self):
         app = self._app()
         c = app.test_client()
-        self._record(c)  # used 1.2 espresso and 7 jugs; the recipe is 0.36 espresso + 1 jug per gallon
+        self._record(c)  # weighed 1.2 espresso and 7 jugs; the recipe is 0.36 espresso + 1 jug per gallon
         confirm = c.get(self.url + "/close").get_data(as_text=True)
         self.assertIn('data-num="0.36" data-den="1.2"', confirm)  # espresso's yield, as made is typed
         done = self._close(c, made="6.5")  # of 7 planned
@@ -1616,17 +1643,67 @@ class ProductionRunTests(unittest.TestCase):
 
     def test_steps_with_nothing_to_record_do_not_hold_up_completing(self):
         c = self._app().test_client()
-        c.post("/production/boms/BOM-CB/procedure", data={
-            "rows": 3, "name-0": "Steep", "components-0": ["COF-ESP-5LB"], "name-1": "Filter",
-            "name-2": "Bottle", "components-2": ["JUG-GAL"]})
-        c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "1.2"})
+        c.post("/production/boms/BOM-CB/procedure", data=self.PROCEDURE)
+        c.post(self.url + "/steps/0", data={"field:coffee": "1.2"})
         page = c.get(self.url).get_data(as_text=True)
         self.assertIn("To complete the order, save", page)
         self.assertIn("step 3 (Bottle)", page)
         self.assertNotIn("step 2 (Filter)", page)  # nothing to record there
-        c.post(self.url + "/steps/2", data={"qty:JUG-GAL": "7"})
+        c.post(self.url + "/steps/2", data={"field:jugs": "7"})
         self.assertIn("Complete order", c.get(self.url).get_data(as_text=True))
         self.assertIn("is completed in Unleashed", self._close(c, made="7"))
+
+    def test_a_weight_counts_as_usage_in_unleashed_units_and_the_rest_follows_the_recipe(self):
+        """The coffee is weighed in pounds at two steps; Unleashed counts 5 lb bags (x 0.2). Nothing
+        weighs the jugs, so they're used at the recipe's rate for what was made."""
+        app = self._app()
+        c = app.test_client()
+        c.post("/production/boms/BOM-CB/procedure", data={
+            "rows": 2, "name-0": "First steep", "components-0": ["COF-ESP-5LB"], "fields-0": 2,
+            "f-0-0-id": "lb1", "f-0-0-label": "Coffee weight", "f-0-0-type": "number", "f-0-0-unit": "lb",
+            "f-0-0-component": "COF-ESP-5LB", "f-0-0-factor": "0.2",
+            "f-0-1-id": "temp", "f-0-1-label": "Water temperature", "f-0-1-type": "number", "f-0-1-unit": "°C",
+            "name-1": "Top up", "fields-1": 1,
+            "f-1-0-id": "lb2", "f-1-0-label": "Extra coffee", "f-1-0-type": "number", "f-1-0-unit": "lb",
+            "f-1-0-component": "COF-ESP-5LB", "f-1-0-factor": "0.2"})
+        steps = app.extensions["production_runs"].procedure_for("CB-CONC-GAL")["steps"]
+        self.assertEqual([(f["component"], f["factor"], f["required"]) for f in steps[0]["fields"]],
+                         [("COF-ESP-5LB", 0.2, True), ("", 1.0, False)])  # a weight that counts must be entered
+        editor = c.get("/production/boms/BOM-CB/procedure").get_data(as_text=True)
+        self.assertIn('name="f-0-0-component"', editor)
+        self.assertIn('<option value="COF-ESP-5LB" selected>', editor)
+        self.assertIn('name="f-0-0-factor" value="0.2"', editor)
+        negative = c.post(self.url + "/steps/0", data={"field:lb1": "-1"}, follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Coffee weight can&#39;t be negative", negative)
+        c.post(self.url + "/steps/0", data={"field:lb1": "5", "field:temp": "20"})
+        c.post(self.url + "/steps/1", data={"field:lb2": "1.5"})
+        run = app.extensions["production_runs"].view(
+            app.extensions["unleashed"]["production"].order(self.asm["AssemblyNumber"]))
+        by_code = {t["product_code"]: t for t in run["totals"]}
+        self.assertAlmostEqual(by_code["COF-ESP-5LB"]["recorded"], (5 + 1.5) * 0.2)  # 6.5 lb = 1.3 bags
+        self.assertEqual((by_code["COF-ESP-5LB"]["source"], by_code["JUG-GAL"]["source"], by_code["JUG-GAL"]["recorded"]),
+                         ("weights", "recipe", None))
+        confirm = c.get(self.url + "/close").get_data(as_text=True)
+        self.assertIn("<strong>1.3</strong>", confirm)
+        self.assertIn('data-used data-per="1"', confirm)  # jugs: 1 per gallon made, worked out as made is typed
+        self.assertIn("is completed in Unleashed", self._close(c, made="6"))
+        self.assertEqual([(l["ProductCode"], l["Quantity"]) for l in self.asm["Lines"]],
+                         [("COF-ESP-5LB", 1.3), ("JUG-GAL", 6)])
+
+    def test_quantities_typed_on_an_order_before_weights_counted_are_still_sent(self):
+        app = self._app()
+        c = app.test_client()
+        order = app.extensions["unleashed"]["production"].order(self.asm["AssemblyNumber"])
+        runs = app.extensions["production_runs"]
+        c.post(self.url + "/steps/0", data={})  # starts the run
+        app.extensions["db"].execute("UPDATE prod_step_records SET quantities = ? WHERE assembly_guid = ?",
+                                     (json.dumps({"COF-ESP-5LB": 1.2, "JUG-GAL": 7}), order["guid"]))
+        totals = {t["product_code"]: (t["source"], t["recorded"]) for t in runs.view(order)["totals"]}
+        self.assertEqual(totals, {"COF-ESP-5LB": ("typed", 1.2), "JUG-GAL": ("typed", 7)})
+        c.post(self.url + "/steps/0", data={})  # saving the step again keeps them
+        self.assertIn("is completed in Unleashed", self._close(c, made="6.5"))
+        self.assertEqual([(l["ProductCode"], l["Quantity"]) for l in self.asm["Lines"]],
+                         [("COF-ESP-5LB", 1.2), ("JUG-GAL", 7)])
 
     def test_an_interrupted_completion_can_be_finished(self):
         import dashboard
@@ -1666,7 +1743,7 @@ class ProductionRunTests(unittest.TestCase):
                           follow_redirects=True).get_data(as_text=True)
             self.assertIn("Enter how much was made", html)
         self.assertEqual(self.asm["Status"], "Parked")
-        bad = c.post(self.url + "/steps/0", data={"qty:COF-ESP-5LB": "-1"}, follow_redirects=True)
+        bad = c.post(self.url + "/steps/0", data={"field:coffee": "-1"}, follow_redirects=True)
         self.assertIn("can&#39;t be negative", bad.get_data(as_text=True))
 
 

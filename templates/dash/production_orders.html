@@ -48,7 +48,7 @@
     {% for o in po.orders %}
     <tr><td><a href="{{ url_for('dash.production_order', number=o.number) }}">{{ o.number }}</a></td>
       <td>{{ o.date|d }}</td><td>{{ o.due|d }}</td><td>{{ o.description or o.product_code }}</td>
-      <td class="num">{{ o.qty|qty }}</td><td class="num">{{ yield_pct(o.yield) }}</td><td>{{ status_pill(o.status) }}</td>
+      <td class="num">{% if o.open and o.guid in no_qty %}<span class="muted" title="Entered when it's completed">—</span>{% else %}{{ o.qty|qty }}{% endif %}</td><td class="num">{{ yield_pct(o.yield) }}</td><td>{{ status_pill(o.status) }}</td>
       <td class="num">{{ o.cost|money }}{{ '*' if o.estimated }}</td><td class="num">{{ o.unit_cost|money }}</td></tr>
     {% else %}<tr><td colspan="9" class="muted">No production orders match.</td></tr>{% endfor %}
     </tbody>
