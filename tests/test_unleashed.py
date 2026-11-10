@@ -479,8 +479,8 @@ def _strip_adjustment_changes(path, data):
     if path.startswith("/StockAdjustments"):
         for adj in data["Items"]:
             for line in adj["StockAdjustmentLines"]:
-                line.pop("QuantityChange", None)
-                line.pop("ValueChange", None)
+                line.pop("NewQuantity", None)
+                line.pop("NewActualValue", None)
     return data
 
 
@@ -502,6 +502,26 @@ class AccountQuirkTests(unittest.TestCase):
         self.assertAlmostEqual(stripped["cogs"], full["cogs"], places=6)
         html = app.test_client().post("/connection", data={"action": "check"}).get_data(as_text=True)
         self.assertIn("each purchase order&#39;s costs", html)
+
+    def test_adjustments_count_by_their_signed_change(self):
+        """Unleashed gives an adjustment line's change in NewQuantity and NewActualValue (signed: its
+        reference's "Lost 2 somewhere" is -2 and -18.884); it has no other change fields."""
+        mock = create_mock_app(today=TODAY)
+        ds = mock.config["DATASET"]
+        raw = UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(mock), mode="mock").get_all("StockAdjustments")
+        lines = [l for a in raw if a["Status"] == "Completed" for l in a["StockAdjustmentLines"]]
+        self.assertEqual({k for l in lines for k in l if "Change" in k}, set())
+        self.assertTrue(any(l["NewQuantity"] < 0 for l in lines))  # write-offs: stock went down
+        self.assertTrue(all(l["NewQuantity"] * l["NewActualValue"] > 0 for l in lines))  # value goes the same way
+        r = Reports(UnleashedClient(MOCK_API_ID, MOCK_API_KEY, WsgiTransport(mock), mode="mock"), today_fn=lambda: TODAY)
+        month = add_months(TODAY.replace(day=1), -1)
+        rows = r.stock_adjustments(month, month_end(month))
+        self.assertTrue(rows["rows"])
+        self.assertTrue(all(x["qty_change"] < 0 and x["value_change"] < 0 for x in rows["rows"]))
+        self.assertEqual(rows["missing_change"], 0)
+        c = r.cogs(month)
+        self.assertAlmostEqual(r.cogs_by_store(c)["written_off"], -rows["value_change"], places=6)  # counted in COGS
+        self.assertTrue(ds.stock_adjustments)
 
     def test_adjustments_without_change_fields(self):
         app = self._app(_strip_adjustment_changes)
@@ -893,7 +913,9 @@ class StockTransactionTests(unittest.TestCase):
         self.assertAlmostEqual(self._qty("MILK-WHL-GAL"), before - 2)
         sa = next(a for a in self.ds.stock_adjustments if a["AdjustmentNumber"] == number)
         self.assertEqual((sa["Status"], sa["AdjustmentReason"], sa["WarehouseCode"]), ("Completed", "Damaged", "GDN"))
-        self.assertAlmostEqual(sa["Lines"][0]["ValueChange"], -2 * avg, places=2)
+        # What Unleashed was sent: the change (-2), not the quantity left.
+        self.assertEqual(sa["Lines"][0]["NewQuantity"], -2.0)
+        self.assertAlmostEqual(sa["Lines"][0]["NewActualValue"], -2 * avg, places=2)
         page = self.c.get(f"/adjustments/{number}").get_data(as_text=True)
         for text in ("Dropped two", "Damaged", "Gardena Store", "Completed", "make another"):
             self.assertIn(text, page)
@@ -903,7 +925,26 @@ class StockTransactionTests(unittest.TestCase):
         self._post("/adjustments/new", warehouse="GDN", reason="Found", product=["MILK-OAT-QT"], change=[""],
                    new_qty=[str(self._qty("MILK-OAT-QT") + 4)], unit_cost=["2.50"], line_comment=[""])
         found = self.ds.stock_adjustments[-1]["Lines"][0]
-        self.assertEqual((found["QuantityChange"], round(found["ValueChange"], 2)), (4.0, 10.0))
+        self.assertEqual((found["NewQuantity"], round(found["NewActualValue"], 2)), (4.0, 10.0))
+
+    def test_an_adjustment_is_checked_against_the_stock_before_and_after(self):
+        from unleashed.stock_writes import StockWriteError, create_adjustment
+        client = self.app.extensions["unleashed"]["client"]
+        have = self._qty("MILK-WHL-GAL", "GDN")
+        line = {"product_code": "MILK-WHL-GAL", "change": -1, "value_change": -4.0}
+        # More than is there is refused before anything is sent.
+        n = len(self.ds.stock_adjustments)
+        with self.assertRaisesRegex(StockWriteError, "can't go down by"):
+            create_adjustment(client, {"warehouse": "GDN", "reason": "Damaged", "lines": [dict(line, change=-have - 1)]},
+                              stock_fn=lambda w: {"MILK-WHL-GAL": self._qty("MILK-WHL-GAL", w)})
+        self.assertEqual(len(self.ds.stock_adjustments), n)
+        # If Unleashed's stock doesn't move by what was asked, Core says so (not just that it was kept).
+        with self.assertRaisesRegex(StockWriteError, f"went from {have:g} to {have:g}, not to {have - 1:g}"):
+            create_adjustment(client, {"warehouse": "GDN", "reason": "Damaged", "lines": [line]},
+                              stock_fn=lambda w: {"MILK-WHL-GAL": have})
+        made = create_adjustment(client, {"warehouse": "GDN", "reason": "Damaged", "lines": [line]},
+                                 stock_fn=lambda w: {"MILK-WHL-GAL": self._qty("MILK-WHL-GAL", w)})
+        self.assertEqual(made["StockAdjustmentLines"][0]["NewQuantity"], -1)
 
     def test_a_batch_tracked_adjustment_says_which_batches(self):
         batches = {b["Number"]: b["Quantity"] for b in self.ds.batches
@@ -926,7 +967,9 @@ class StockTransactionTests(unittest.TestCase):
         left = {b["Number"]: b["Quantity"] for b in self.ds.batches if b["ProductCode"] == "VSC-HG" and b["WarehouseCode"] == "GDN"}
         self.assertEqual((left[first], left["NEW-1"]), (0.0, 2.0))
         line = self.ds.stock_adjustments[-1]["Lines"][0]
-        self.assertAlmostEqual(line["NewQuantity"], sum(batches.values()) - have + 2)
+        self.assertAlmostEqual(line["NewQuantity"], -have + 2)  # the change: one batch emptied, 2 found in a new one
+        self.assertEqual(sorted((b["Number"], b["Quantity"]) for b in line["BatchNumbers"]),
+                         sorted([(first, -have), ("NEW-1", 2.0)]))  # only the batches that changed, each by its change
 
     def test_a_transfer_is_parked_changed_and_completed_between_warehouses(self):
         form = self.c.get("/transfers/new").get_data(as_text=True)

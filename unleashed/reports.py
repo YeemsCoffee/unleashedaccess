@@ -499,10 +499,10 @@ class Reports:
                              "reason": a.get("AdjustmentReason"), "status": a.get("Status"),
                              "product_code": prod.get("ProductCode"),
                              "description": prod.get("ProductDescription"),
-                             "qty_change": l.get("QuantityChange"),
-                             "value_change": l.get("ValueChange"),
-                             "new_qty": l.get("NewQuantity"),
-                             "new_value": l.get("NewActualValue"),
+                             # Unleashed's NewQuantity and NewActualValue are the signed change
+                             # ("Lost 2 somewhere": -2, -18.884), not the totals after it.
+                             "qty_change": l.get("NewQuantity"),
+                             "value_change": l.get("NewActualValue"),
                              "comments": l.get("Comments")})
         rows.sort(key=lambda r: (r["date"], r["number"]), reverse=True)
         return {"rows": rows,
@@ -511,8 +511,8 @@ class Reports:
 
     def stock_adjustment(self, number):
         """One adjustment, any status: {"number", "guid", "date", "warehouse", "reason", "status",
-        "lines": [{"product_code", "description", "qty_change", "value_change", "new_qty",
-        "new_value", "comments", "batches"}]}, or None."""
+        "lines": [{"product_code", "description", "qty_change", "value_change", "comments",
+        "batches"}]}, or None."""
         items = self.client.get_all("StockAdjustments", {"adjustmentNumber": number})
         a = next((i for i in items if i.get("AdjustmentNumber") == number), None)
         if a is None:
@@ -522,8 +522,7 @@ class Reports:
                 "status": a.get("Status"), "created_by": a.get("CreatedBy"),
                 "lines": [{"product_code": (l.get("Product") or {}).get("ProductCode"),
                            "description": (l.get("Product") or {}).get("ProductDescription"),
-                           "qty_change": l.get("QuantityChange"), "value_change": l.get("ValueChange"),
-                           "new_qty": l.get("NewQuantity"), "new_value": l.get("NewActualValue"),
+                           "qty_change": l.get("NewQuantity"), "value_change": l.get("NewActualValue"),
                            "comments": l.get("Comments"),
                            "batches": [{"number": b.get("Number"), "qty": b.get("Quantity")}
                                        for b in l.get("BatchNumbers") or []]}

@@ -126,13 +126,18 @@ def _reasons():
     return adjustment_reasons(client) if client is not None else []
 
 
-def _new_value(have, new_qty, unit_cost):
-    """The stock value after an adjustment to `new_qty`: what's taken out goes at the average
-    cost; what's added at `unit_cost`."""
-    qty, value, avg = have["qty"], have["value"], have["avg"]
-    if new_qty <= qty:
-        return avg * new_qty if qty > 0 else 0.0
-    return max(value, 0.0) + (new_qty - max(qty, 0.0)) * (unit_cost if unit_cost is not None else avg)
+def _value_change(have, change, unit_cost):
+    """The value an adjustment of `change` moves (signed like it): what's taken out goes at the
+    average cost; what's added at `unit_cost` (the average cost when none is given)."""
+    if change <= 0:
+        return change * (have["avg"] or 0.0)
+    return change * (unit_cost if unit_cost is not None else (have["avg"] or 0.0))
+
+
+def _quantities(warehouse):
+    """{product code: quantity on hand in the warehouse now}, from Unleashed: what an adjustment
+    is checked against before and after it's sent."""
+    return {code: row["qty"] for code, row in _stock_in(warehouse).items()}
 
 
 # ---------------------------------------------------------------- recent, history
@@ -224,22 +229,24 @@ def adjustment_new():
             unknown.append(code or "(blank)")
             continue
         now = have.get(code, {"qty": 0.0, "value": 0.0, "avg": by_code[code]["cost"] or 0.0})
-        new_qty = _number(new)
-        if new_qty is None and _number(change) is not None:
-            new_qty = now["qty"] + _number(change)
-        if new_qty is None:
+        now = dict(now, avg=now["avg"] or by_code[code]["cost"] or 0.0)
+        # The change typed, or the quantity there should be less what Unleashed has now.
+        change = _number(change)
+        if change is None and _number(new) is not None:
+            change = _number(new) - now["qty"]
+        if change is None:
             return _adjustment_form(form, f"Enter how much {code} changes by, or how much there should be.", status=400)
-        if new_qty < 0:
-            return _adjustment_form(form, f"That would leave {new_qty:g} of {code} in {warehouse}: there can't be less than 0.",
-                                    status=400)
+        if now["qty"] + change < -1e-9:
+            return _adjustment_form(form, f"That would leave {now['qty'] + change:g} of {code} in {warehouse}: there can't be "
+                                          "less than 0.", status=400)
         unit_cost = _number(cost)
         if unit_cost is not None and unit_cost < 0:
             return _adjustment_form(form, f"The cost of {code} can't be below 0.", status=400)
-        line = {"product_code": code, "new_qty": new_qty, "comments": note,
-                "new_value": _new_value(now, new_qty, unit_cost if unit_cost is not None else (now["avg"] or by_code[code]["cost"] or 0)),
-                "had": now["qty"]}
+        line = {"product_code": code, "change": change, "comments": note,
+                "value_change": _value_change(now, change, unit_cost)}
         if by_code[code]["batch"]:
             if form.get(f"batches-shown-{code}"):
+                there = {b["number"]: b for b in _batches(code, warehouse)}
                 batches = []
                 for number, qty, expiry in zip_longest(form.getlist(f"batch-number-{code}"), form.getlist(f"batch-qty-{code}"),
                                                        form.getlist(f"batch-expiry-{code}"), fillvalue=""):
@@ -252,12 +259,17 @@ def adjustment_new():
                     if qty is None or qty < 0:
                         return _adjustment_form(form, f"Enter how much of batch {number} of {code} there should be.",
                                                 _batch_rows(form, warehouse), status=400)
-                    batches.append({"number": number[:50], "qty": qty, "expiry": expiry or None})
+                    # Each batch moves by the quantity it should be less what it holds now; a batch
+                    # not on the form is left as it is.
+                    moved = qty - (there[number]["qty"] if number in there else 0.0)
+                    if abs(moved) > 1e-9:
+                        batches.append({"number": number[:50], "change": moved,
+                                        "expiry": (expiry or None) if number not in there else None})
                 line["batches"] = batches
-                line["new_qty"] = sum(b["qty"] for b in batches)
-                line["new_value"] = _new_value(now, line["new_qty"], unit_cost if unit_cost is not None else (now["avg"] or by_code[code]["cost"] or 0))
+                line["change"] = sum(b["change"] for b in batches)
+                line["value_change"] = _value_change(now, line["change"], unit_cost)
             else:
-                need_batches[code] = new_qty
+                need_batches[code] = now["qty"] + change
         lines.append(line)
     if unknown:
         return _adjustment_form(form, f"{', '.join(unknown)}: not a product that holds stock. Pick one from the list as you "
@@ -266,11 +278,12 @@ def adjustment_new():
         return _adjustment_form(form, f"{', '.join(need_batches)} {'is' if len(need_batches) == 1 else 'are'} tracked by batch: "
                                       "say how much of each batch there should be below, then make the adjustment.",
                                 _batch_rows(form, warehouse, need_batches), status=400)
-    changing = [l for l in lines if abs(l["new_qty"] - l["had"]) > 1e-9 or l.get("batches") is not None]
+    changing = [l for l in lines if abs(l["change"]) > 1e-9 or l.get("batches")]
     if not changing:
         return _adjustment_form(form, "Nothing changes: enter a change or the quantity there should be.", status=400)
     try:
-        made = create_adjustment(_ext()["client"], {"warehouse": warehouse, "reason": reason, "lines": changing})
+        made = create_adjustment(_ext()["client"], {"warehouse": warehouse, "reason": reason, "lines": changing},
+                                 stock_fn=_quantities)
     except (StockWriteError, UnleashedError) as e:
         return _adjustment_form(form, _failed(e), _batch_rows(form, warehouse) if any(
             by_code[l["product_code"]]["batch"] for l in lines) else None, status=400)
@@ -599,32 +612,30 @@ def stock_count_post(count_id):
     lines, below = [], []
     for code, change in changes.items():
         now = have.get(code, {"qty": 0.0, "value": 0.0, "avg": 0.0})
-        line = {"product_code": code, "comments": f"Stock count: {found['name']}"[:200]}
-        if change["batches"]:  # each counted batch moves by its own difference; the others stay as they are
-            batches = {b["number"]: b for b in _batches(code, warehouse)}
-            for number, moved in change["batches"].items():
-                b = batches.setdefault(number, {"number": number, "qty": 0.0, "expiry": None})
-                b["qty"] = b["qty"] + moved
-            if any(b["qty"] < -1e-9 for b in batches.values()):
+        unit = now["avg"] or change["avg_cost"] or (products.get(code) or {}).get("cost") or 0.0
+        # Each counted line moves the stock by counted - expected (the change is what Unleashed
+        # takes), so what sold or arrived while counting stands.
+        line = {"product_code": code, "change": change["change"], "comments": f"Stock count: {found['name']}"[:200]}
+        if change["batches"]:  # each counted batch by its own difference; the others stay as they are
+            there = {b["number"]: b["qty"] for b in _batches(code, warehouse)}
+            if any(there.get(number, 0.0) + moved < -1e-9 for number, moved in change["batches"].items()):
                 below.append(code)
                 continue
-            line["batches"] = [b for b in batches.values() if b["qty"] > 1e-9]
-            line["new_qty"] = sum(b["qty"] for b in line["batches"])
-        else:
-            line["new_qty"] = now["qty"] + change["change"]
-        if line["new_qty"] < -1e-9:
+            line["batches"] = [{"number": number, "change": moved, "expiry": None}
+                               for number, moved in change["batches"].items() if abs(moved) > 1e-9]
+            line["change"] = sum(b["change"] for b in line["batches"])
+        if now["qty"] + line["change"] < -1e-9:
             below.append(code)
             continue
-        line["new_qty"] = max(line["new_qty"], 0.0)
-        unit = now["avg"] or change["avg_cost"] or (products.get(code) or {}).get("cost") or 0.0
-        line["new_value"] = _new_value(dict(now, avg=now["avg"] or unit), line["new_qty"], unit)
+        line["value_change"] = _value_change(dict(now, avg=unit), line["change"], unit)
         lines.append(line)
     if below:
         flash(f"{', '.join(below)} would go below 0: stock went out of {warehouse} since the count started. "
               "Recount them, then post.", "warn")
         return redirect(back)
     try:
-        made = create_adjustment(_ext()["client"], {"warehouse": warehouse, "reason": reason, "lines": lines})
+        made = create_adjustment(_ext()["client"], {"warehouse": warehouse, "reason": reason, "lines": lines},
+                                 stock_fn=_quantities)
     except (StockWriteError, UnleashedError) as e:
         flash(f"The count wasn't posted: {_failed(e)}", "warn")
         return redirect(back)

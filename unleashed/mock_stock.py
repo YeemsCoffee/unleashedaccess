@@ -16,12 +16,13 @@ AdjustmentReasons and WarehouseStockTransfers):
     POST   /WarehouseStockTransfers/{guid}/Complete  the stock moves
     DELETE /WarehouseStockTransfers/{guid}           a parked or placed transfer
 
-What the reference doesn't say is assumed: an adjustment line's NewQuantity and
-NewActualValue are the product's quantity and value in the warehouse after it (as the
-adjustments Unleashed returns show, beside QuantityChange and ValueChange); a batch-tracked
-product's BatchNumbers give each batch's quantity after it, adding up to NewQuantity, and a
-batch left out is emptied. A transfer moves stock at average cost, a batch-tracked product's
-batches soonest expiring first; it records when it completed in LastModifiedOn.
+An adjustment line's NewQuantity and NewActualValue are the signed change in the product's
+quantity and value in the warehouse, as the reference's examples show ("Found 2 in a box":
+2 and 97.271; "Lost 2 somewhere": -2 and -18.884); there are no other change fields. What the
+reference doesn't say is assumed: stock can't be taken below zero; stock taken out with no
+value given leaves at average cost; a batch-tracked product's BatchNumbers give each batch's
+signed change, adding up to NewQuantity. A transfer moves stock at average cost, a
+batch-tracked product's batches soonest expiring first; it records when it completed in LastModifiedOn.
 """
 import datetime as dt
 import uuid
@@ -100,10 +101,11 @@ def register(app, ds, ms, body_date, ms_date_in, product_ref, warehouse_ref, pag
             if l.get("NewQuantity") is None or l.get("NewActualValue") is None:
                 return _error("NewQuantity and NewActualValue are required")
             qty, value = float(l["NewQuantity"]), float(l["NewActualValue"])
-            if qty < 0 or value < 0:
-                return _error(f"NewQuantity and NewActualValue for {code} can't be negative")
-            if qty == 0 and value:
-                return _error(f"{code}: there's no value without stock")
+            if qty * value < 0:
+                return _error(f"{code}: NewActualValue should have the sign of NewQuantity")
+            had = ds.stock_in(code, warehouse)[0]
+            if status == "Completed" and had + qty < -1e-9:
+                return _error(f"Not enough stock of {code} in {warehouse}: {had:g} on hand")
             batches = []
             for b in l.get("BatchNumbers") or []:
                 if not (b.get("Number") or "").strip() or b.get("Quantity") is None:
@@ -112,8 +114,13 @@ def register(app, ds, ms, body_date, ms_date_in, product_ref, warehouse_ref, pag
                                 "ExpiryDate": body_date(b.get("ExpiryDate")) if b.get("ExpiryDate") else None})
             if batches and status != "Completed":
                 return _error("BatchNumbers can only be assigned to Completed adjustments")
-            if status == "Completed" and code in BATCH_TRACKED and abs(sum(b["Quantity"] for b in batches) - qty) > 1e-9:
-                return _error(f"Batch numbers for {code} must add up to its NewQuantity")
+            if status == "Completed" and code in BATCH_TRACKED:
+                if abs(sum(b["Quantity"] for b in batches) - qty) > 1e-9:
+                    return _error(f"Batch numbers for {code} must add up to its NewQuantity")
+                for b in batches:
+                    have = ds.find_batch(code, warehouse, b["Number"])
+                    if (have["Quantity"] if have else 0.0) + b["Quantity"] < -1e-9:
+                        return _error(f"Batch {b['Number']} of {code} doesn't have {-b['Quantity']:g}")
             lines.append({"Guid": str(uuid.uuid4()), "ProductCode": code, "NewQuantity": qty, "NewActualValue": value,
                           "Comments": (l.get("Comments") or None), "BatchNumbers": batches})
         if len({l["ProductCode"] for l in lines}) != len(lines):
@@ -122,22 +129,16 @@ def register(app, ds, ms, body_date, ms_date_in, product_ref, warehouse_ref, pag
         number = ds.next_number("SA")
         if status == "Completed":
             for l in lines:
-                code = l["ProductCode"]
-                had_qty, had_value = ds.stock_in(code, warehouse)
-                l["QuantityChange"] = round(l["NewQuantity"] - had_qty, 4)
-                l["ValueChange"] = round(l["NewActualValue"] - had_value, 4)
-                ds.move_stock(day, "Adjustment", number, reason, code, l["QuantityChange"], l["ValueChange"], warehouse)
-                if code in BATCH_TRACKED:
-                    named = {b["Number"] for b in l["BatchNumbers"]}
-                    for b in ds.batches:
-                        if b["ProductCode"] == code and b["WarehouseCode"] == warehouse and b["Number"] not in named:
-                            b["Quantity"] = 0.0
-                    for b in l["BatchNumbers"]:
-                        have = ds.find_batch(code, warehouse, b["Number"])
-                        if have:
-                            have["Quantity"] = b["Quantity"]
-                        else:
-                            ds.add_batch(code, warehouse, b["Number"], b["Quantity"], b["ExpiryDate"])
+                code, qty = l["ProductCode"], l["NewQuantity"]
+                if qty < 0 and not l["NewActualValue"]:  # out at average cost
+                    l["NewActualValue"] = round(qty * ds.average_cost(code), 4)
+                ds.move_stock(day, "Adjustment", number, reason, code, qty, l["NewActualValue"], warehouse)
+                for b in l["BatchNumbers"]:
+                    have = ds.find_batch(code, warehouse, b["Number"])
+                    if have:
+                        have["Quantity"] += b["Quantity"]
+                    else:
+                        ds.add_batch(code, warehouse, b["Number"], b["Quantity"], b["ExpiryDate"])
         sa = {"Guid": guid, "AdjustmentNumber": number, "AdjustmentDate": day, "AdjustmentReason": reason,
               "Status": status, "WarehouseCode": warehouse, "Lines": lines, "Modified": dt.date.today(),
               "AccountCode": body.get("AccountCode")}
@@ -151,8 +152,7 @@ def register(app, ds, ms, body_date, ms_date_in, product_ref, warehouse_ref, pag
             "Status": a["Status"], "Warehouse": warehouse_ref(ds, a.get("WarehouseCode")),
             "StockAdjustmentLines": [
                 {"Guid": l.get("Guid"), "LineNumber": i, "Product": product_ref(ds, l["ProductCode"]),
-                 **{k: l[k] for k in ("QuantityChange", "ValueChange", "NewQuantity", "NewActualValue", "Comments")
-                    if k in l},
+                 **{k: l[k] for k in ("NewQuantity", "NewActualValue", "Comments") if k in l},
                  "BatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"],
                                    "ExpiryDate": ms(b.get("ExpiryDate"))} for b in l.get("BatchNumbers") or []]}
                 for i, l in enumerate(a["Lines"], 1)],

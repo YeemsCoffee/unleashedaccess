@@ -552,10 +552,11 @@ class MockDataset:
         for l in lines:
             code = l["ProductCode"]
             self._move(day, "Adjustment", sa["AdjustmentNumber"], reason, code, l["Qty"], l["Value"])
-            sa["Lines"].append({"ProductCode": code, "QuantityChange": l["Qty"],
-                                "ValueChange": round(l["Value"], 4),
-                                "NewQuantity": self._qty[code],
-                                "NewActualValue": round(self._value[code], 4),
+            # As Unleashed gives them: the signed change in quantity and in value (its API reference's
+            # "Lost 2 somewhere" line is NewQuantity -2, NewActualValue -18.884). There are no other
+            # change fields.
+            sa["Lines"].append({"ProductCode": code, "NewQuantity": l["Qty"],
+                                "NewActualValue": round(l["Value"], 4),
                                 "Comments": l["Comments"]})
         self.stock_adjustments.append(sa)
 

@@ -154,7 +154,8 @@ def run_checks(reports):
             entry = by_status.setdefault(st, {"lines": 0, "missing": 0, "examples": []})
             for l in a.get("StockAdjustmentLines") or []:
                 entry["lines"] += 1
-                if l.get("QuantityChange") is None and l.get("ValueChange") is None:
+                # The change is in NewQuantity / NewActualValue (signed); none or zero: nothing moved.
+                if not l.get("NewQuantity") and not l.get("NewActualValue"):
                     entry["missing"] += 1
                     if a["AdjustmentNumber"] not in entry["examples"]:
                         entry["examples"].append(a["AdjustmentNumber"])

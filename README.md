@@ -142,6 +142,11 @@ each warehouse holds is read from Unleashed itself when one is made, not from th
   product then asks how much of each batch there should be, or a new batch with its expiry.
   Unleashed's API only creates adjustments (no edit, complete or delete), so Core makes them
   completed: the stock changes straight away, and a mistake is undone with another one.
+  Unleashed's `NewQuantity` and `NewActualValue` are, despite their names, the signed change
+  in quantity and value (its reference's "Lost 2 somewhere" line is −2 and −18.884), and
+  that is what Core sends and reads: adjustments count in COGS (write-offs), transactions
+  and the day-by-day check by those. Core reads the stock on hand before and after sending
+  one, refuses one that would go below zero, and says if the stock didn't move as asked.
 - **Transfers** (+ Transfer): from one warehouse to another, products and quantities (with
   what the "from" warehouse holds beside each), saved parked (a draft), placed (on its way)
   or completed now. An open transfer can be edited, completed (the stock moves, at average

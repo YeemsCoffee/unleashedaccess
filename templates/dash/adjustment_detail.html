@@ -16,12 +16,12 @@
     <div><dt>Value change</dt><dd>{{ change|money }}</dd></div>
   </dl>
   <div class="table-wrap"><table>
-    <thead><tr><th>Product</th><th class="num">Change</th><th class="num">Value change</th><th class="num">New quantity</th><th class="num">New value</th><th>Note</th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Change</th><th class="num">Value change</th><th>Note</th></tr></thead>
     <tbody>{% for l in a.lines %}
     <tr><td>{{ l.product_code }} <div class="muted small">{{ l.description or '' }}</div>
-        {% if l.batches %}<div class="muted small">Batches: {% for b in l.batches %}{{ b.number }} ({{ b.qty|qty }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
+        {% if l.batches %}<div class="muted small">Batches: {% for b in l.batches %}{{ b.number }} ({{ '%+g'|format(b.qty) if b.qty is not none else '' }}){{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</td>
       <td class="num">{{ l.qty_change|qty }}</td><td class="num">{{ l.value_change|money }}</td>
-      <td class="num">{{ l.new_qty|qty }}</td><td class="num">{{ l.new_value|money }}</td><td>{{ l.comments or '' }}</td></tr>
+      <td>{{ l.comments or '' }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
   <div class="run-actions"><a class="btn" href="{{ url_for('dash.adjustment_new', warehouse=a.warehouse) }}">+ Another adjustment</a></div>

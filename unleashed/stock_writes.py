@@ -6,10 +6,12 @@ apidocs.unleashedsoftware.com:
   StockAdjustments:        POST /StockAdjustments/{guid} only. There is no update, complete
                            or delete, so Core makes adjustments completed: the stock moves
                            straight away, and one made by mistake is undone with another.
-                           Each line gives the product's quantity and value in the
-                           warehouse after it (NewQuantity, NewActualValue; Unleashed works
-                           out the change); a batch-tracked product's batches, each with its
-                           quantity after, add up to that quantity.
+                           Each line gives the signed change in the product's quantity and
+                           value (NewQuantity, NewActualValue: despite their names, the
+                           change, as the reference's "Lost 2 somewhere" line shows: -2 and
+                           -18.884); a batch-tracked product's batches each give their own
+                           change, adding up to the line's. The stock on hand is read before
+                           and after, to check it moved by what was asked.
   WarehouseStockTransfers: POST (parked or placed; Unleashed takes no Guid of ours), PUT
                            /{guid} (header and existing lines), POST/PUT/DELETE
                            /{guid}/Lines[/{lineGuid}], POST /{guid}/Complete (the stock
@@ -44,11 +46,14 @@ def adjustment_reasons(client):
 
 # ---------------------------------------------------------------- adjustments
 
-def create_adjustment(client, adjustment):
+def create_adjustment(client, adjustment, stock_fn=None):
     """Make a completed stock adjustment. `adjustment`: {"warehouse", "reason", "date"
-    (default today), "lines": [{"product_code", "new_qty", "new_value", "comments", "batches":
-    [{"number", "qty", "expiry"}] for a batch-tracked product}]}. Returns the adjustment as
-    Unleashed holds it."""
+    (default today), "lines": [{"product_code", "change" (signed: -3 gone, 5 found),
+    "value_change" (signed the same way), "comments", "batches": [{"number", "change",
+    "expiry"}] for a batch-tracked product}]}. `stock_fn(warehouse)` -> {product code:
+    quantity on hand now}, read from Unleashed: with it, nothing is sent that would take a
+    product below zero, and the stock is read again afterwards to check it moved by what was
+    asked. Returns the adjustment as Unleashed holds it."""
     lines = adjustment.get("lines") or []
     if not adjustment.get("warehouse"):
         raise StockWriteError("Choose the warehouse.")
@@ -63,11 +68,23 @@ def create_adjustment(client, adjustment):
         if l["product_code"] in seen:
             raise StockWriteError(f"{l['product_code']} is on two lines: put it on one.")
         seen.add(l["product_code"])
-        if l.get("new_qty") is None or l["new_qty"] < 0:
-            raise StockWriteError(f"Enter the quantity of {l['product_code']} there should be (0 or more).")
-        if l.get("batches") is not None and abs(sum(b["qty"] for b in l["batches"]) - l["new_qty"]) > TOLERANCE:
-            raise StockWriteError(f"{l['product_code']}'s batches should add up to {l['new_qty']:g}.")
+        if l.get("change") is None:
+            raise StockWriteError(f"Enter how much {l['product_code']} changes by.")
+        if l.get("batches") is not None and abs(sum(b["change"] for b in l["batches"]) - l["change"]) > TOLERANCE:
+            raise StockWriteError(f"{l['product_code']}'s batches should add up to {l['change']:+g}.")
+        if not l["change"] and not l.get("batches"):
+            raise StockWriteError(f"{l['product_code']} doesn't change.")
+        if (l.get("value_change") or 0) * l["change"] < 0:
+            raise StockWriteError(f"{l['product_code']}: the value should go the same way as the quantity.")
+    before = stock_fn(adjustment["warehouse"]) if stock_fn else None
+    if before is not None:
+        for l in lines:
+            if before.get(l["product_code"], 0.0) + l["change"] < -TOLERANCE:
+                raise StockWriteError(f"There's only {before.get(l['product_code'], 0.0):g} of {l['product_code']} in "
+                                      f"{adjustment['warehouse']}: it can't go down by {-l['change']:g}.")
     guid = str(uuid.uuid4())
+    # NewQuantity and NewActualValue are the signed change, as Unleashed's own adjustments show
+    # ("Lost 2 somewhere": -2 and -18.884), not the totals after it.
     body = {
         "Guid": guid,
         "Warehouse": {"WarehouseCode": adjustment["warehouse"]},
@@ -76,12 +93,12 @@ def create_adjustment(client, adjustment):
         "Status": "Completed",
         "StockAdjustmentLines": [{
             "Product": {"ProductCode": l["product_code"]},
-            "NewQuantity": l["new_qty"],
-            "NewActualValue": money(l["new_value"] or 0) if l["new_qty"] else 0,
+            "NewQuantity": l["change"],
+            "NewActualValue": money(l.get("value_change") or 0),
             "Comments": (l.get("comments") or "").strip()[:200] or None,
-            **({"BatchNumbers": [{"Number": b["number"], "Quantity": b["qty"],
+            **({"BatchNumbers": [{"Number": b["number"], "Quantity": b["change"],
                                   **({"ExpiryDate": body_date(b["expiry"])} if b.get("expiry") else {})}
-                                 for b in l["batches"] if b["qty"]]} if l.get("batches") is not None else {}),
+                                 for b in l["batches"] if b["change"]]} if l.get("batches") is not None else {}),
         } for l in lines],
     }
     try:
@@ -93,16 +110,25 @@ def create_adjustment(client, adjustment):
     made = _get(client, "StockAdjustments", guid)
     if made is None:
         raise StockWriteError("Unleashed didn't keep the adjustment.")
+    number = made.get("AdjustmentNumber")
     if (made.get("Status") or "") != "Completed":
-        raise StockWriteError(f"Unleashed kept {made.get('AdjustmentNumber')} as {(made.get('Status') or 'no status').lower()}, "
+        raise StockWriteError(f"Unleashed kept {number} as {(made.get('Status') or 'no status').lower()}, "
                               "not completed: finish it in Unleashed.")
     have = {(l.get("Product") or {}).get("ProductCode"): l for l in made.get("StockAdjustmentLines") or []}
-    for l in lines:
-        got = have.get(l["product_code"])
-        if got is None or (got.get("NewQuantity") is not None
-                           and abs(float(got["NewQuantity"]) - l["new_qty"]) > TOLERANCE):
-            raise StockWriteError(f"{made.get('AdjustmentNumber')} was made, but Unleashed doesn't show "
-                                  f"{l['product_code']} at {l['new_qty']:g}: check it in Unleashed.")
+    missing = [l["product_code"] for l in lines if l["product_code"] not in have]
+    if missing:
+        raise StockWriteError(f"{number} was made, but without {', '.join(missing)}: check it in Unleashed.")
+    if before is not None:  # the check that counts: did the stock on hand move by what was asked?
+        after = stock_fn(adjustment["warehouse"])
+        wrong = []
+        for l in lines:
+            had, now = before.get(l["product_code"], 0.0), after.get(l["product_code"], 0.0)
+            if abs(now - (had + l["change"])) > TOLERANCE:
+                wrong.append(f"{l['product_code']} went from {had:g} to {now:g}, not to {had + l['change']:g}")
+        if wrong:
+            raise StockWriteError(f"{number} was made, but the stock didn't move as asked: {'; '.join(wrong)}. Check it in "
+                                  "Unleashed, and put it right with another adjustment if nothing else moved that stock "
+                                  "in the last minute.")
     return made
 
 
