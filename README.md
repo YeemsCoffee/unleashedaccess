@@ -806,10 +806,11 @@ unleashedaccess/
 The repository carries its own agents and security checks, picked up by Claude Code when it's
 opened in this folder. None of it is part of the app or of the deploy zip (`.gitattributes`).
 
-**Security checks** (`tools/security_mcp.py`, an MCP server named `core-security`). Set up
-once with `pip install -r tools/requirements.txt`, in the same Python as the app; Claude Code
-asks to approve the server the first time. Everything is read-only and runs on the mock
-Unleashed server and a throwaway database:
+**Security checks** (`tools/security_mcp.py`, an MCP server named `core-security`). It needs
+nothing installed beyond the app's own requirements; Claude Code asks to approve the server
+the first time, and `/mcp` shows whether it's connected. The dependency audit and static scan
+use two scanners, added with `pip install -r tools/requirements.txt`. Everything is read-only
+and runs on the mock Unleashed server and a throwaway database:
 
 | Tool | What it checks |
 |---|---|

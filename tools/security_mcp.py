@@ -4,7 +4,8 @@ Tools: scan_secrets, route_access_audit, audit_dependencies, static_scan, git_hi
 Nothing here writes to the repository, the database or the live Unleashed account; the route
 audit runs the app on the mock Unleashed server and a throwaway SQLite file.
 
-Run by Claude Code through the project's .mcp.json. Needs the MCP SDK: pip install mcp
+Run by Claude Code through the project's .mcp.json. It speaks MCP itself (JSON-RPC, one message
+a line on stdin/stdout), so it needs nothing installed beyond the app's own requirements.
 """
 import json
 import os
@@ -12,17 +13,23 @@ import re
 import subprocess
 import sys
 
-try:
-    from mcp.server.mcpserver import MCPServer as Server  # MCP SDK 2.x
-except ImportError:  # pragma: no cover
-    from mcp.server.fastmcp import FastMCP as Server  # MCP SDK 1.x
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The Python that has the app's requirements (Flask...). Set PROJECT_PYTHON to use a virtualenv.
 PROJECT_PYTHON = os.environ.get("PROJECT_PYTHON") or sys.executable
 
-server = Server("core-security", instructions="Read-only security checks for the Core (Unleashed Access) Flask app. "
+INSTRUCTIONS = ("Read-only security checks for the Core (Unleashed Access) Flask app. "
                 "Findings never include secret values: only file, line and kind.")
+TOOLS = {}
+
+
+class server:  # the checks register themselves with @server.tool()
+    @staticmethod
+    def tool():
+        def register(fn):
+            TOOLS[fn.__name__] = fn
+            return fn
+        return register
+
 
 SECRET_PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
@@ -131,5 +138,48 @@ def static_scan() -> str:
                         "severity": r["issue_severity"], "message": r["issue_text"]} for r in results], indent=2)
 
 
+def _answer(message):
+    """The reply to one JSON-RPC message, or None for a notification."""
+    method, params = message.get("method"), message.get("params") or {}
+    if "id" not in message:
+        return None
+    if method == "initialize":
+        result = {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                  "capabilities": {"tools": {}}, "instructions": INSTRUCTIONS,
+                  "serverInfo": {"name": "core-security", "version": "1.0"}}
+    elif method == "ping":
+        result = {}
+    elif method == "tools/list":
+        result = {"tools": [{"name": name, "description": " ".join((fn.__doc__ or "").split()),
+                             "inputSchema": {"type": "object", "properties": {}},
+                             "annotations": {"readOnlyHint": True}} for name, fn in TOOLS.items()]}
+    elif method == "tools/call":
+        fn = TOOLS.get(params.get("name"))
+        if fn is None:
+            return {"jsonrpc": "2.0", "id": message["id"],
+                    "error": {"code": -32602, "message": f"No tool named {params.get('name')}"}}
+        try:
+            result = {"content": [{"type": "text", "text": fn()}]}
+        except Exception as exc:  # a failed check is reported, the server keeps running
+            result = {"content": [{"type": "text", "text": f"{type(exc).__name__}: {exc}"}], "isError": True}
+    else:
+        return {"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": f"Unknown method {method}"}}
+    return {"jsonrpc": "2.0", "id": message["id"], "result": result}
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            reply = _answer(json.loads(line))
+        except ValueError:
+            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Not JSON"}}
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
+
+
 if __name__ == "__main__":
-    server.run()
+    main()

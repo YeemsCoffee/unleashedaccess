@@ -1,5 +1,4 @@
-# For the project's security MCP server (tools/security_mcp.py) and its scanners.
-# Not needed to run the app: pip install -r tools/requirements.txt
-mcp
+# Scanners used by the project's security checks (tools/security_mcp.py). Optional, and not
+# needed to run the app: pip install -r tools/requirements.txt
 pip-audit
 bandit
