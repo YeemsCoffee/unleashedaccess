@@ -1,0 +1,5 @@
+# Developer tooling stays out of the deploy zip (git archive -o unleashedaccess.zip HEAD).
+.claude export-ignore
+.mcp.json export-ignore
+tools export-ignore
+.gitattributes export-ignore

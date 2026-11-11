@@ -795,5 +795,42 @@ unleashedaccess/
 ├── templates/maint/    # Maintenance page templates
 ├── templates/brand/    # Yeems logo and home icon (SVG, from the brand manual)
 ├── static/             # dash.css (the Yeems look), dash.js, favicon.svg, fonts/ (Inter, Montserrat Alternates; SIL OFL)
-└── tests/test_unleashed.py
+├── tests/test_unleashed.py
+├── .claude/agents/     # Claude Code agents for this project (see below); not in the deploy zip
+├── .mcp.json           # connects Claude Code to the security checks; not in the deploy zip
+└── tools/              # security_mcp.py (the checks, as an MCP server), route_audit.py; not in the deploy zip
 ```
+
+## Working on Core with Claude Code
+
+The repository carries its own agents and security checks, picked up by Claude Code when it's
+opened in this folder. None of it is part of the app or of the deploy zip (`.gitattributes`).
+
+**Security checks** (`tools/security_mcp.py`, an MCP server named `core-security`). Set up
+once with `pip install -r tools/requirements.txt`, in the same Python as the app; Claude Code
+asks to approve the server the first time. Everything is read-only and runs on the mock
+Unleashed server and a throwaway database:
+
+| Tool | What it checks |
+|---|---|
+| `route_access_audit` | Every route as an anonymous visitor (all should go to sign-in) and as someone who can only report maintenance problems (should reach nothing else); whether a cross-site form post is accepted; which security headers are missing; the sign-in cookie's settings. Also `python tools/route_audit.py` |
+| `scan_secrets` | Credentials in tracked files, and that `.env` isn't tracked. File and line only, never the value |
+| `git_history_secrets` | `.env` or key files ever committed, and credential-looking strings in history |
+| `audit_dependencies` | Known vulnerabilities in `requirements.txt` (pip-audit) |
+| `static_scan` | Python static analysis (Bandit), medium severity and up |
+
+**Agents** (`.claude/agents/`), asked for by name ("have the security-auditor review this"):
+
+| Agent | For |
+|---|---|
+| `security-auditor` | A security review of the app or of a change: SQL, pages, uploads, redirects, what reaches Unleashed. Reports only |
+| `access-control-reviewer` | Who can reach what: sign-in, sessions, profiles and tabs, admin-only actions, opening someone else's record by its number. Reports only |
+| `secrets-and-deploy-reviewer` | `.env` and settings, cookies and HTTPS, headers, what's logged, the AWS config, dependencies. Reports only |
+| `security-fixer` | Fixes one confirmed finding, with a test that fails before and passes after |
+| `unleashed-integration` | The API client, sync, mock server and everything Core writes to Unleashed |
+| `finance-warehouse-dev` | COGS, orders, returns, stock on hand, adjustments, transfers and counts |
+| `production-dev` | Bills of materials, production orders, procedures and close-out |
+| `maintenance-dev` | Locations, equipment, tasks, requests, work orders, calendar and history |
+| `qa-tester` | Runs the tests and clicks through a change in a browser, desktop and phone. Changes tests only |
+
+All of them work on mock data only: none writes to the live Unleashed account or reads `.env` aloud.

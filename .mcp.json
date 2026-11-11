@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "core-security": {
+      "command": "python",
+      "args": ["tools/security_mcp.py"]
+    }
+  }
+}
