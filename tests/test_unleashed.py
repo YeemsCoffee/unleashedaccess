@@ -671,6 +671,59 @@ class OrderPageTests(unittest.TestCase):
         rows = [t for t in self.reports.transactions(TODAY, TODAY, product="MILK-OAT-QT") if t["number"] == number]
         self.assertEqual([(t["qty"], round(t["value"], 2)) for t in rows], [(36.0, 111.6)])  # stock units in the history
 
+    def test_the_unit_is_chosen_on_each_purchase_order_line(self):
+        """Unleashed's purchasing unit comes chosen, but a line can be in any unit the product can be
+        bought in: oat milk (bought by the case) by the carton, vanilla syrup (bought by the bottle) by
+        the case of 6."""
+        form = self.c.get("/purchases/new").get_data(as_text=True)
+        data = {p["code"]: p for p in json.loads(re.search(r'id="order-product-data">(.*?)</script>', form, re.S).group(1))}
+        self.assertEqual([(u["name"], u["stock"]) for u in data["MILK-OAT-QT"]["units"]], [("Each", True), ("Case", False)])
+        self.assertEqual(data["MILK-OAT-QT"]["unit"], "Case")  # Unleashed's purchasing unit comes chosen
+        self.assertEqual([u["name"] for u in data["SYR-VAN-750"]["units"]], ["Bottle", "Case"])
+        self.assertEqual(data["SYR-VAN-750"]["unit"], "Bottle")
+        self.assertEqual([u["name"] for u in data["MILK-WHL-GAL"]["units"]], ["Each"])
+        self.assertIn('name="unit"', form)
+
+        def post(url, units, qty, guids=None, products=("MILK-OAT-QT", "SYR-VAN-750", "MILK-WHL-GAL"),
+                 prices=("3.10", "43.20", "4.20")):
+            return self.c.post(url, data={"supplier": "SUP-DAIRY", "warehouse": "GDN", "order_date": TODAY.isoformat(),
+                                          "line_guid": guids or [""] * len(products), "product": list(products),
+                                          "unit": list(units), "qty": list(qty), "price": list(prices), "place": "1"})
+
+        bad = post("/purchases/new", ["Pallet", "Case", "Each"], ["24", "2", "5"])
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("MILK-OAT-QT isn&#39;t bought by the Pallet in Unleashed", bad.get_data(as_text=True))
+
+        res = post("/purchases/new", ["Each", "Case", "Each"], ["24", "2", "5"])
+        self.assertEqual(res.status_code, 302, res.get_data(as_text=True)[:2000])
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        po = next(p for p in self.ds.purchase_orders if p["OrderNumber"] == number)
+        lines = {l["ProductCode"]: l for l in po["Lines"]}
+        self.assertNotIn("Unit", lines["MILK-OAT-QT"])  # by the carton: no unit sent, so stock units
+        self.assertEqual(lines["MILK-OAT-QT"]["OrderQuantity"], 24.0)
+        self.assertEqual((lines["SYR-VAN-750"]["Unit"], lines["SYR-VAN-750"]["Rate"], lines["SYR-VAN-750"]["OrderQuantity"]),
+                         ("Case", 6, 2.0))
+        syrup = next(l for l in self.reports.purchase_order(number)["lines"] if l["product_code"] == "SYR-VAN-750")
+        self.assertEqual((syrup["order_qty"], syrup["order_unit"], syrup["qty"]), (2.0, "Case", 12.0))
+
+        # Editing shows each line in its own unit; changing oat milk to cases replaces that line only.
+        edit = self.c.get(f"/purchases/{number}/edit").get_data(as_text=True)
+        selects = re.findall(r'<select name="unit".*?</select>', edit, re.S)
+        selected = [re.search(r'<option value="([^"]+)" selected>', x).group(1) for x in selects[:3]]
+        self.assertEqual(selected, ["Each", "Case", "Each"])
+        got = {l["product_code"]: l["guid"] for l in self.reports.purchase_order(number)["lines"]}
+        guids = [got["MILK-OAT-QT"], got["SYR-VAN-750"], got["MILK-WHL-GAL"]]
+        res = post(f"/purchases/{number}/edit", ["Case", "Case", "Each"], ["2", "2", "5"], guids=guids,
+                   prices=("37.20", "43.20", "4.20"))
+        self.assertEqual(res.status_code, 302, res.get_data(as_text=True)[:2000])
+        lines = {l["ProductCode"]: l for l in po["Lines"]}
+        self.assertEqual(len(po["Lines"]), 3)
+        self.assertEqual((lines["MILK-OAT-QT"]["Unit"], lines["MILK-OAT-QT"]["OrderQuantity"]), ("Case", 2.0))
+        self.assertNotEqual(lines["MILK-OAT-QT"]["Guid"], got["MILK-OAT-QT"])  # put on again in cases
+        self.assertEqual(lines["SYR-VAN-750"]["Guid"], got["SYR-VAN-750"])  # unchanged, kept
+        oat = next(l for l in self.reports.purchase_order(number)["lines"] if l["product_code"] == "MILK-OAT-QT")
+        self.assertEqual((oat["order_qty"], oat["order_unit"], oat["qty"]), (2.0, "Case", 24.0))
+
     def test_receiving_in_a_purchasing_unit_checks_how_unleashed_read_it(self):
         """The reference doesn't say which unit a changed line's quantities are read in. If Unleashed
         reads them as stock units, Core sees the order quantity move and sends them that way instead."""

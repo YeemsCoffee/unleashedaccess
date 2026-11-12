@@ -585,20 +585,64 @@ function fromTemplate(id, values) {
       return;
     }
     input.value = p.code;
-    // A product bought in another unit than it's stocked in: the quantity and price are for that unit.
-    label.textContent = p.name + (p.stock_unit && p.unit
-      ? ": ordered by the " + p.unit + (p.stock_per_unit ? " (" + p.stock_per_unit + " " + p.stock_unit + " in one)" : "") + ", priced per " + p.unit
-      : (p.unit ? " (" + p.unit + ")" : ""));
     label.classList.remove("due-late");
-    var price = row.querySelector("[name=price]"), qty = row.querySelector("[name=qty]");
-    if (p.price !== null && p.price !== undefined && p.price !== "" && !price.value) {
-      var v = +p.price;
-      price.value = Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? v.toFixed(2) : String(v);
+    // A purchase order line: the units the product can be bought in, Unleashed's one chosen.
+    var select = row.querySelector("[name=unit]");
+    if (select && p.units) {
+      // The same product again (the page drawn with it): its unit stays as chosen.
+      var was = select.value.toLowerCase(), kept = null;
+      select.innerHTML = "";
+      p.units.forEach(function (u) {
+        var o = document.createElement("option");
+        o.value = o.textContent = u.name;
+        select.appendChild(o);
+        if (select.dataset.code === p.code && (u.name || "").toLowerCase() === was) kept = u.name;
+      });
+      select.value = kept || p.unit;
+      select.dataset.code = p.code;
     }
+    describe(row, p);
+    var price = row.querySelector("[name=price]"), qty = row.querySelector("[name=qty]");
+    var unit = unitOf(row, p), cost = unit ? unit.price : p.price;
+    if (!price.value) setPrice(price, cost);
     if (!qty.value) qty.focus();
+  }
+  // The unit a purchase order line is in ({name, price, per, stock}), or null.
+  function unitOf(row, p) {
+    var select = row.querySelector("[name=unit]");
+    if (!select || !p || !p.units) return null;
+    var name = select.value.toLowerCase();
+    return p.units.filter(function (u) { return (u.name || "").toLowerCase() === name; })[0] || null;
+  }
+  function setPrice(price, value) {
+    if (value === null || value === undefined || value === "") { price.value = ""; price.dataset.auto = ""; return; }
+    var v = +value;
+    price.value = Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? v.toFixed(2) : String(v);
+    price.dataset.auto = price.value;  // filled in, not typed: changing the unit may change it
+  }
+  // The product's name, and for a unit other than its stock unit, what's in one when known.
+  function describe(row, p) {
+    var label = row.querySelector("[data-product-name]"), unit = unitOf(row, p);
+    var stock = p.units ? p.units.filter(function (u) { return u.stock; })[0] : null;
+    if (unit && !unit.stock) {
+      label.textContent = p.name + ": ordered by the " + unit.name +
+        (unit.per && stock ? " (" + unit.per + " " + stock.name + " in one)" : "") + ", priced per " + unit.name;
+    } else {
+      label.textContent = p.name + (unit ? " (" + unit.name + ")" : (p.unit ? " (" + p.unit + ")" : ""));
+    }
   }
   body.addEventListener("change", function (e) {
     if (e.target.matches(".line-product")) { pick(e.target); sum(); }
+    if (e.target.matches("[name=unit]")) {
+      var row = e.target.closest("[data-line]");
+      var p = byCode[(row.querySelector(".line-product").value || "").trim().toLowerCase()];
+      if (!p) return;
+      describe(row, p);
+      // The price follows the unit unless one was typed.
+      var price = row.querySelector("[name=price]"), unit = unitOf(row, p);
+      if (unit && (!price.value || price.value === price.dataset.auto)) setPrice(price, unit.price);
+      sum();
+    }
   });
   body.addEventListener("input", function (e) {
     // Picking from the list fills the whole code at once: take it straight away.
@@ -631,6 +675,8 @@ function fromTemplate(id, values) {
       row.querySelectorAll("input:not([type=hidden]), select").forEach(function (el) { el.value = ""; });
       row.querySelector("[name=line_guid]").value = "";
       row.querySelector("[data-product-name]").textContent = "";
+      var unitSelect = row.querySelector("[name=unit]");
+      if (unitSelect) { unitSelect.innerHTML = '<option value="">—</option>'; unitSelect.dataset.code = ""; }
     }
     sum();
   });

@@ -12,7 +12,7 @@ from flask import Flask, jsonify, request
 
 from .client import sign
 from . import mock_orders, mock_returns, mock_stock
-from .mock_data import BATCH_TRACKED, PURCHASE_UNITS, MockDataset
+from .mock_data import BATCH_TRACKED, PURCHASE_UNITS, MockDataset, purchasable_units
 
 MOCK_API_ID = "mock-api-id"
 MOCK_API_KEY = "mock-api-key"
@@ -417,8 +417,9 @@ def _purchasing(ds, p):
     ref = {"Guid": mock_orders.unit_guid(unit), "Name": unit}
     supplier = dict(_supplier_ref(ds, p["SupplierCode"]), UnitOfMeasure=ref,
                     SupplierProductPrice=round(p["BaseCost"] * rate, 4)) if p["SupplierCode"] else None
-    return {"DefaultPurchasesUnitOfMeasure": dict(ref, Obsolete=False),
-            "AlternateUnitsOfMeasure": [dict(ref, ConversionRate=float(rate), ForPurchases=True)] if rate != 1 else [],
+    others = [{"Guid": mock_orders.unit_guid(name), "Name": name, "ConversionRate": float(per), "ForPurchases": True}
+              for name, per in purchasable_units(p["ProductCode"], p["UnitOfMeasure"]).values() if per != 1]
+    return {"DefaultPurchasesUnitOfMeasure": dict(ref, Obsolete=False), "AlternateUnitsOfMeasure": others,
             "Supplier": supplier}
 
 

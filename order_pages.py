@@ -10,7 +10,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 from dashboard import (_ext, _person, _sync_soon, _write_problem, bp, reports)
 from unleashed.client import UnleashedError, parse_date
 from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHASES, OrderError, complete_credit,
-                                    purchase_unit,
+                                    purchasable_units, purchase_unit, same_unit,
                                     complete_purchase_order, complete_sales_order, complete_supplier_return,
                                     create_credit, create_purchase_order, create_sales_order,
                                     create_supplier_return, delete_credit, delete_purchase_order, delete_sales_order,
@@ -41,14 +41,16 @@ def _lines_from_form(form, codes=None):
     {lowercase code: code} to match typed product codes to; a line given something else keeps it,
     for the page to say so."""
     lines = []
-    for guid, code, qty, price in zip_longest(form.getlist("line_guid"), form.getlist("product"),
-                                              form.getlist("qty"), form.getlist("price"), fillvalue=""):
+    # A purchase order's lines each have a unit too (blank: the product's purchasing unit).
+    units = form.getlist("unit") or [""] * len(form.getlist("product"))
+    for guid, code, qty, price, unit in zip_longest(form.getlist("line_guid"), form.getlist("product"),
+                                                    form.getlist("qty"), form.getlist("price"), units, fillvalue=""):
         if not (code or "").strip() and not (qty or "").strip():
             continue
         code = (code or "").strip()
         code = (codes or {}).get(code.lower(), code)
         lines.append({"guid": guid or None, "product_code": code, "qty": _number(qty) or 0,
-                      "unit_price": _number(price)})
+                      "unit_price": _number(price), **({"unit_name": unit.strip()} if (unit or "").strip() else {})})
     for guid, code, amount, note in zip_longest(form.getlist("charge_guid"), form.getlist("charge"),
                                                 form.getlist("charge_amount"), form.getlist("charge_note"), fillvalue=""):
         if not (code or "").strip() or _number(amount) is None:
@@ -111,24 +113,33 @@ def _choices(kind):
 
     last_paid = _last_paid() if kind == "purchases" else {}
 
+    def unit_choice(p, unit):
+        """A unit the product can be bought in, at its price: for the stock unit the default purchase
+        price; for another (a case of 12), the supplier's price for one in Unleashed, or what was
+        last paid for one. (The default purchase price is for a stock unit, and which way Unleashed's
+        conversion rate runs isn't documented, so Core doesn't convert one into the other.)"""
+        if unit["stock"]:
+            return {"name": unit.get("Name"), "price": p.get(price), "per": 1, "stock": True}
+        supplier = p.get("Supplier") or {}
+        paid = last_paid.get((p.get("ProductCode"), (unit.get("Name") or "").lower())) or {}
+        cost = supplier.get("SupplierProductPrice") if same_unit(supplier.get("UnitOfMeasure"), unit) and \
+            supplier.get("SupplierProductPrice") is not None else paid.get("price")
+        return {"name": unit.get("Name"), "price": cost, "per": paid.get("per"), "stock": False}
+
     def option(p):
         base = (p.get("UnitOfMeasure") or {}).get("Name")
-        unit = purchase_unit(p) if kind == "purchases" else None
-        if not unit:
+        if kind != "purchases":
             return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": p.get(price),
                     "unit": base}
-        # Bought in another unit than it's stocked in (a case of 12): the order is in that unit, at
-        # the supplier's price for it, or what was last paid for one. (The default purchase price is
-        # for a stock unit, and which way Unleashed's conversion rate runs isn't documented.)
-        supplier = p.get("Supplier") or {}
-        theirs = supplier.get("UnitOfMeasure") or {}
-        same = (theirs.get("Guid") and theirs.get("Guid") == unit.get("Guid")) or \
-            (theirs.get("Name") and (theirs.get("Name") or "").lower() == (unit.get("Name") or "").lower())
-        paid = last_paid.get((p.get("ProductCode"), (unit.get("Name") or "").lower())) or {}
-        cost = supplier.get("SupplierProductPrice") if same and supplier.get("SupplierProductPrice") is not None \
-            else paid.get("price")
-        return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": cost,
-                "unit": unit.get("Name"), "stock_unit": base, "stock_per_unit": paid.get("per")}
+        # Every unit it can be bought in; the one Unleashed says it's bought in comes chosen.
+        units = [unit_choice(p, u) for u in purchasable_units(p)] or [{"name": base, "price": p.get(price), "per": 1,
+                                                                        "stock": True}]
+        unit = purchase_unit(p)
+        chosen = next((u for u in units if unit and (u["name"] or "").lower() == (unit.get("Name") or "").lower()),
+                      units[0])
+        return {"code": p.get("ProductCode"), "name": p.get("ProductDescription") or "", "price": chosen["price"],
+                "unit": chosen["name"], "stock_unit": base if not chosen["stock"] else None,
+                "stock_per_unit": chosen["per"] if not chosen["stock"] else None, "units": units}
 
     options = sorted((option(p) for p in products if (p.get("ProductCode") or "").upper() not in charges),
                      key=lambda p: (p["code"] or "").lower())
@@ -139,6 +150,7 @@ def _choices(kind):
     default = next((w.get("WarehouseCode") for w in warehouses if w.get("IsDefault")),
                    warehouses[0].get("WarehouseCode") if warehouses else None)
     return {"product_options": options, "charge_options": charge_options, "warehouses": warehouses,
+            "options_by_code": {o["code"]: o for o in options},
             "default_warehouse": default, "products_raw": products,
             "codes": {o["code"].lower(): o["code"] for o in options + charge_options if o["code"]},
             "product_names": {o["code"]: o["name"] for o in options + charge_options}}
@@ -377,8 +389,14 @@ def _purchase_form(found=None, form=None, error=None):
                   "reference": found.get("reference") or "", "comments": found.get("comments") or "",
                   "place": "1" if found["status"] == "Placed" else ""}
         # As ordered: in the unit each line was bought in, at the price for one.
+        def unit_of(l):
+            if l.get("stock_per_unit"):
+                return l.get("order_unit")
+            stock = [u for u in (choices["options_by_code"].get(l["product_code"]) or {}).get("units", []) if u["stock"]]
+            return stock[0]["name"] if stock else None
         lines = [{"guid": l["guid"], "product_code": l["product_code"], "qty": l["order_qty"],
-                  "unit_price": round(l["order_price"], 4) if l["order_price"] is not None else None}
+                  "unit_price": round(l["order_price"], 4) if l["order_price"] is not None else None,
+                  "unit_name": unit_of(l)}
                  for l in found["lines"]]
         lines += [{"guid": c["guid"], "product_code": c["product_code"], "qty": c["qty"], "unit_price": c["unit_price"],
                    "comments": c["comments"], "charge": True}

@@ -10,6 +10,12 @@
         placeholder="Type a product code or name" aria-label="Product">
       <div class="muted small line-product-name" data-product-name>{{ product_names.get(l.product_code, '') if l.product_code }}</div></td>
     <td class="num"><input class="qty-input" type="number" name="qty" value="{{ ('%g'|format(l.qty)) if l.qty else '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity"></td>
+    {% if not sales %}{% set p = options_by_code.get(l.product_code) %}{% set picked = (l.unit_name or (p.unit if p else ''))|lower %}
+    <td><select name="unit" class="unit-select" aria-label="Unit" data-unit data-code="{{ p.code if p else '' }}">
+      {% if p %}{% for u in p.units %}<option value="{{ u.name }}" {{ 'selected' if (u.name or '')|lower == picked }}>{{ u.name }}</option>{% endfor %}
+      {% elif l.unit_name %}<option value="{{ l.unit_name }}" selected>{{ l.unit_name }}</option>
+      {% else %}<option value="">—</option>{% endif %}
+    </select></td>{% endif %}
     <td class="num"><input class="qty-input" type="number" name="price" value="{{ ('%g'|format(l.unit_price)) if l.unit_price is not none else '' }}" min="0" step="any" inputmode="decimal" aria-label="Unit price"></td>
     <td class="num nowrap" data-line-total></td>
     <td><button type="button" class="btn btn-quiet" data-remove-line aria-label="Remove this line">✕</button></td>
@@ -61,18 +67,19 @@
 
   <h2>Products</h2>
   <div class="table-wrap"><table class="order-lines">
-    <thead><tr><th>Product</th><th class="num">Quantity</th><th class="num">Unit price</th><th class="num">Line total</th><th></th></tr></thead>
+    <thead><tr><th>Product</th><th class="num">Quantity</th>{% if not sales %}<th>Unit</th>{% endif %}<th class="num">{{ 'Unit price' if sales else 'Price per unit' }}</th><th class="num">Line total</th><th></th></tr></thead>
     <tbody data-lines>{% for l in lines %}{{ line_row(l, product_options) }}{% endfor %}</tbody>
-    <tfoot><tr><td colspan="3">Sub total <span class="muted small">(before tax)</span></td><td class="num" data-subtotal></td><td></td></tr></tfoot>
+    <tfoot><tr><td colspan="{{ 3 if sales else 4 }}">Sub total <span class="muted small">(before tax)</span></td><td class="num" data-subtotal></td><td></td></tr></tfoot>
   </table></div>
   <template id="order-line-template">{{ line_row({'guid': None, 'product_code': '', 'qty': None, 'unit_price': None}, product_options) }}</template>
   <datalist id="order-products">{% for p in product_options %}<option value="{{ p.code }}">{{ p.code }} · {{ p.name }}</option>{% endfor %}</datalist>
   <script type="application/json" id="order-product-data">{{ product_options|tojson }}</script>
   <div><button type="button" class="btn" data-add-line>+ Add a product</button></div>
   <p class="muted small">Picking a product fills in its {{ 'default sell' if sales else 'default purchase' }} price from Unleashed; change it if
-    this order's is different.{% if not sales %} A product Unleashed says is bought in another unit than it's stocked in (by the case)
-    is ordered in that unit: the quantity is cases and the price is per case (the supplier's price for one in Unleashed, or
-    what was last paid).{% endif %} Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
+    this order's is different.{% if not sales %} Each line's <strong>Unit</strong> starts as the one Unleashed says the product is
+    bought in; choose another (the unit it's stocked in, or another unit Unleashed lists for buying it) to order in that. The
+    quantity and price are per that unit: a case's price is the supplier's price for one in Unleashed, or what was last
+    paid.{% endif %} Tax is added from the {{ 'customer' if sales else 'supplier' }}'s tax in Unleashed.{% if found %} Lines left
     empty are removed.{% endif %}</p>
 
   {% if not sales %}

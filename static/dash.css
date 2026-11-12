@@ -600,3 +600,6 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .bulk-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 0; }
 .state-banner { border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; background: var(--warn-bg); color: var(--warn-ink); }
 .state-banner.obsolete { background: var(--bad-bg); color: var(--bad-ink); }
+
+/* A purchase order line's unit: as wide as its longest name, not the whole column. */
+.order-lines .unit-select { width: auto; min-width: 5.5rem; max-width: 10rem; }

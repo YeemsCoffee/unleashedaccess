@@ -28,6 +28,19 @@ WAREHOUSES = [
 # Products bought in another unit than they're stocked in: code -> (purchasing unit, how many
 # stock units one is). Orders made through the API can be in it; the simulated history isn't.
 PURCHASE_UNITS = {"MILK-OAT-QT": ("Case", 12)}
+# Other units a product can also be bought in (Unleashed's AlternateUnitsOfMeasure marked
+# ForPurchases), its default staying as above: code -> [(unit, how many stock units one is)].
+# Vanilla syrup is bought by the bottle, or by the case of 6.
+OTHER_PURCHASE_UNITS = {"SYR-VAN-750": [("Case", 6)]}
+
+
+def purchasable_units(code, stock_unit):
+    """{lowercase unit name: (name, stock units in one)}: every unit `code` can be bought in, its
+    stock unit included."""
+    units = {stock_unit.lower(): (stock_unit, 1)}
+    for name, rate in ([PURCHASE_UNITS[code]] if code in PURCHASE_UNITS else []) + OTHER_PURCHASE_UNITS.get(code, []):
+        units[name.lower()] = (name, rate)
+    return units
 
 # code, description, group, unit, supplier, base cost, sell price, avg daily use.
 # Products without a supplier are made in-house (see BILLS_OF_MATERIALS).

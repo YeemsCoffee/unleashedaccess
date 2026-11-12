@@ -109,11 +109,17 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   the batches for batch-tracked products. Unleashed makes the return from the order; Core sets
   the lines, removes the ones not going back, and completes it. Purchases → **Supplier
   returns** lists them.
-- **Purchasing units.** A product Unleashed says is bought in another unit than it's stocked in
-  (`DefaultPurchasesUnitOfMeasure`: oat milk stocked by the carton, bought by the case of 12)
-  is ordered in that unit. Core sends each such line with its `UnitOfMeasure` (left out,
-  Unleashed takes the quantity as stock units), so the quantity is cases and the price is per
-  case: the supplier's price for one in Unleashed, or what was last paid for one. The order
+- **Purchasing units.** Each purchase order line has a **Unit**, chosen from the units the product
+  can be bought in: the unit it's stocked in, its purchasing unit
+  (`DefaultPurchasesUnitOfMeasure`: oat milk stocked by the carton, bought by the case of 12) and
+  any other unit Unleashed lists for buying it (`AlternateUnitsOfMeasure`). Unleashed's
+  purchasing unit comes chosen; pick another to order in that, e.g. cartons when the supplier
+  is short of cases. Core sends a line in anything but the stock unit with its `UnitOfMeasure`
+  (left out, Unleashed takes the quantity as stock units), so the quantity is cases and the
+  price is per case: the supplier's price for one in Unleashed, or what was last paid for one;
+  with neither, the price is left for you to type. Changing a line's unit on an open order takes
+  it off and puts it on again in the new unit. A unit Unleashed doesn't list for the product is
+  refused before anything is sent. The order
   page shows both ("3 Case, 36 into stock"), receiving asks for cases, and the stock history
   and COGS stay in stock units. Core never converts with Unleashed's conversion rate (its
   reference doesn't say which way it runs): it reads how many stock units are in one from the

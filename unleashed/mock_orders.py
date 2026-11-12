@@ -24,7 +24,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from flask import jsonify, request
 
-from .mock_data import PURCHASE_UNITS
+from .mock_data import purchasable_units
 
 
 def unit_guid(name):
@@ -101,16 +101,13 @@ def register(app, ds, serialize_so, serialize_po, body_date, ms_date_in):
         # one is.
         unit = given.get("UnitOfMeasure")
         if unit:
-            base = ds.products[code]["UnitOfMeasure"]
-            allowed = {base.lower(): 1}
-            if code in PURCHASE_UNITS:
-                allowed[PURCHASE_UNITS[code][0].lower()] = PURCHASE_UNITS[code][1]
+            allowed = purchasable_units(code, ds.products[code]["UnitOfMeasure"])
             by_guid = {unit_guid(name): name for name in allowed}
             name = (unit.get("Name") or by_guid.get((unit.get("Guid") or "").lower()) or "").lower()
             if name not in allowed:
                 return None, f"UnitOfMeasure must be a valid purchasing unit for {code}"
-            if allowed[name] != 1:
-                line["Unit"], line["Rate"] = PURCHASE_UNITS[code]
+            if allowed[name][1] != 1:
+                line["Unit"], line["Rate"] = allowed[name]
         return line, None
 
     def totals(doc, b=None):
