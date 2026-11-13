@@ -306,6 +306,22 @@ The COGS page also cross-checks the result against cost of sales (average
 landed cost × quantity on completed sales orders) plus stock write-offs, and
 flags any gap.
 
+**Stock counts done in Unleashed.** A count completed in Unleashed's own Stock Count
+screen moves stock without a stock adjustment, so Core reads the counts too
+(`GET /StockCounts`, synced with the other documents). Each product counted differently
+from what was on hand is a change of counted − on hand (`CountQuantity` −
+`OnHandQuantity`), valued at the count's average landed price
+(`AverageLandPriceAtTimeOfStockTake`), on the day it was completed. It counts with
+write-offs, and shows as **Stock count** (its ST- number) in the day-by-day working, the
+products' check and Transactions → History, instead of as "not on an order or write-off".
+A change Unleashed also posted as a stock adjustment (same day, warehouse, product and
+quantity) is counted once. The COGS total never depended on it (it comes from the stock
+on hand); only the working that names what moved did. Unleashed's reference doesn't say
+how a count's variance is valued, so Settings → Connection → **Check live data** lists the
+counts of the last 90 days and what COGS makes of them, to compare with Unleashed's stock
+movement report. Counts made in Core (Transactions → Stock counts) are posted as stock
+adjustments and were always counted.
+
 **Locations counted as inventory.** Under **Settings → COGS**, an admin ticks
 the locations (Unleashed warehouses) whose stock on hand is inventory, for
 example Warehouse, Cold Storage and Gardena; none ticked counts every warehouse.

@@ -127,6 +127,21 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
                  and _match(a["AdjustmentNumber"], "adjustmentNumber")]
         return _paged([app.config["MOCK_SERIALIZE_ADJUSTMENT"](a) for a in items], page)
 
+    @app.get("/StockCounts")
+    @app.get("/StockCounts/<int:page>")
+    def stock_counts(page=1):
+        # As documented: startDate/endDate on when a count was made, completedAfter/Before,
+        # modifiedSince, warehouseCode. No status filter.
+        start, end = _date_arg("startDate"), _date_arg("endDate")
+        after, before = _date_arg("completedAfter"), _date_arg("completedBefore")
+        warehouse = request.args.get("warehouseCode")
+        items = [c for c in ds.stock_counts
+                 if _in_range(c["CountDate"], start, end)
+                 and (not (after or before) or (c["CompletedDate"] and _in_range(c["CompletedDate"], after, before)))
+                 and (not warehouse or c["WarehouseCode"] == warehouse)
+                 and _modified_since(_modified(c, "CompletedDate", "CountDate"))]
+        return _paged([_stock_count(ds, c) for c in items], page)
+
     # ------------------------------------------------------------ orders
 
     @app.get("/PurchaseOrders")
@@ -301,6 +316,23 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
 
 
 # ---------------------------------------------------------------- helpers
+
+def _stock_count(ds, c):
+    """A stock count as GET /StockCounts gives one (its documented fields)."""
+    wh = next((w for w in ds.warehouses if w["WarehouseCode"] == c["WarehouseCode"]), {})
+    return {
+        "Guid": c["Guid"], "StockTakeCode": c["StockTakeCode"], "StockTakeName": c["StockTakeName"],
+        "CountType": "Perpetual", "Description": None, "Status": c["Status"],
+        "CountDate": _ms(c["CountDate"]), "CompletedDate": _ms(c["CompletedDate"]),
+        "CostOfGoodsAccount": None, "LastModifiedOn": _ms(_modified(c, "CompletedDate", "CountDate")),
+        "Warehouse": {"Guid": wh.get("Guid"), "WarehouseCode": c["WarehouseCode"], "WarehouseName": wh.get("WarehouseName")},
+        "StockCountLines": [{
+            "Guid": l["Guid"], "LineNumber": l["LineNumber"], "Product": _product_ref(ds, l["ProductCode"]),
+            "OnHandQuantity": l["OnHandQuantity"], "AvailableQuantity": l["AvailableQuantity"],
+            "CountQuantity": l["CountQuantity"], "AverageLandPriceAtTimeOfStockTake": l["AverageLandPriceAtTimeOfStockTake"],
+            "ExpiryDate": None, "ReceiptFIFODate": _ms(c["CountDate"])} for l in c["Lines"]],
+    }
+
 
 def _paged(items, page):
     size = min(max(request.args.get("pageSize", default=200, type=int), 1), MAX_PAGE_SIZE)

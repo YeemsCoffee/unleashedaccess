@@ -22,10 +22,11 @@ REFERENCE_ENDPOINTS = {
     "Suppliers": "Guid", "Customers": "Guid", "BillOfMaterials": "Guid",
 }
 DOCUMENT_ENDPOINTS = ("PurchaseOrders", "SalesOrders", "StockAdjustments", "Assemblies", "CreditNotes",
-                      "SupplierReturns", "WarehouseStockTransfers")
+                      "SupplierReturns", "WarehouseStockTransfers", "StockCounts")
 # Production endpoints: an account (or API user) without access to them still syncs
 # everything else, and the Production pages say why they're empty.
-OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies", "CreditNotes", "SupplierReturns", "WarehouseStockTransfers"}
+OPTIONAL_ENDPOINTS = {"BillOfMaterials", "Assemblies", "CreditNotes", "SupplierReturns", "WarehouseStockTransfers",
+                      "StockCounts"}
 # Copied whole rather than from a date window: parked assemblies can be older than any window,
 # and transfers can only be asked for by when they changed.
 UNWINDOWED_ENDPOINTS = {"Assemblies", "WarehouseStockTransfers"}
@@ -108,6 +109,9 @@ def document_columns(endpoint, d):
     if endpoint == "WarehouseStockTransfers":
         return (d.get("TransferOrderNumber"), d.get("TransferStatus"), _iso(d.get("OrderDate")),
                 (d.get("SourceWarehouse") or {}).get("WarehouseCode"), _iso(transfer_moved(d)))
+    if endpoint == "StockCounts":  # startDate/endDate are on when a count was made; it moves stock when completed
+        return (d.get("StockTakeCode"), d.get("Status"), _iso(d.get("CountDate")),
+                (d.get("Warehouse") or {}).get("WarehouseCode"), _iso(d.get("CompletedDate") or d.get("CountDate")))
     return (d.get("AdjustmentNumber"), d.get("Status"), _iso(d.get("AdjustmentDate")), None,
             _iso(d.get("AdjustmentDate")))
 

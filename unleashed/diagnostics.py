@@ -5,7 +5,7 @@ listings show keys only, never values, so they are safe to share.
 """
 import datetime as dt
 
-from .client import UnleashedError
+from .client import parse_date, UnleashedError
 from .reports import (ASSEMBLY_LINE_TOTAL_FIELDS, ASSEMBLY_LINE_UNIT_COST_FIELDS,
                       INACTIVE_ADJUSTMENT_STATUSES, RECEIVED_PO_STATUSES, cost_line_keys, with_po_costs,
                       month_start)
@@ -190,6 +190,44 @@ def run_checks(reports):
         return "ok", summary
 
     check("Stock adjustments", adjustments)
+
+    def stock_counts():
+        """Counts done in Unleashed's Stock Count screen move stock with no adjustment; COGS reads
+        them (Reports.stock_count_changes). The fields it relies on, and whether Unleashed also
+        posted the counts as adjustments, which the reference doesn't say."""
+        try:
+            raw = client.get_all("StockCounts", {"completedAfter": (today - dt.timedelta(days=90)).isoformat()})
+        except UnleashedError as e:
+            return "warn", (f"Unleashed refused stock counts ({e}). A count done in Unleashed's Stock Count screen "
+                            "then shows in COGS only as \"not on an order or write-off\".")
+        done = [c for c in raw if c.get("CompletedDate")]
+        if raw:
+            fields["Stock count"] = sorted(raw[0].keys())
+            lines = [l for c in raw for l in c.get("StockCountLines") or []]
+            if lines:
+                fields["Stock count line"] = sorted(lines[0].keys())
+        if not done:
+            return "ok", f"No stock counts completed in the last 90 days ({len(raw)} not completed)."
+        start = min(parse_date(c["CompletedDate"]) for c in done)
+        changes = reports.stock_count_changes(start, today)
+        counted = [l for c in done for l in c.get("StockCountLines") or [] if l.get("CountQuantity") is not None]
+        priced = sum(1 for l in counted if l.get("AverageLandPriceAtTimeOfStockTake") is not None)
+        differ = [l for l in counted if l.get("OnHandQuantity") is not None
+                  and abs(float(l["CountQuantity"]) - float(l["OnHandQuantity"])) > 1e-9]
+        twice = len(differ) - len(changes)
+        detail = (f"{len(done)} completed in the last 90 days ({', '.join(c.get('StockTakeCode') or '?' for c in done[:5])}"
+                  f"{'…' if len(done) > 5 else ''}); {len(counted)} line(s) counted, {len(differ)} different from on hand, "
+                  f"{priced} carry AverageLandPriceAtTimeOfStockTake. COGS counts {len(changes)} change(s) "
+                  f"worth {sum(r['value_change'] or 0 for r in changes):,.2f}")
+        if twice > 0:
+            detail += (f"; {twice} were also posted by Unleashed as stock adjustments, so they're counted there"
+                       " instead (not twice)")
+        if priced < len(differ):
+            return "warn", detail + (". Lines without a price change stock but not its value in COGS's working: "
+                                     "check one against Unleashed's stock movement report.")
+        return "ok", detail + ". Compare one with Unleashed's stock movement report for that product to confirm the value."
+
+    check("Stock counts done in Unleashed", stock_counts)
 
     def bills_of_materials():
         try:

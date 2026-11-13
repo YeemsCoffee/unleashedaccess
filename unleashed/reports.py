@@ -19,6 +19,9 @@ PO_STATUSES = ("Parked", "Placed", "Receipted", "Costed", "Complete", "Deleted")
 SO_STATUSES = ("Parked", "Placed", "Backordered", "Completed", "Deleted")
 # Adjustments in these states never moved stock, so reports leave them out.
 INACTIVE_ADJUSTMENT_STATUSES = ("deleted", "parked")
+# Stock counts that never moved stock (the statuses aren't documented; a completed count has a
+# CompletedDate, and these would not).
+INACTIVE_COUNT_STATUSES = ("deleted", "cancelled", "canceled", "voided", "discarded")
 # Where a PO cost line's amount may live, most specific (base currency, ex tax) first.
 COST_LINE_AMOUNT_FIELDS = ("BCCost", "BCSubTotal", "BCLineTotal", "BCAmount", "BCTotal", "SubTotal",
                            "LineTotal", "Amount", "Total", "Cost", "Value")
@@ -524,6 +527,63 @@ class Reports:
                 "value_change": sum(r["value_change"] or 0 for r in rows),
                 "missing_change": sum(1 for r in rows if r["value_change"] is None)}
 
+    def stock_count_changes(self, start, end):
+        """What stock counts done in Unleashed's own Stock Count screen changed: those completed
+        from `start` to `end`, as rows like stock_adjustments' ("kind": "Stock count"), one for each
+        product counted differently from what was on hand. A count moves stock without a stock
+        adjustment, so without these the change is on no document. The change is counted less on
+        hand (CountQuantity - OnHandQuantity), valued at the count's average landed price
+        (AverageLandPriceAtTimeOfStockTake); a line not counted is left out. A change Unleashed
+        also posted as a stock adjustment (same day, warehouse, product and quantity) is left out
+        so it doesn't count twice. [] when this account (or API user) can't read stock counts."""
+        if not hasattr(self.client, "get_all"):  # no Unleashed to ask (a stand-in client)
+            return []
+        try:
+            items = self.client.get_all("StockCounts", {})
+        except UnleashedError as e:
+            if e.status_code in (None, 400, 401, 403, 404):
+                return []
+            raise
+        posted = [(r["date"], r["warehouse"], r["product_code"], round(r["qty_change"] or 0, 4))
+                  for r in self.stock_adjustments(start, end)["rows"]]
+
+        def already(day, warehouse, code, change):  # an adjustment without a warehouse matches any
+            return any(d == day and c == code and q == round(change, 4) and (not w or not warehouse or w == warehouse)
+                       for d, w, c, q in posted)
+
+        rows = []
+        for c in items:
+            done = parse_date(c.get("CompletedDate"))
+            if not done or not start <= done <= end or (c.get("Status") or "").lower() in INACTIVE_COUNT_STATUSES:
+                continue
+            warehouse = _warehouse_code(c.get("Warehouse"))
+            for l in c.get("StockCountLines") or []:
+                counted, on_hand = l.get("CountQuantity"), l.get("OnHandQuantity")
+                if counted is None or on_hand is None or abs(float(counted) - float(on_hand)) < 1e-9:
+                    continue
+                prod = l.get("Product") or {}
+                change = float(counted) - float(on_hand)
+                if already(done, warehouse, prod.get("ProductCode"), change):
+                    continue
+                price = l.get("AverageLandPriceAtTimeOfStockTake")
+                rows.append({"number": c.get("StockTakeCode"), "guid": c.get("Guid"), "kind": "Stock count",
+                             "date": done, "at": parse_moment(c.get("CompletedDate")),
+                             "timed": has_time(c.get("CompletedDate")), "warehouse": warehouse,
+                             "reason": "Stock count" + (f": {c['StockTakeName']}" if c.get("StockTakeName") else ""),
+                             "status": c.get("Status"), "product_code": prod.get("ProductCode"),
+                             "description": prod.get("ProductDescription"),
+                             "qty_change": change, "counted": float(counted), "on_hand": float(on_hand),
+                             "value_change": change * float(price) if price is not None else None,
+                             "comments": None})
+        rows.sort(key=lambda r: (r["date"], r["number"] or ""), reverse=True)
+        return rows
+
+    def stock_changes(self, start, end):
+        """Every change to stock not on an order: stock adjustments ("kind": "Adjustment") and
+        stock counts done in Unleashed ("kind": "Stock count"), dated from `start` to `end`."""
+        return [dict(r, kind="Adjustment") for r in self.stock_adjustments(start, end)["rows"]] + \
+            self.stock_count_changes(start, end)
+
     def stock_adjustment(self, number):
         """One adjustment, any status: {"number", "guid", "date", "warehouse", "reason", "status",
         "lines": [{"product_code", "description", "qty_change", "value_change", "comments",
@@ -739,6 +799,11 @@ class Reports:
             for a in self.stock_adjustments(start, end)["rows"]:
                 rows.append(_txn(a["date"], "Adjustment", a["number"], a["reason"], a,
                                  a["qty_change"], a["value_change"], warehouse=a.get("warehouse")))
+        if doc_type in (None, "Stock count"):
+            for a in self.stock_count_changes(start, end):
+                rows.append(_txn(a["date"], "Stock count", a["number"],
+                                 f"Counted {_qty(a['counted'])}, {_qty(a['on_hand'])} on hand", a,
+                                 a["qty_change"], a["value_change"] or 0, warehouse=a.get("warehouse")))
         if doc_type in (None, "Transfer"):
             for t in self.transfers(start, end):
                 if not t["completed"]:
@@ -752,7 +817,7 @@ class Reports:
         if product:
             rows = [r for r in rows if r["product_code"] == product]
         order = {"Purchase": 0, "Production": 1, "Sale": 2, "Credit": 3, "Supplier return": 4, "Adjustment": 5,
-                 "Transfer": 6}
+                 "Stock count": 6, "Transfer": 7}
         rows.sort(key=lambda r: (r["date"], order[r["type"]], r["number"]))
         return rows
 
@@ -888,11 +953,11 @@ class Reports:
                               "product_code": l["product_code"], "qty": -(l["qty"] or 0),
                               "value": -(l["cost"] or 0), "warehouse": o["warehouse"], "kind": "Sale",
                               "number": o["number"]})
-        for r in self.stock_adjustments(start, end)["rows"]:
+        for r in self.stock_changes(start, end):
             if here(r["warehouse"]) and r.get("at"):
                 moves.append({"at": r["at"], "timed": r.get("timed"), "product_code": r["product_code"],
                               "qty": r["qty_change"] or 0,
-                              "value": r["value_change"] or 0, "warehouse": r["warehouse"], "kind": "Adjustment",
+                              "value": r["value_change"] or 0, "warehouse": r["warehouse"], "kind": r["kind"],
                               "number": r["number"]})
         for c in self._completed_returns("CreditNotes", start, end, warehouses):
             for l in c["lines"]:
@@ -1139,9 +1204,9 @@ class Reports:
         return [a for a in orders if a["completed"] and a["completed_date"] and start <= a["completed_date"] <= through]
 
     def _write_offs(self, start, through, warehouses=None):
-        """(Stock value written off by adjustments, lines without a value change), in one of
-        `warehouses` when some are given."""
-        rows = [r for r in self.stock_adjustments(start, through)["rows"]
+        """(Stock value written off by adjustments and stock counts, lines without a value change),
+        in one of `warehouses` when some are given."""
+        rows = [r for r in self.stock_changes(start, through)
                 if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses]
         return (-sum(r["value_change"] or 0 for r in rows),
                 sum(1 for r in rows if r["value_change"] is None))
@@ -1244,9 +1309,9 @@ class Reports:
         for c in self._completed_returns("CreditNotes", start, through, warehouses):
             for l in c["lines"]:
                 note(c["date"], l["product_code"], "Credit", c["number"], l["qty"], l["cost"], warehouse=c.get("warehouse"))
-        for r in self.stock_adjustments(start, through)["rows"]:
+        for r in self.stock_changes(start, through):
             if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
-                note(r["date"], r["product_code"], "Adjustment", r["number"], r["qty_change"] or 0,
+                note(r["date"], r["product_code"], r["kind"], r["number"], r["qty_change"] or 0,
                      r["value_change"] or 0, warehouse=r["warehouse"])
         # Brought in from a warehouse COGS doesn't count: like a purchase (cogs() counts it with them).
         # Sent out to one counts as used, as stock leaving the warehouses always has, so it stays out.
@@ -1345,7 +1410,7 @@ class Reports:
             for r in cogs.get("supplier_returns") or []:
                 for l in r["lines"]:
                     products[l["product_code"]]["received"] -= l["value"]  # went back to the supplier
-            for r in self.stock_adjustments(start, through)["rows"]:
+            for r in self.stock_changes(start, through):
                 if not warehouses or not r["warehouse"] or r["warehouse"] in warehouses:
                     products[r["product_code"]]["written_off"] -= r["value_change"] or 0
             if warehouses:  # in from other warehouses (like bought), out to them (counted as used)
@@ -1474,6 +1539,11 @@ def _batches(items):
 def _field(record, names):
     """The first of `names` that `record` has a value for, or None."""
     return next((record[n] for n in names if record.get(n) is not None), None)
+
+
+def _qty(value):
+    """A quantity as written: 12, 2.5."""
+    return f"{value:,.4f}".rstrip("0").rstrip(".") if value is not None else ""
 
 
 def _txn(date, kind, number, party, line, qty, value, warehouse=None):

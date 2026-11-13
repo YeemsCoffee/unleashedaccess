@@ -793,6 +793,43 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("kept for this month and last month",
                       self.c.get(f"/cogs/not-on-an-order?month={older['month']:%Y-%m}").get_data(as_text=True))
 
+    def test_a_stock_count_done_in_unleashed_is_on_the_cogs_working(self):
+        """A count done in Unleashed's own Stock Count screen moves stock with no stock adjustment.
+        COGS reads the count, so the day-by-day working, the products' check and the history name it
+        instead of leaving the change "not explained"."""
+        code = "SYR-VAN-750"
+        on_hand, avg = self.ds.stock_qty(code), self.ds.average_cost(code)
+        self.assertGreater(on_hand, 3)
+        count = self.ds.count_stock(TODAY, {code: on_hand - 3, "MILK-WHL-GAL": self.ds.stock_qty("MILK-WHL-GAL")})
+        self.ds.count_stock(TODAY, {code: 1}, completed=False)  # still being counted: moved nothing
+        self.app.extensions["unleashed"]["syncer"].sync()
+        start = TODAY.replace(day=1)
+        rows = self.reports.stock_count_changes(start, TODAY)
+        self.assertEqual([(r["number"], r["product_code"], r["kind"]) for r in rows],
+                         [(count["StockTakeCode"], code, "Stock count")])  # the line counted as on hand isn't a change
+        self.assertAlmostEqual(rows[0]["qty_change"], -3)
+        self.assertAlmostEqual(rows[0]["value_change"], -3 * round(avg, 4), places=4)
+        # The day's working names it, and nothing is left unexplained by it.
+        cogs = self.reports.cogs(TODAY)
+        daily = self.reports.daily_unexplained(cogs)
+        self.assertTrue(all(abs(d["value"]) < 0.5 for d in daily["days"]), [d["value"] for d in daily["days"]])
+        self.assertAlmostEqual(daily["total"], self.reports.cogs_by_store(cogs)["rest"], places=4)
+        # It counts as written off, like an adjustment.
+        before = self.reports.cogs_reconciliation(TODAY)["adjustments_out"]
+        self.assertGreater(before, 3 * avg - 0.01)
+        # The product's history lists it.
+        history = [t for t in self.reports.transactions(TODAY, TODAY, product=code) if t["type"] == "Stock count"]
+        self.assertEqual([(t["number"], t["qty"]) for t in history], [(count["StockTakeCode"], -3.0)])
+        self.assertIn("on hand", history[0]["party"])
+        movement = self.reports.stock_movement(code, start, TODAY)
+        self.assertAlmostEqual(movement["closing_qty"], movement["reported_qty"], places=6)
+        # Posted as a stock adjustment too (same day, warehouse, product, change): counted once.
+        self.ds._adjustment(TODAY, "Stock count", [{"ProductCode": code, "Qty": -3, "Value": -3 * avg, "Comments": ""}])
+        self.ds.move_stock(TODAY, "Undo", "-", "-", code, 3, 3 * avg)  # the mock moved it twice; Unleashed wouldn't
+        self.app.extensions["unleashed"]["syncer"].sync(full=True)
+        self.assertEqual(self.reports.stock_count_changes(start, TODAY), [])
+        self.assertAlmostEqual(self.reports.cogs_reconciliation(TODAY)["adjustments_out"], before, places=2)
+
     def test_products_are_typed_and_the_next_number_is_shown(self):
         last_so = max(int(n[3:]) for n in self.app.extensions["unleashed"]["store"].document_numbers("SalesOrders")
                       if n.startswith("SO-"))

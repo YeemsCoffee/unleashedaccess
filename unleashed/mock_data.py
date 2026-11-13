@@ -133,6 +133,9 @@ class MockDataset:
         self.purchase_orders = []
         self.sales_orders = []
         self.stock_adjustments = []
+        # Stock counts completed in Unleashed's own Stock Count screen: they move stock without a
+        # stock adjustment (GET /StockCounts). None in the simulated history; tests add them.
+        self.stock_counts = []
         self.assemblies = []
         self.batches = []  # batch-tracked stock: Number, ProductCode, WarehouseCode, Quantity, ExpiryDate
         self.ledger = []  # every stock movement, chronological
@@ -459,6 +462,27 @@ class MockDataset:
 
     def move_stock(self, day, kind, number, party, code, qty, value, warehouse=None):
         self._move(day, kind, number, party, code, qty, value, warehouse)
+
+    def count_stock(self, day, counted, warehouse=None, completed=True):
+        """A stock count done in Unleashed: `counted` {product code: quantity counted}. Completed,
+        each product's stock moves to what was counted, at its average cost (no adjustment is made).
+        Returns the count."""
+        warehouse = warehouse or self.default_warehouse
+        number = f"ST-{len(self.stock_counts) + 1:08d}"
+        count = {"Guid": self._guid(), "StockTakeCode": number, "StockTakeName": f"Count {number}",
+                 "CountDate": day, "CompletedDate": day if completed else None,
+                 "Status": "Completed" if completed else "Active", "WarehouseCode": warehouse, "Lines": [],
+                 "Modified": dt.date.today()}  # Unleashed stamps changes with the real clock
+        for i, (code, qty) in enumerate(counted.items(), 1):
+            on_hand = self.stock_in(code, warehouse) if warehouse != self.default_warehouse else self._qty[code]
+            avg = self.average_cost(code)
+            count["Lines"].append({"Guid": self._guid(), "LineNumber": i, "ProductCode": code,
+                                   "OnHandQuantity": on_hand, "AvailableQuantity": on_hand,
+                                   "CountQuantity": qty, "AverageLandPriceAtTimeOfStockTake": round(avg, 4)})
+            if completed and abs(qty - on_hand) > 1e-9:
+                self._move(day, "Stock count", number, warehouse, code, qty - on_hand, (qty - on_hand) * avg, warehouse)
+        self.stock_counts.append(count)
+        return count
 
     def shift_stock(self, day, code, qty, source, destination):
         """Move `qty` of a product between warehouses (its total stock and value unchanged)."""
