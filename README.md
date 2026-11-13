@@ -51,7 +51,7 @@ admins. Which tabs each person opens depends on their access profile (below).
 |------------|---------------|
 | Finance → Overview | Running month-to-date COGS, sales, gross margin, inventory value, open purchase orders, latest transactions |
 | Finance → COGS | Formula breakdown, daily running COGS chart and table, purchases counted, cross-check, 12-month history |
-| Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date: value by product group (with each group's share), then the products, filterable by group |
+| Warehouse → Stock on hand | Stock On Hand enquiry, now or as at any date: value by product group (with each group's share), then the products, filterable by group, with each one's par levels and how much to order |
 | Warehouse → Purchases | Purchase enquiry by status, supplier and date; totals by supplier and product; purchase order detail; make, change, receive (with batches and expiry), complete and delete purchase orders |
 | Warehouse → Sales | Sales enquiry with cost and margin; totals by product and customer; sales order detail; make, change, complete (picking batches) and delete sales orders |
 | Warehouse → Transactions | Today's and yesterday's stock transactions, with **+ Adjustment**, **+ Stock count** and **+ Transfer**, and what's waiting to finish (open transfers, counts in progress). Under it: **History** (every receipt, production, sale, credit, supplier return, adjustment and transfer, loaded for the dates, type and product you choose), **Stock movement** (per product, with running balance, reconciled to stock on hand), **Adjustments**, **Transfers** and **Stock counts** |
@@ -146,6 +146,47 @@ user; Core's message says who did it) and keeps the shared copy up to date strai
   count in COGS: Unleashed keeps them apart from the order (GET
   /PurchaseOrders/{guid}/Costs), and the sync fetches them for received orders (again only
   when an order changes).
+
+## Par levels and what to order
+
+Warehouse → **Stock on hand** shows, beside each product's stock now, its **par levels** and how
+much to **order**.
+
+- **Par min** and **Par max** are the product's minimum and maximum stock levels in Unleashed
+  (`MinStockAlertLevel`, `MaxStockAlertLevel`). A product whose levels are set per warehouse
+  (Unleashed's Per Warehouse Controls: `InventoryDetails`) shows them added up, with each
+  warehouse's on hover. They're changed on the product in Unleashed and read at each sync.
+- **Order** is nothing until the product's stock position (on hand + on purchase orders −
+  allocated to sales) is down to its minimum; then it's enough to bring the position up to the
+  maximum (to the minimum, when no maximum is set), rounded up to a whole unit, and at least the
+  supplier's minimum order quantity. It's in the unit the product is stocked in. A product with no par levels is never
+  recommended.
+- **To order only** lists just those products, with their supplier and an **Order →** link to a
+  new purchase order for that supplier; the CSV has the same columns.
+- A past date (As at) has no par columns: the levels and what's on order are today's.
+
+## Emailing purchase orders to vendors
+
+Unleashed's API has no "email this supplier their orders" setting and sends no email, so Core
+keeps the choice and sends the email itself.
+
+- **Purchases → Vendor emails**: tick the vendors that take purchase orders by email, with the
+  address their orders go to (it starts as the vendor's email in Unleashed) and, optionally,
+  who gets a copy. Several addresses are separated by commas.
+- A **placed** order to one of those vendors shows **Email to vendor…** on its page, and says
+  it hasn't been emailed yet. The button opens the message exactly as it will go (who to, the
+  subject, each line in the unit and at the price it was ordered at, charges, total, where to
+  deliver), with room for a note; **Send** sends it. Nothing is ever sent without that click.
+- The order's page then shows who it was emailed to, by whom and when; **Email again…** sends
+  it as it is now (after a change, say). A parked order (a draft) isn't sent.
+- The email goes only to the addresses saved for the vendor, never to one typed on the send
+  page. Replies go to the person who sent it (their sign-in email).
+- **Setting up the mail server** (once, by whoever hosts Core): set `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` (see Configuration). Any SMTP service works:
+  Amazon SES, Google Workspace, Microsoft 365. `MAIL_FROM` must be an address that service lets
+  you send as, and the domain should have SPF/DKIM set up there, or vendors' mail servers may
+  mark the orders as spam. Until it's set, the pages show what would be sent and say that
+  email isn't set up.
 
 ## Stock adjustments, transfers and counts
 
@@ -766,6 +807,10 @@ Calculator for your region.
 | `SECRET_KEY` | generated and stored in the database | Signs the sign-in cookie |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
 | `SECURE_COOKIES` | — | `1` when served over HTTPS: the sign-in cookie is only sent over HTTPS, and `http://` visits through the load balancer are redirected to `https://` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | port `587` | The mail server purchase orders are emailed through. Without `SMTP_HOST` and `MAIL_FROM` nothing is sent |
+| `SMTP_SECURITY` | `starttls` | `starttls` (port 587), `ssl` (port 465) or `none` |
+| `MAIL_FROM` | — | Who emails to vendors are from, e.g. `Yeems Coffee Purchasing <purchasing@yourdomain.com>` (an address the mail server lets you send as) |
+| `COMPANY_NAME` | `Yeems Coffee` | The business's name on emails to vendors |
 | `WEB_CONCURRENCY`, `GUNICORN_THREADS` | `1`, `8` | gunicorn workers and threads (`gunicorn.conf.py`) |
 | `ENV_FILE` | `.env` | Settings file to load instead of `.env` |
 | `PORT` | `8000` | Web server port |
@@ -783,6 +828,7 @@ unleashedaccess/
 ├── order_pages.py      # Making, changing, completing and receiving sales and purchase orders
 ├── stock_pages.py      # the Transactions tab: recent, history, adjustments, transfers, stock counts
 ├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
+├── vendor_email.py     # vendors that take purchase orders by email, building and sending the email
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
 ├── maintenance_assets.py # equipment, its moves, counters and readings, files

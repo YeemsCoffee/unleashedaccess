@@ -1,0 +1,32 @@
+{% extends "dash/base.html" %}
+{% block title %}Email {{ po.number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Email {{ po.number }} to {{ po.supplier_name }}</h1>
+  <a href="{{ url_for('dash.purchase_detail', number=po.number) }}">← Back to the order</a>
+</div>
+{% if not can_send %}<p class="recon recon-warn">! Email isn't set up yet, so this can't be sent: an admin sets the mail server
+  (SMTP_HOST, MAIL_FROM; see the README). This is what would go.</p>{% endif %}
+{% if sent %}<p class="recon recon-warn">! Already emailed {{ sent|length }} time{{ 's' if sent|length != 1 }}: last to {{ sent[0].sent_to }}
+  by {{ sent[0].sent_by or 'someone' }} on {{ sent[0].sent_at[:10] }}. Sending again sends the order as it is now.</p>{% endif %}
+<form method="post" class="card">
+  <dl class="facts">
+    <div><dt>To</dt><dd>{{ to|join(', ') }}</dd></div>
+    {% if cc %}<div><dt>Copy to</dt><dd>{{ cc|join(', ') }}</dd></div>{% endif %}
+    <div><dt>From</dt><dd>{{ sender }}</dd></div>
+    {% if reply_to %}<div><dt>Replies go to</dt><dd>{{ reply_to }}</dd></div>{% endif %}
+    <div><dt>Subject</dt><dd>{{ subject }}</dd></div>
+  </dl>
+  <p class="muted small">The addresses are the vendor's, set under <a href="{{ url_for('dash.purchase_vendors') }}">Vendor emails</a>.</p>
+  <label class="block email-note">A note to the vendor <span class="muted small">(optional; goes above the order)</span>
+    <textarea name="note" rows="3" maxlength="2000" placeholder="e.g. Please deliver before 10 am; the back door is on Elm St.">{{ note }}</textarea></label>
+  <h2>The message</h2>
+  <pre class="email-preview">{{ text }}</pre>
+  <p class="muted small">It's sent like this and as a table, in the unit and at the price each line was ordered at.
+    {% if note %}{% else %}A note typed above is added when it's sent.{% endif %}</p>
+  <div class="run-actions">
+    <button class="btn btn-primary" {{ 'disabled' if not can_send }}>Send to {{ po.supplier_name }}</button>
+    <a class="btn" href="{{ url_for('dash.purchase_detail', number=po.number) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

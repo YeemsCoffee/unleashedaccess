@@ -5,6 +5,7 @@ data through UnleashedClient — so pointing the client at the real API
 reproduces the same reports from live data.
 """
 import datetime as dt
+import math
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -165,9 +166,28 @@ class Reports:
         if group:
             rows = [r for r in rows if r["group"] == group]
         rows.sort(key=lambda r: (r["group"], r["product_code"]))
+        if not as_at and not warehouse:  # the stock now, everywhere: against its par levels
+            self._with_par_levels(rows)
         return {"as_at": as_at, "rows": rows,
                 "total_qty": sum(r["qty"] for r in rows),
                 "total_value": sum(r["value"] for r in rows)}
+
+    def _with_par_levels(self, rows):
+        """Add each stock row's par levels from Unleashed and what to order: "par_min", "par_max"
+        (None when not set), "par_by_warehouse" (when they're set per warehouse), "position" (on
+        hand + on purchase orders - allocated to sales), "recommended" (None when nothing's needed),
+        "supplier_code"/"supplier_name" and "min_order" (the fewest the supplier sells)."""
+        products = {p.get("ProductCode"): p for p in self.products()}
+        for r in rows:
+            p = products.get(r["product_code"]) or {}
+            low, high, by_warehouse = par_levels(p)
+            supplier = p.get("Supplier") or {}
+            min_order = _first(supplier.get("MinimumOrderQuantity"), p.get("MinimumOrderQuantity"))
+            position = (r["qty"] or 0) + (r["on_purchase"] or 0) - (r["allocated"] or 0)
+            r.update({"par_min": low, "par_max": high, "par_by_warehouse": by_warehouse, "position": position,
+                      "supplier_code": supplier.get("SupplierCode"), "supplier_name": supplier.get("SupplierName"),
+                      "min_order": min_order or None,
+                      "recommended": recommended_order(position, low, high, min_order)})
 
     def inventory_value(self, as_at=None, warehouse=None):
         return self.stock_on_hand(as_at=as_at, warehouse=warehouse)["total_value"]
@@ -1539,6 +1559,43 @@ def _batches(items):
 def _field(record, names):
     """The first of `names` that `record` has a value for, or None."""
     return next((record[n] for n in names if record.get(n) is not None), None)
+
+
+def par_levels(product):
+    """(minimum, maximum, by warehouse) stock levels of a product as Unleashed holds them: its
+    MinStockAlertLevel and MaxStockAlertLevel, or when it has neither and its levels are set per
+    warehouse (InventoryDetails, with Per Warehouse Controls on), those added up, with
+    [{"warehouse", "min", "max"}] for each. None for a level that isn't set (0 counts as not set)."""
+    low, high = product.get("MinStockAlertLevel") or None, product.get("MaxStockAlertLevel") or None
+    if low is not None or high is not None:
+        return low, high, []
+    by_warehouse = [{"warehouse": _warehouse_code(d.get("Warehouse")),
+                     "min": d.get("WarehouseMinStockAlertLevel") or None,
+                     "max": d.get("WarehouseMaxStockAlertLevel") or None}
+                    for d in product.get("InventoryDetails") or []]
+    by_warehouse = [w for w in by_warehouse if w["min"] is not None or w["max"] is not None]
+    if not by_warehouse:
+        return None, None, []
+    lows, highs = [w["min"] for w in by_warehouse if w["min"] is not None], \
+        [w["max"] for w in by_warehouse if w["max"] is not None]
+    return (sum(lows) if lows else None), (sum(highs) if highs else None), by_warehouse
+
+
+def recommended_order(position, low, high, min_order=None):
+    """How much to order, in stock units, or None: nothing until the stock position (on hand + on
+    order - allocated) is down to the minimum; then enough to bring it up to the maximum (to the
+    minimum when no maximum is set), rounded up to a whole unit, and at least the supplier's
+    minimum order. A product with only a maximum is ordered when it runs out."""
+    if low is None and high is None:
+        return None
+    if position > (low or 0) + 1e-9:
+        return None
+    target = high if high is not None and high > (low or 0) else low
+    need = (target or 0) - position
+    if need <= 1e-9:
+        return None
+    need = float(math.ceil(need - 1e-9))
+    return max(need, float(min_order)) if min_order else need
 
 
 def _qty(value):

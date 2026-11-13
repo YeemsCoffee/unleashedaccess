@@ -51,6 +51,15 @@ def create_app(test_config=None):
         SESSION_COOKIE_SAMESITE="Lax",  # sign-in cookie isn't sent on other sites' form posts
         # Set SECURE_COOKIES=1 when the dashboard is served over HTTPS.
         SESSION_COOKIE_SECURE=env("SECURE_COOKIES", "") == "1",
+        # Email (purchase orders to vendors): the SMTP server Core sends through, and who the
+        # mail is from. Without SMTP_HOST and MAIL_FROM nothing is sent. SMTP_SECURITY: starttls
+        # (port 587, the default), ssl (465) or none.
+        SMTP_HOST=env("SMTP_HOST", "").strip(), SMTP_PORT=env("SMTP_PORT", "").strip(),
+        SMTP_USER=env("SMTP_USER", "").strip(), SMTP_PASSWORD=env("SMTP_PASSWORD", ""),
+        SMTP_SECURITY=env("SMTP_SECURITY", "starttls").strip().lower(),
+        MAIL_FROM=env("MAIL_FROM", "").strip(),
+        # The business's name on emails to vendors.
+        COMPANY_NAME=env("COMPANY_NAME", "Yeems Coffee").strip(),
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # maintenance attachments are up to 16 MB
         # Browsers keep the stylesheet, script, icon and fonts for a year: pages link them with a
         # fingerprint of their contents (static_version), so a changed file is fetched afresh.

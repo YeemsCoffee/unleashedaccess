@@ -9,6 +9,7 @@
       <select name="group"><option value="">All groups</option>
         {% for g in groups %}<option {{ 'selected' if g == group }}>{{ g }}</option>{% endfor %}
       </select></label>
+    {% if not as_at %}<label class="check-field"><input type="checkbox" name="to_order" value="1" {{ 'checked' if to_order }}> To order only</label>{% endif %}
     <button class="btn btn-primary">Run enquiry</button>
     <a class="btn" href="{{ csv_url }}">Export CSV</a>
   </form>
@@ -31,26 +32,47 @@
   </div>
   <p class="muted small">Pick a group to list only its products below{% if group %}; pick it again (or <a href="{{ url_for('dash.stock_on_hand', as_at=as_at.isoformat() if as_at else None) }}">all groups</a>) to see everything{% endif %}.</p>
 </section>
-<section class="card">
+<section class="card" id="products">
+  {% if not as_at %}
+  <p class="{{ 'recon recon-warn' if needed else 'muted small' }}">{% if needed %}! {{ needed }} product{{ 's are' if needed != 1 else ' is' }} at or below
+    {{ 'their' if needed != 1 else 'its' }} minimum.{% if not to_order %} <a href="{{ url_for('dash.stock_on_hand', group=group, to_order=1) }}#products">Show only what to order →</a>{% else %}
+    <a href="{{ url_for('dash.stock_on_hand', group=group) }}#products">Show everything</a>{% endif %}
+    {% elif has_par %}Nothing is at or below its minimum.{% else %}No par levels are set in Unleashed (a product's minimum and maximum stock levels), so nothing is recommended.{% endif %}</p>
+  {% endif %}
   <div class="table-wrap">
   <table>
     <thead><tr><th>Product</th><th>Description</th><th>Group</th><th class="num">On hand</th>
-      {% if not as_at %}<th class="num">Allocated</th><th class="num">Available</th><th class="num">On purchase</th>{% endif %}
+      {% if not as_at %}<th class="num">Allocated</th><th class="num">Available</th><th class="num">On purchase</th>
+      <th class="num" title="Minimum stock level in Unleashed">Par min</th><th class="num" title="Maximum stock level in Unleashed">Par max</th>
+      <th class="num">Order</th>{% endif %}
       <th class="num">Avg cost</th><th class="num">Total value</th><th class="num">Days since sale</th></tr></thead>
     <tbody>
     {% for r in soh.rows %}
-    <tr class="{{ 'row-warn' if r.qty <= 0 }}">
+    <tr class="{{ 'row-warn' if r.qty <= 0 or r.recommended }}">
       <td><a href="{{ url_for('dash.stock_movement', product=r.product_code) }}">{{ r.product_code }}</a></td>
-      <td>{{ r.description }}</td><td>{{ r.group }}</td><td class="num">{{ r.qty|qty }}</td>
-      {% if not as_at %}<td class="num">{{ r.allocated|qty }}</td><td class="num">{{ r.available|qty }}</td><td class="num">{{ r.on_purchase|qty }}</td>{% endif %}
+      <td>{{ r.description }}{% if r.recommended and r.supplier_name %}<div class="muted small">{{ r.supplier_name }}</div>{% endif %}</td><td>{{ r.group }}</td><td class="num">{{ r.qty|qty }}</td>
+      {% if not as_at %}<td class="num">{{ r.allocated|qty }}</td><td class="num">{{ r.available|qty }}</td><td class="num">{{ r.on_purchase|qty }}</td>
+      {% set by_wh %}{% for w in r.par_by_warehouse or [] %}{{ w.warehouse }}: {{ w.min|qty if w.min is not none else '—' }} to {{ w.max|qty if w.max is not none else '—' }}{{ '; ' if not loop.last }}{% endfor %}{% endset %}
+      <td class="num" {% if r.par_by_warehouse %}title="{{ by_wh|trim }}"{% endif %}>{{ r.par_min|qty if r.par_min is not none else '—' }}</td>
+      <td class="num" {% if r.par_by_warehouse %}title="{{ by_wh|trim }}"{% endif %}>{{ r.par_max|qty if r.par_max is not none else '—' }}</td>
+      <td class="num">{% if r.recommended %}<strong>{{ r.recommended|qty }}</strong>{% if r.supplier_code %}
+        <div class="small"><a href="{{ url_for('dash.purchase_order_new', supplier=r.supplier_code) }}">Order →</a></div>{% endif %}{% else %}—{% endif %}</td>{% endif %}
       <td class="num">{{ r.avg_cost|money }}</td><td class="num">{{ r.value|money }}</td>
       <td class="num">{{ r.days_since_sale if r.days_since_sale is not none else '—' }}</td>
     </tr>
+    {% else %}
+    <tr><td colspan="13" class="muted">{{ 'Nothing to order: nothing is at or below its minimum.' if to_order else 'No stock.' }}</td></tr>
     {% endfor %}
     </tbody>
     <tfoot><tr><td colspan="3">Total</td><td class="num">{{ soh.total_qty|qty }}</td>
-      {% if not as_at %}<td colspan="3"></td>{% endif %}<td></td><td class="num">{{ soh.total_value|money }}</td><td></td></tr></tfoot>
+      {% if not as_at %}<td colspan="6"></td>{% endif %}<td></td><td class="num">{{ soh.total_value|money }}</td><td></td></tr></tfoot>
   </table>
   </div>
+  {% if not as_at %}
+  <p class="muted small"><strong>Par min</strong> and <strong>Par max</strong> are each product's minimum and maximum stock levels in Unleashed (for a
+    product with levels per warehouse, added up: hover to see each). <strong>Order</strong> is what to buy, in the unit it's stocked in:
+    nothing until on hand + on purchase − allocated is down to the minimum, then enough to reach the maximum (the minimum, when no
+    maximum is set), rounded up to a whole unit, and at least the supplier's minimum order. Change the levels on the product in Unleashed; they're read at each sync.</p>
+  {% endif %}
 </section>
 {% endblock %}

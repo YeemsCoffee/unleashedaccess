@@ -5,9 +5,9 @@ import datetime as dt
 import re
 from itertools import zip_longest
 
-from flask import abort, flash, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, redirect, render_template, request, url_for
 
-from dashboard import (_ext, _person, _sync_soon, _write_problem, bp, reports)
+from dashboard import (_ext, _person, _sync_soon, _write_problem, bp, current_user, reports)
 from unleashed.client import UnleashedError, parse_date
 from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHASES, OrderError, complete_credit,
                                     purchasable_units, purchase_unit, same_unit,
@@ -17,6 +17,7 @@ from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHAS
                                     delete_supplier_return, receive_purchase_order, update_purchase_order,
                                     update_sales_order)
 from unleashed.sync import RECHECK_FROM
+from vendor_email import (SENDABLE, MailError, addresses, build_message, can_send, mail_settings, named, send)
 
 
 # ---------------------------------------------------------------- shared
@@ -892,3 +893,102 @@ def supplier_return_delete(number):
         _ext()["store_client"].clear_cache()
     _done("Deleted", number)
     return redirect(url_for("dash.supplier_returns"))
+
+
+# ---------------------------------------------------------------- emailing vendors
+
+def _vendor_emails():
+    return current_app.extensions["vendor_emails"]
+
+
+def _deliver_to(code):
+    """A warehouse's name and address, as one line for the vendor."""
+    w = next((w for w in reports().warehouses() if w.get("WarehouseCode") == code), None)
+    if not w:
+        return code or ""
+    parts = [w.get("WarehouseName") or code, " ".join(x for x in (w.get("StreetNo"), w.get("AddressLine1")) if x),
+             w.get("AddressLine2"), w.get("City"), w.get("Region"), w.get("PostCode")]
+    return ", ".join(p.strip() for p in parts if p and p.strip())
+
+
+@bp.route("/purchases/vendors", methods=["GET", "POST"])
+def purchase_vendors():
+    """Which vendors take purchase orders by email, and where."""
+    emails = _vendor_emails()
+    suppliers = sorted((s for s in reports().suppliers() if not s.get("Obsolete")),
+                       key=lambda s: (s.get("SupplierName") or "").lower())
+    saved, error, typed = emails.settings(), None, {}
+    if request.method == "POST":
+        problems = []
+        for s in suppliers:
+            code = s.get("SupplierCode")
+            send = bool(request.form.get(f"send-{code}"))
+            email, cc = request.form.get(f"email-{code}", ""), request.form.get(f"cc-{code}", "")
+            typed[code] = {"send": send, "email": email, "cc": cc}
+            was = saved.get(code)
+            if was is None and not send and not email.strip() and not cc.strip():
+                continue  # never set, still not
+            try:
+                emails.save(code, send, email, cc, _person())
+            except MailError as e:
+                problems.append(f"{s.get('SupplierName') or code}: {e}")
+        if not problems:
+            flash("Saved which vendors take orders by email.", "ok")
+            return redirect(url_for("dash.purchase_vendors"))
+        error, saved = " ".join(problems), emails.settings()
+    rows = []
+    for s in suppliers:
+        code = s.get("SupplierCode")
+        mine, theirs = typed.get(code) or saved.get(code), (s.get("Email") or "").strip()
+        rows.append({"code": code, "name": s.get("SupplierName") or code, "unleashed_email": theirs,
+                     "send": bool(mine and mine["send"]),
+                     # Until a vendor is set here, the box starts with their email in Unleashed.
+                     "email": (mine["email"] or "") if mine else theirs, "cc": (mine["cc"] or "") if mine else ""})
+    html = render_template("dash/purchase_vendors.html", rows=rows, error=error, can_send=can_send(current_app.config),
+                           sender=(mail_settings(current_app.config) or {}).get("sender"))
+    return (html, 400) if error else html
+
+
+@bp.route("/purchases/<number>/email", methods=["GET", "POST"])
+def purchase_order_email(number):
+    """Email a placed purchase order to its vendor: the message is shown first, then sent."""
+    po = _open_purchase_order(number)
+    back = url_for("dash.purchase_detail", number=number)
+    emails, config = _vendor_emails(), current_app.config
+    setting = emails.setting(po["supplier_code"])
+    if not (setting and setting["send"] and setting["email"]):
+        flash(f"{po['supplier_name']} isn't set to take orders by email. Tick them under Purchases → Vendor emails.", "warn")
+        return redirect(url_for("dash.purchase_vendors"))
+    if po["status"] not in SENDABLE:
+        flash(f"{number} is {po['status'].lower()}: place it before emailing it to the vendor."
+              if po["status"] == "Parked" else f"{number} is {po['status'].lower()}, so it isn't emailed.", "warn")
+        return redirect(back)
+    to, cc = addresses(setting["email"]), addresses(setting["cc"])
+    company = config.get("COMPANY_NAME") or "Yeems Coffee"
+    user = current_user()
+    # Who it's from: MAIL_FROM (shown even before the mail server is set, so the page reads true).
+    sender = (config.get("MAIL_FROM") or "").strip() or f"{company} <not-set-up@example.invalid>"
+    note = (request.form.get("note") or "").strip()[:2000]
+    codes = {p.get("ProductCode"): (p.get("Supplier") or {}).get("SupplierProductCode")
+             for p in reports().products()
+             if (p.get("Supplier") or {}).get("SupplierCode") == po["supplier_code"]
+             and (p.get("Supplier") or {}).get("SupplierProductCode")}
+    message = build_message(po, to, cc, sender, company, note=note,
+                            reply_to=named(user["name"], user["email"]) if user and user.get("email") else None,
+                            deliver_to=_deliver_to(po.get("warehouse")), supplier_codes=codes)
+    if request.method == "POST":
+        if not can_send(config):
+            flash("Email isn't set up yet, so nothing was sent. An admin sets SMTP_HOST and MAIL_FROM.", "warn")
+            return redirect(url_for("dash.purchase_order_email", number=number))
+        try:
+            send(config, message)
+        except MailError as e:
+            flash(str(e), "warn")
+            return redirect(url_for("dash.purchase_order_email", number=number))
+        emails.record(po, to, cc, message["Subject"], _person())
+        flash(f"Emailed {number} to {', '.join(to)}{' (copy to ' + ', '.join(cc) + ')' if cc else ''}.", "ok")
+        return redirect(back)
+    return render_template("dash/purchase_email.html", po=po, to=to, cc=cc, subject=message["Subject"],
+                           sender=message["From"], reply_to=message["Reply-To"],
+                           text=message.get_body(preferencelist=("plain",)).get_content(),
+                           sent=emails.sent(number), can_send=can_send(config), note=note)

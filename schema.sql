@@ -399,4 +399,29 @@ CREATE TABLE IF NOT EXISTS stock_count_lines (
     counted_qty  REAL,                       -- none: not counted yet
     counted_by   TEXT,
     counted_at   TEXT
-)
+);
+
+-- Vendors that take purchase orders by email, and at which address. Unleashed has no such
+-- setting its API gives, so it's kept here (supplier_code is Unleashed's SupplierCode).
+CREATE TABLE IF NOT EXISTS vendor_email_settings (
+    supplier_code TEXT PRIMARY KEY,
+    send_po       INTEGER NOT NULL DEFAULT 0,   -- 1: their orders can be emailed from Core
+    email         TEXT,                         -- where orders go (one or more, comma-separated)
+    cc            TEXT,                         -- copies
+    updated_by    TEXT,
+    updated_at    TEXT NOT NULL
+);
+
+-- Every purchase order emailed to a vendor from Core: to whom, by whom, when.
+CREATE TABLE IF NOT EXISTS po_emails (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number  TEXT NOT NULL,
+    order_guid    TEXT,
+    supplier_code TEXT,
+    sent_to       TEXT NOT NULL,
+    cc            TEXT,
+    subject       TEXT,
+    sent_by       TEXT,
+    sent_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS po_emails_order ON po_emails (order_number);

@@ -603,3 +603,8 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 
 /* A purchase order line's unit: as wide as its longest name, not the whole column. */
 .order-lines .unit-select { width: auto; min-width: 5.5rem; max-width: 10rem; }
+
+/* Emailing purchase orders: the message as it will be sent, and the vendor list. */
+.email-preview { white-space: pre-wrap; background: var(--grid); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 13px; overflow-x: auto; max-width: 100%; }
+.vendor-emails .text-input.wide { min-width: 14rem; }
+.email-note textarea { display: block; width: 100%; max-width: 44rem; margin-top: 4px; font: inherit; }

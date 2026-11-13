@@ -1,0 +1,37 @@
+{% extends "dash/base.html" %}
+{% block title %}Vendor emails{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Vendor emails</h1>
+  <a href="{{ url_for('dash.purchases') }}">← Purchases</a>
+</div>
+<p class="muted">Tick the vendors that take purchase orders by email. A placed order to one of them gets an
+  <strong>Email to vendor</strong> button on its page; nothing is sent until someone presses it and checks the message.
+  Unleashed has no such setting Core can read, so it's kept here. The address starts as the vendor's email in Unleashed.</p>
+{% if not can_send %}<p class="recon recon-warn">! Email isn't set up yet, so nothing can be sent: an admin sets the mail server
+  (SMTP_HOST, MAIL_FROM; see the README). The vendors can be chosen meanwhile.</p>
+{% elif sender %}<p class="muted small">Orders are sent from {{ sender }}; replies go to whoever sent the order.</p>{% endif %}
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card">
+  <div class="table-wrap"><table class="vendor-emails">
+    <thead><tr><th>Vendor</th><th>Orders by email</th><th>Send orders to</th><th>Copy to <span class="muted small">(optional)</span></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.name }} <span class="muted small mono">{{ r.code }}</span>
+        {% if r.unleashed_email and r.unleashed_email|lower != r.email|lower %}<div class="muted small">In Unleashed: {{ r.unleashed_email }}</div>{% endif %}</td>
+      <td><label class="check-field"><input type="checkbox" name="send-{{ r.code }}" value="1" {{ 'checked' if r.send }}> Email orders</label></td>
+      <td><input class="text-input wide" type="text" inputmode="email" name="email-{{ r.code }}" value="{{ r.email }}" maxlength="600"
+        placeholder="orders@vendor.com" aria-label="Email for {{ r.name }}" autocomplete="off"></td>
+      <td><input class="text-input wide" type="text" inputmode="email" name="cc-{{ r.code }}" value="{{ r.cc }}" maxlength="600"
+        placeholder="e.g. your purchasing inbox" aria-label="Copy to for {{ r.name }}" autocomplete="off"></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No vendors in Unleashed yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">More than one address: put a comma between them (5 at most).</p>
+  <div class="run-actions"><button class="btn btn-primary">Save</button></div>
+</form>
+{% endblock %}

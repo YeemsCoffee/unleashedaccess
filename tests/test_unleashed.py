@@ -28,7 +28,8 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "access_profiles", "app_user_profiles", "maint_locations", "maint_tasks",
               "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
-              "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines")
+              "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines",
+              "vendor_email_settings", "po_emails")
 
 
 def sqlite_database(testcase):
@@ -829,6 +830,116 @@ class OrderPageTests(unittest.TestCase):
         self.app.extensions["unleashed"]["syncer"].sync(full=True)
         self.assertEqual(self.reports.stock_count_changes(start, TODAY), [])
         self.assertAlmostEqual(self.reports.cogs_reconciliation(TODAY)["adjustments_out"], before, places=2)
+
+    def test_stock_on_hand_shows_par_levels_and_what_to_order(self):
+        """Par levels are Unleashed's minimum and maximum stock levels; an order is recommended once
+        on hand + on order - allocated is down to the minimum, up to the maximum."""
+        from unleashed.reports import par_levels, recommended_order
+        self.assertEqual(recommended_order(12, 10, 20), None)  # above the minimum: nothing
+        self.assertEqual(recommended_order(10, 10, 20), 10)  # at it: up to the maximum
+        self.assertEqual(recommended_order(4, 10, None), 6)  # no maximum: back to the minimum
+        self.assertEqual(recommended_order(1, 2, 3, min_order=5), 5)  # the supplier's minimum order
+        self.assertEqual(recommended_order(0, None, 8), 8)  # only a maximum: ordered when it runs out
+        self.assertEqual(recommended_order(3, None, None), None)  # no par levels: nothing
+        self.assertEqual(par_levels({"MinStockAlertLevel": 0, "MaxStockAlertLevel": None, "InventoryDetails": [
+            {"Warehouse": {"WarehouseCode": "A"}, "WarehouseMinStockAlertLevel": 2, "WarehouseMaxStockAlertLevel": 5},
+            {"Warehouse": {"WarehouseCode": "B"}, "WarehouseMinStockAlertLevel": 1, "WarehouseMaxStockAlertLevel": None}]})[:2],
+            (3, 5))  # set per warehouse: added up
+
+        rows = {r["product_code"]: r for r in self.reports.stock_on_hand()["rows"]}
+        milk = rows["MILK-WHL-GAL"]
+        low, high = self.ds.par_levels("MILK-WHL-GAL")
+        self.assertEqual((milk["par_min"], milk["par_max"], milk["supplier_code"]), (low, high, "SUP-DAIRY"))
+        self.assertEqual(rows["SYR-VAN-750"]["par_by_warehouse"][0]["warehouse"], "GDN")  # per warehouse in Unleashed
+        self.assertIsNone(rows["CB-CONC-GAL"]["par_min"])  # made in-house: no levels set
+        self.assertIsNone(milk["recommended"])
+        # Milk is counted down to 2 gallons: below its minimum, so the difference to its maximum is recommended.
+        self.ds.count_stock(TODAY, {"MILK-WHL-GAL": 2})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        milk = next(r for r in self.reports.stock_on_hand()["rows"] if r["product_code"] == "MILK-WHL-GAL")
+        position = 2 + milk["on_purchase"] - milk["allocated"]
+        import math
+        self.assertEqual(milk["recommended"], math.ceil(high - position))
+        self.assertEqual(recommended_order(0.5, 1, 2), 2)  # 1.5 short: rounded up to a whole unit
+        page = self.c.get("/stock-on-hand").get_data(as_text=True)
+        for text in ("Par min", "Par max", "at or below", "Show only what to order", "/purchases/new?supplier=SUP-DAIRY"):
+            self.assertIn(text, page)
+        only = self.c.get("/stock-on-hand?to_order=1").get_data(as_text=True)
+        self.assertIn("MILK-WHL-GAL", only)
+        self.assertNotIn("CB-CONC-GAL", only)
+        header, *lines = self.c.get("/stock-on-hand?format=csv&to_order=1").get_data(as_text=True).splitlines()
+        self.assertTrue(header.endswith("Par Min,Par Max,Recommended Order,Supplier"))
+        self.assertTrue(any(l.startswith("MILK-WHL-GAL,") and l.endswith(",Mock Dairy Distributors") for l in lines))
+        # A past date has no par columns (the levels and what's on order are today's).
+        past = self.c.get(f"/stock-on-hand?as_at={TODAY.replace(day=1).isoformat()}").get_data(as_text=True)
+        self.assertNotIn("Par min", past)
+
+    def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
+        outbox = self.app.config["MAIL_OUTBOX"] = []
+        self.app.config["MAIL_FROM"] = "Yeems Purchasing <purchasing@yeems.test>"
+
+        def order(supplier="SUP-DAIRY", place="1"):
+            res = self._post("/purchases/new", supplier=supplier, warehouse="GDN", order_date=TODAY.isoformat(),
+                             line_guid=["", ""], product=["MILK-OAT-QT", "MILK-WHL-GAL"], unit=["Case", "Each"],
+                             qty=["2", "5"], price=["37.20", "4.20"], place=place)
+            return res.headers["Location"].rsplit("/", 1)[1]
+
+        number = order()
+        # Not set to take email yet: no button, and the send page sends nobody anything.
+        page = self.c.get(f"/purchases/{number}").get_data(as_text=True)
+        self.assertNotIn("Email to vendor", page)
+        self.assertIn("Vendor emails", page)
+        res = self.c.post(f"/purchases/{number}/email")
+        self.assertIn("/purchases/vendors", res.headers["Location"])
+        self.assertEqual(outbox, [])
+        # The vendor list starts from each vendor's email in Unleashed; a ticked one needs an address.
+        vendors = self.c.get("/purchases/vendors").get_data(as_text=True)
+        self.assertIn('value="orders@mockdairy.example"', vendors)
+        bad = self.c.post("/purchases/vendors", data={"send-SUP-PACK": "1", "email-SUP-PACK": ""})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("Give the address their orders go to", bad.get_data(as_text=True))
+        forged = self.c.post("/purchases/vendors", data={"send-SUP-DAIRY": "1",
+                                                         "email-SUP-DAIRY": "a@b.test\r\nBcc: x@evil.test"})
+        self.assertEqual(forged.status_code, 400)
+        self.assertIn("isn&#39;t an email address", forged.get_data(as_text=True))
+        self._post("/purchases/vendors", **{"send-SUP-DAIRY": "1", "email-SUP-DAIRY": "orders@mockdairy.example",
+                                            "cc-SUP-DAIRY": "buyer@yeems.test, owner@yeems.test"})
+        page = self.c.get(f"/purchases/{number}").get_data(as_text=True)
+        for text in ("Email to vendor…", "Not emailed to Mock Dairy Distributors yet"):
+            self.assertIn(text, page)
+        # The message is shown before it's sent, to the vendor's saved addresses only.
+        preview = self.c.get(f"/purchases/{number}/email").get_data(as_text=True)
+        for text in ("orders@mockdairy.example", "buyer@yeems.test, owner@yeems.test", f"Purchase order {number} from Yeems Coffee",
+                     "2 Case x Oat Milk Barista 32 oz", "Send to Mock Dairy Distributors"):
+            self.assertIn(text, preview)
+        self.assertEqual(outbox, [])
+        sent = self.c.post(f"/purchases/{number}/email", data={"note": "Back door, before 10.", "to": "x@evil.test"},
+                           follow_redirects=True).get_data(as_text=True)
+        self.assertIn(f"Emailed {number} to orders@mockdairy.example", sent)
+        self.assertIn("✉ Emailed to orders@mockdairy.example", sent)
+        self.assertIn("Email again…", sent)
+        self.assertEqual(len(outbox), 1)
+        message = outbox[0]
+        self.assertEqual((message["To"], message["Cc"], message["From"]),
+                         ("orders@mockdairy.example", "buyer@yeems.test, owner@yeems.test",
+                          "Yeems Purchasing <purchasing@yeems.test>"))
+        self.assertNotIn("evil", message.as_string())  # an address in the form is ignored
+        text = message.get_body(preferencelist=("plain",)).get_content()
+        for expected in ("Back door, before 10.", "- 2 Case x Oat Milk Barista 32 oz (MILK-OAT-QT) at $37.20 = $74.40",
+                         "- 5 Each x Whole Milk 1 gal (MILK-WHL-GAL) at $4.20 = $21.00", "Total: $95.40", "Deliver to: Gardena Store"):
+            self.assertIn(expected, text)
+        self.assertIn("<table", message.get_body(preferencelist=("html",)).get_content())
+        log = self.app.extensions["vendor_emails"].sent(number)
+        self.assertEqual([(e["sent_to"], e["sent_by"]) for e in log], [("orders@mockdairy.example", "Team")])
+        # A parked order (a draft) isn't sent; nor is anything without a mail server.
+        parked = order(place="")
+        res = self.c.post(f"/purchases/{parked}/email", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("place it before emailing", res)
+        self.app.config["MAIL_OUTBOX"] = None
+        res = self.c.post(f"/purchases/{number}/email", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Email isn&#39;t set up yet, so nothing was sent", res)
+        self.assertEqual(len(self.app.extensions["vendor_emails"].sent(number)), 1)
+        self.assertEqual(len(outbox), 1)
 
     def test_products_are_typed_and_the_next_number_is_shown(self):
         last_so = max(int(n[3:]) for n in self.app.extensions["unleashed"]["store"].document_numbers("SalesOrders")

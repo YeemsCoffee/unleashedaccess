@@ -77,6 +77,16 @@ BILLS_OF_MATERIALS = [
 # An old recipe kept in Unleashed but no longer made.
 OBSOLETE_BOMS = [("BOM-CB-OLD", "CB-CONC-GAL", [("COF-ESP-5LB", 0.4, 0.02), ("JUG-GAL", 1, 0)])]
 
+# Where each supplier takes orders by email (Unleashed's Supplier.Email); the packaging supplier has none.
+SUPPLIER_EMAILS = {"SUP-DAIRY": "orders@mockdairy.example", "SUP-ROAST": "wholesale@mockroasters.example",
+                   "SUP-SYRUP": "sales@mocksyrup.example"}
+# Par levels (Unleashed's MinStockAlertLevel / MaxStockAlertLevel) come from each bought product's
+# use: the minimum covers the supplier's lead time twice over, the maximum its days of cover.
+# These have theirs per warehouse instead (InventoryDetails, with Per Warehouse Controls on):
+PER_WAREHOUSE_PAR = {"SYR-VAN-750"}
+# The fewest a supplier sells at a time (Product.Supplier.MinimumOrderQuantity).
+MINIMUM_ORDER = {"CUP-12-HOT": 2}
+
 # code, name, order weekdays (Mon=0), lead days, freight per PO, days of cover
 SUPPLIERS = [
     ("SUP-DAIRY", "Mock Dairy Distributors", (0, 3), 1, 18.00, 5),
@@ -462,6 +472,16 @@ class MockDataset:
 
     def move_stock(self, day, kind, number, party, code, qty, value, warehouse=None):
         self._move(day, kind, number, party, code, qty, value, warehouse)
+
+    def par_levels(self, code):
+        """(minimum, maximum) stock level of a bought product; (None, None) for one made in-house
+        or not stocked."""
+        p = self.products[code]
+        if not p.get("SupplierCode") or p.get("NonStock"):
+            return None, None
+        sup = self.suppliers[p["SupplierCode"]]
+        low = math.ceil(p["PlanUse"] * sup["LeadDays"] * 2) or 1
+        return float(low), float(max(math.ceil(p["PlanUse"] * sup["CoverDays"]), low + 1))
 
     def count_stock(self, day, counted, warehouse=None, completed=True):
         """A stock count done in Unleashed: `counted` {product code: quantity counted}. Completed,

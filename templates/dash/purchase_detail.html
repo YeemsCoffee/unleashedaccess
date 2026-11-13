@@ -17,17 +17,24 @@
     {% if po.reference %}<div><dt>Supplier reference</dt><dd>{{ po.reference }}</dd></div>{% endif %}
   </dl>
   {% if po.comments %}<p class="instructions">{{ po.comments }}</p>{% endif %}
+  {% set emails_orders = vendor_email and vendor_email.send and vendor_email.email %}
+  {% if emailed %}<p class="muted small">✉ Emailed to {{ emailed[0].sent_to }} by {{ emailed[0].sent_by or 'someone' }} on {{ emailed[0].sent_at[:10] }}{% if emailed|length > 1 %} ({{ emailed|length }} times in all){% endif %}.</p>
+  {% elif emails_orders and po.status == 'Placed' %}<p class="recon recon-warn">! Not emailed to {{ po.supplier_name }} yet: they take their orders by email.</p>
+  {% elif emails_orders and po.status == 'Parked' %}<p class="muted small">{{ po.supplier_name }} takes orders by email: place this order, then email it.</p>{% endif %}
   {% if po.status in ('Parked', 'Placed') %}
   <div class="run-actions">
-    <a class="btn btn-primary" href="{{ url_for('dash.purchase_order_receive', number=po.number) }}">Receive…</a>
+    {% if emails_orders and po.status == 'Placed' %}<a class="btn {{ 'btn-primary' if not emailed }}" href="{{ url_for('dash.purchase_order_email', number=po.number) }}">{{ 'Email again…' if emailed else 'Email to vendor…' }}</a>{% endif %}
+    <a class="btn {{ 'btn-primary' if emailed or not (emails_orders and po.status == 'Placed') }}" href="{{ url_for('dash.purchase_order_receive', number=po.number) }}">Receive…</a>
     <a class="btn" href="{{ url_for('dash.purchase_order_edit', number=po.number) }}">Edit</a>
     <form method="post" action="{{ url_for('dash.purchase_order_delete', number=po.number) }}"
       onsubmit='return confirm({{ ("Delete " ~ po.number ~ " in Unleashed?")|tojson }})'><button class="btn btn-quiet">Delete</button></form>
   </div>
+  {% if not emails_orders %}<p class="muted small">To email this vendor their orders, tick them under <a href="{{ url_for('dash.purchase_vendors') }}">Vendor emails</a>.</p>{% endif %}
   {% elif po.status in ('Receipted', 'Costed') %}
   <div class="run-actions">
     <form method="post" action="{{ url_for('dash.purchase_order_complete', number=po.number) }}"
       onsubmit='return confirm({{ ("Complete " ~ po.number ~ "? A completed order can't be changed.")|tojson }})'><button class="btn btn-primary">Complete</button></form>
+    {% if emails_orders %}<a class="btn btn-quiet" href="{{ url_for('dash.purchase_order_email', number=po.number) }}">{{ 'Email again…' if emailed else 'Email to vendor…' }}</a>{% endif %}
   </div>
   {% elif po.status == 'Complete' %}
   <div class="run-actions"><a class="btn" href="{{ url_for('dash.purchase_order_return', number=po.number) }}">Return to supplier…</a></div>{% endif %}

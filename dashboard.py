@@ -181,7 +181,8 @@ _PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand",
             "dash.sales_order_complete": "dash.sales", "dash.sales_order_delete": "dash.sales",
             "dash.purchase_order_new": "dash.purchases", "dash.purchase_order_edit": "dash.purchases",
             "dash.purchase_order_receive": "dash.purchases", "dash.purchase_order_complete": "dash.purchases",
-            "dash.purchase_order_delete": "dash.purchases",
+            "dash.purchase_order_delete": "dash.purchases", "dash.purchase_order_email": "dash.purchases",
+            "dash.purchase_vendors": "dash.purchases",
             "dash.credit_notes": "dash.sales", "dash.credit_detail": "dash.sales", "dash.sales_order_credit": "dash.sales",
             "dash.credit_complete": "dash.sales", "dash.credit_delete": "dash.sales",
             "dash.supplier_returns": "dash.purchases", "dash.supplier_return_detail": "dash.purchases",
@@ -818,6 +819,12 @@ def stock_on_hand():
     as_at = _date_arg("as_at", None)
     group = request.args.get("group") or None
     soh = r.stock_on_hand(as_at=as_at, group=group)
+    # Only what's at or below its minimum: what to order now (not for a past date).
+    to_order = bool(request.args.get("to_order")) and not as_at
+    needed = [x for x in soh["rows"] if x.get("recommended")]
+    if to_order:
+        soh = dict(soh, rows=needed, total_qty=sum(x["qty"] for x in needed),
+                   total_value=sum(x["value"] for x in needed))
     val = r.stock_valuation(as_at=as_at)  # every group's value, whichever one is shown
     if _wants_csv() and request.args.get("by") == "group":
         return _csv("stock-value-by-group", [
@@ -831,9 +838,16 @@ def stock_on_hand():
             ("Allocated", "allocated"), ("Available", "available"), ("On Purchase", "on_purchase"),
             ("Avg Cost", "avg_cost"), ("Total Value", "value"),
             ("Days Since Last Sale", "days_since_sale"),
-        ], soh["rows"])
+        ] + ([] if as_at else [
+            ("Par Min", lambda x: x.get("par_min") if x.get("par_min") is not None else ""),
+            ("Par Max", lambda x: x.get("par_max") if x.get("par_max") is not None else ""),
+            ("Recommended Order", lambda x: round(x["recommended"], 4) if x.get("recommended") else ""),
+            ("Supplier", lambda x: x.get("supplier_name") or ""),
+        ]), soh["rows"])
     return render_template("dash/stock_on_hand.html", soh=soh, val=val, groups=r.product_groups(),
-                           group=group, as_at=as_at, csv_url=_csv_url())
+                           group=group, as_at=as_at, csv_url=_csv_url(), to_order=to_order,
+                           needed=len(needed), has_par=any(x.get("par_min") is not None or x.get("par_max") is not None
+                                                           for x in soh["rows"]) or bool(needed))
 
 
 @bp.get("/stock-valuation")
@@ -887,7 +901,9 @@ def purchase_detail(number):
     po = reports().purchase_order(number)
     if po is None:
         abort(404)
-    return render_template("dash/purchase_detail.html", po=po)
+    emails = current_app.extensions["vendor_emails"]
+    return render_template("dash/purchase_detail.html", po=po, vendor_email=emails.setting(po["supplier_code"]),
+                           emailed=emails.sent(number))
 
 
 @bp.get("/sales")
@@ -1511,6 +1527,8 @@ def init_app(app):
     app.extensions["production_runs"] = ProductionRuns(db)
     from stock_counts import StockCounts
     app.extensions["stock_counts"] = StockCounts(db)
+    from vendor_email import VendorEmails
+    app.extensions["vendor_emails"] = VendorEmails(db)
     import order_pages  # noqa: F401 (adds making, changing, completing and receiving orders)
     import stock_pages  # noqa: F401 (adds the Transactions pages: adjustments, transfers, stock counts)
     app.register_blueprint(bp)

@@ -12,7 +12,8 @@ from flask import Flask, jsonify, request
 
 from .client import sign
 from . import mock_orders, mock_returns, mock_stock
-from .mock_data import BATCH_TRACKED, PURCHASE_UNITS, MockDataset, purchasable_units
+from .mock_data import (BATCH_TRACKED, MINIMUM_ORDER, PER_WAREHOUSE_PAR, PURCHASE_UNITS, SUPPLIER_EMAILS, MockDataset,
+                        purchasable_units)
 
 MOCK_API_ID = "mock-api-id"
 MOCK_API_KEY = "mock-api-key"
@@ -63,6 +64,7 @@ def create_mock_app(api_id=MOCK_API_ID, api_key=MOCK_API_KEY, today=None):
     def suppliers(page=1):
         items = [{"Guid": s["Guid"], "SupplierCode": s["SupplierCode"],
                   "SupplierName": s["SupplierName"], "Currency": {"CurrencyCode": "USD"},
+                  "Email": SUPPLIER_EMAILS.get(s["SupplierCode"]), "PhoneNumber": None, "Obsolete": False,
                   "Taxable": False, "TaxCode": None, "TaxRate": None}
                  for s in ds.suppliers.values() if _match(s["SupplierCode"], "supplierCode")]
         return _paged(items, page)
@@ -434,12 +436,24 @@ def _product(ds, p):
         "ProductGroup": {"GroupName": p["ProductGroup"]},
         "UnitOfMeasure": {"Guid": mock_orders.unit_guid(p["UnitOfMeasure"]), "Name": p["UnitOfMeasure"]},
         "DefaultPurchasePrice": p["BaseCost"], "DefaultSellPrice": p["SellPrice"],
-        **_purchasing(ds, p),
+        **_purchasing(ds, p), **_par(ds, p),
         "IsSellable": p["SellPrice"] > 0, "IsAssembledProduct": p["SupplierCode"] is None and not p.get("NonStock"),
         "NeverDiminishing": bool(p.get("NonStock")),
         "IsBatchTracked": p["ProductCode"] in BATCH_TRACKED,
         "Obsolete": False,
     }
+
+
+def _par(ds, p):
+    """A product's stock levels: MinStockAlertLevel / MaxStockAlertLevel, or for a product with
+    per-warehouse controls, none of its own and InventoryDetails for the warehouse it's kept in."""
+    low, high = ds.par_levels(p["ProductCode"])
+    if p["ProductCode"] in PER_WAREHOUSE_PAR:
+        wh = next(w for w in ds.warehouses if w["WarehouseCode"] == ds.default_warehouse)
+        return {"MinStockAlertLevel": None, "MaxStockAlertLevel": None, "InventoryDetails": [
+            {"BinLocation": None, "WarehouseMinStockAlertLevel": low, "WarehouseMaxStockAlertLevel": high,
+             "Warehouse": {"Guid": wh["Guid"], "WarehouseCode": wh["WarehouseCode"], "WarehouseName": wh["WarehouseName"]}}]}
+    return {"MinStockAlertLevel": low, "MaxStockAlertLevel": high, "InventoryDetails": []}
 
 
 def _purchasing(ds, p):
@@ -448,7 +462,9 @@ def _purchasing(ds, p):
     unit, rate = PURCHASE_UNITS.get(p["ProductCode"], (p["UnitOfMeasure"], 1))
     ref = {"Guid": mock_orders.unit_guid(unit), "Name": unit}
     supplier = dict(_supplier_ref(ds, p["SupplierCode"]), UnitOfMeasure=ref,
-                    SupplierProductPrice=round(p["BaseCost"] * rate, 4)) if p["SupplierCode"] else None
+                    SupplierProductPrice=round(p["BaseCost"] * rate, 4),
+                    MinimumOrderQuantity=MINIMUM_ORDER.get(p["ProductCode"]),
+                    LeadTimeDays=ds.suppliers[p["SupplierCode"]]["LeadDays"]) if p["SupplierCode"] else None
     others = [{"Guid": mock_orders.unit_guid(name), "Name": name, "ConversionRate": float(per), "ForPurchases": True}
               for name, per in purchasable_units(p["ProductCode"], p["UnitOfMeasure"]).values() if per != 1]
     return {"DefaultPurchasesUnitOfMeasure": dict(ref, Obsolete=False), "AlternateUnitsOfMeasure": others,
