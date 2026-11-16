@@ -180,13 +180,43 @@ keeps the choice and sends the email itself.
 - The order's page then shows who it was emailed to, by whom and when; **Email again…** sends
   it as it is now (after a change, say). A parked order (a draft) isn't sent.
 - The email goes only to the addresses saved for the vendor, never to one typed on the send
-  page. Replies go to the person who sent it (their sign-in email).
-- **Setting up the mail server** (once, by whoever hosts Core): set `SMTP_HOST`, `SMTP_PORT`,
-  `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` (see Configuration). Any SMTP service works:
-  Amazon SES, Google Workspace, Microsoft 365. `MAIL_FROM` must be an address that service lets
-  you send as, and the domain should have SPF/DKIM set up there, or vendors' mail servers may
-  mark the orders as spam. Until it's set, the pages show what would be sent and say that
-  email isn't set up.
+  page.
+- **Send a test email to myself** on the Vendor emails page checks that sending works before
+  a vendor is sent anything.
+- Until email is set up (one of the two ways below), the pages show what would be sent and say
+  that email isn't set up.
+
+**Through Microsoft 365, from each person's own mailbox** (used when its three settings are
+there). Core is registered once as an app in your Microsoft organisation; after that an order
+is sent from the mailbox of whoever is signed in to Core and pressed Send. It comes from their
+address, is kept in their Outlook Sent Items, and the vendor's reply goes back to them. Each
+person's Core sign-in email must be their Microsoft 365 address. A Microsoft 365 Global
+Administrator sets it up, once:
+
+1. **entra.microsoft.com** → Identity → Applications → **App registrations** → **New
+   registration**. Name `Yeems Core`; *Accounts in this organizational directory only*; no
+   redirect URI → **Register**. Copy the **Application (client) ID** and **Directory (tenant) ID**.
+2. **API permissions** → Add a permission → Microsoft Graph → **Application permissions** (not
+   Delegated) → `Mail.Send` → Add → **Grant admin consent**.
+3. **Certificates & secrets** → New client secret → copy its **Value** (shown once). Note when it
+   expires: sending stops then until a new one is made and put in step 4.
+4. Elastic Beanstalk → Configuration → Updates, monitoring, and logging → Edit → Environment
+   properties: `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` → Apply.
+5. In Core: Purchases → Vendor emails → **Send a test email to myself**.
+
+With that permission the app's secret can send mail as anyone in the organisation, so it's
+kept only in the environment properties. Microsoft can limit the app to the members of one
+mail-enabled security group (`New-ApplicationAccessPolicy -AppId <client id> -PolicyScopeGroupId
+<group address> -AccessRight RestrictAccess` in Exchange Online PowerShell); Core works either
+way, and says so when Microsoft refuses a sender. If the secret may have leaked, delete it in
+Entra (sending stops at once) and make another. Core itself only sends as the person signed
+in, only to a vendor's saved addresses, and only after the Send click.
+
+**Through a mail server, from one mailbox**: set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+`SMTP_PASSWORD` and `MAIL_FROM` (see Configuration). Any SMTP service works (Amazon SES, Google
+Workspace). Every order is from `MAIL_FROM`, with replies going to the person who sent it.
+`MAIL_FROM` must be an address that service lets you send as, and the domain should have
+SPF/DKIM set up there, or vendors' mail servers may mark the orders as spam.
 
 ## Stock adjustments, transfers and counts
 
@@ -807,7 +837,8 @@ Calculator for your region.
 | `SECRET_KEY` | generated and stored in the database | Signs the sign-in cookie |
 | `TIMEZONE` | the computer's time zone | Business time zone for "today", month boundaries and displayed times |
 | `SECURE_COOKIES` | — | `1` when served over HTTPS: the sign-in cookie is only sent over HTTPS, and `http://` visits through the load balancer are redirected to `https://` |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | port `587` | The mail server purchase orders are emailed through. Without `SMTP_HOST` and `MAIL_FROM` nothing is sent |
+| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | — | Core's app registration in Microsoft Entra (with the `Mail.Send` application permission): purchase orders are emailed through Microsoft 365 from the mailbox of the person signed in. Used in preference to the mail server |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | port `587` | Or the mail server purchase orders are emailed through, from `MAIL_FROM`. With neither this nor Microsoft 365, nothing is sent |
 | `SMTP_SECURITY` | `starttls` | `starttls` (port 587), `ssl` (port 465) or `none` |
 | `MAIL_FROM` | — | Who emails to vendors are from, e.g. `Yeems Coffee Purchasing <purchasing@yourdomain.com>` (an address the mail server lets you send as) |
 | `COMPANY_NAME` | `Yeems Coffee` | The business's name on emails to vendors |

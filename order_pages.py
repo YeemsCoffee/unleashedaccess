@@ -3,6 +3,7 @@ Unleashed (unleashed/order_writes.py). Anyone who can open Sales (or Purchases) 
 Unleashed records the change as the API user, and Core says who did it in its message."""
 import datetime as dt
 import re
+from email.utils import parseaddr
 from itertools import zip_longest
 
 from flask import abort, current_app, flash, redirect, render_template, request, url_for
@@ -17,7 +18,8 @@ from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHAS
                                     delete_supplier_return, receive_purchase_order, update_purchase_order,
                                     update_sales_order)
 from unleashed.sync import RECHECK_FROM
-from vendor_email import (SENDABLE, MailError, addresses, build_message, can_send, mail_settings, named, send)
+from vendor_email import (NOT_SET_UP, SENDABLE, MailError, addresses, build_message, can_send, mail_mode,
+                          sender_for, send, test_message)
 
 
 # ---------------------------------------------------------------- shared
@@ -944,9 +946,39 @@ def purchase_vendors():
                      "send": bool(mine and mine["send"]),
                      # Until a vendor is set here, the box starts with their email in Unleashed.
                      "email": (mine["email"] or "") if mine else theirs, "cc": (mine["cc"] or "") if mine else ""})
-    html = render_template("dash/purchase_vendors.html", rows=rows, error=error, can_send=can_send(current_app.config),
-                           sender=(mail_settings(current_app.config) or {}).get("sender"))
+    html = render_template("dash/purchase_vendors.html", rows=rows, error=error, **_mail_facts())
     return (html, 400) if error else html
+
+
+def _mail_facts():
+    """How email goes out now, for the pages: {"can_send", "mode", "sender" (the From it would
+    carry), "mailbox" (the Microsoft 365 mailbox it's sent from, or None)}."""
+    config = current_app.config
+    sender, mailbox, _ = sender_for(config, current_user(), config.get("COMPANY_NAME") or "Yeems Coffee")
+    return {"can_send": can_send(config), "mode": mail_mode(config), "sender": sender, "mailbox": mailbox}
+
+
+@bp.post("/purchases/vendors/test")
+def purchase_vendors_test():
+    """Send the person a short email, to check sending works before a vendor is sent anything."""
+    config, back = current_app.config, url_for("dash.purchase_vendors")
+    company, user = config.get("COMPANY_NAME") or "Yeems Coffee", current_user()
+    sender, mailbox, _ = sender_for(config, user, company)
+    mode = mail_mode(config)
+    if mode is None:
+        flash(NOT_SET_UP, "warn")
+        return redirect(back)
+    to = (user or {}).get("email") or mailbox or parseaddr(sender or "")[1]
+    try:
+        to = addresses(to, "Your email")[0]
+        how = f"from your own mailbox ({mailbox}) through Microsoft 365" if mode == "microsoft" else f"from {sender}"
+        send(config, test_message(to, sender, company, how), mailbox=mailbox)
+    except (MailError, IndexError) as e:
+        flash(str(e) if isinstance(e, MailError) else "There's no email address to send a test to: sign in with your "
+              "own account.", "warn")
+        return redirect(back)
+    flash(f"Sent a test email to {to}. Check it arrived (and your Sent Items, through Microsoft 365).", "ok")
+    return redirect(back)
 
 
 @bp.route("/purchases/<number>/email", methods=["GET", "POST"])
@@ -965,23 +997,22 @@ def purchase_order_email(number):
         return redirect(back)
     to, cc = addresses(setting["email"]), addresses(setting["cc"])
     company = config.get("COMPANY_NAME") or "Yeems Coffee"
-    user = current_user()
-    # Who it's from: MAIL_FROM (shown even before the mail server is set, so the page reads true).
-    sender = (config.get("MAIL_FROM") or "").strip() or f"{company} <not-set-up@example.invalid>"
+    # Who it's from: through Microsoft 365, the signed-in person's own mailbox; through the mail
+    # server, MAIL_FROM with replies to them (shown even before email is set up, so the page reads true).
+    sender, mailbox, reply_to = sender_for(config, current_user(), company)
     note = (request.form.get("note") or "").strip()[:2000]
     codes = {p.get("ProductCode"): (p.get("Supplier") or {}).get("SupplierProductCode")
              for p in reports().products()
              if (p.get("Supplier") or {}).get("SupplierCode") == po["supplier_code"]
              and (p.get("Supplier") or {}).get("SupplierProductCode")}
-    message = build_message(po, to, cc, sender, company, note=note,
-                            reply_to=named(user["name"], user["email"]) if user and user.get("email") else None,
+    message = build_message(po, to, cc, sender, company, note=note, reply_to=reply_to,
                             deliver_to=_deliver_to(po.get("warehouse")), supplier_codes=codes)
     if request.method == "POST":
         if not can_send(config):
-            flash("Email isn't set up yet, so nothing was sent. An admin sets SMTP_HOST and MAIL_FROM.", "warn")
+            flash("Email isn't set up yet, so nothing was sent. An admin connects Microsoft 365 or a mail server.", "warn")
             return redirect(url_for("dash.purchase_order_email", number=number))
         try:
-            send(config, message)
+            send(config, message, mailbox=mailbox)
         except MailError as e:
             flash(str(e), "warn")
             return redirect(url_for("dash.purchase_order_email", number=number))
@@ -991,4 +1022,5 @@ def purchase_order_email(number):
     return render_template("dash/purchase_email.html", po=po, to=to, cc=cc, subject=message["Subject"],
                            sender=message["From"], reply_to=message["Reply-To"],
                            text=message.get_body(preferencelist=("plain",)).get_content(),
-                           sent=emails.sent(number), can_send=can_send(config), note=note)
+                           sent=emails.sent(number), can_send=can_send(config), note=note,
+                           mode=mail_mode(config), mailbox=mailbox)

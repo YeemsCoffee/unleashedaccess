@@ -3603,6 +3603,74 @@ class TeamAccountTests(unittest.TestCase):
         admin.post(f"/team/{mo_id}", data={"action": "access", "access": "admin"})
         self.assertIn(">Settings<", mo.get("/connection").get_data(as_text=True))
 
+    def test_purchase_orders_are_emailed_through_microsoft_365_from_the_senders_mailbox(self):
+        """With Core registered in Microsoft Entra, an order is sent through Microsoft Graph from the
+        mailbox of whoever is signed in to Core, not from a shared mailbox."""
+        import json as _json
+        import vendor_email
+        vendor_email._tokens.clear()
+        calls, reply = [], {"send": (202, {}), "token": (200, {"access_token": "tok-1", "expires_in": 3600})}
+
+        def graph(method, url, headers=None, data=None):
+            calls.append({"url": url, "headers": headers or {}, "data": data})
+            return reply["token"] if "login.microsoftonline.com" in url else reply["send"]
+
+        app = self._app(MS_TENANT_ID="11111111-2222-3333-4444-555555555555", MS_CLIENT_ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        MS_CLIENT_SECRET="s3cret-value", MS_GRAPH_TRANSPORT=graph, COMPANY_NAME="Yeems Coffee")
+        self.app = app
+        admin = self._admin_client()
+        vendors = admin.get("/purchases/vendors").get_data(as_text=True)
+        self.assertIn("through Microsoft 365", vendors)
+        self.assertIn("owner@yeems.test", vendors)
+        self.assertNotIn("s3cret-value", vendors)
+        admin.post("/purchases/vendors", data={"send-SUP-DAIRY": "1", "email-SUP-DAIRY": "orders@mockdairy.example",
+                                               "cc-SUP-DAIRY": "buyer@yeems.test"})
+        res = admin.post("/purchases/new", data={"supplier": "SUP-DAIRY", "warehouse": "GDN", "order_date": TODAY.isoformat(),
+                                                 "line_guid": [""], "product": ["MILK-WHL-GAL"], "unit": ["Each"], "qty": ["5"],
+                                                 "price": ["4.20"], "place": "1"})
+        number = res.headers["Location"].rsplit("/", 1)[1]
+        preview = admin.get(f"/purchases/{number}/email").get_data(as_text=True)
+        self.assertIn("Owner &lt;owner@yeems.test&gt;", preview)  # from the person signed in
+        self.assertIn("kept in your Sent Items", preview)
+        self.assertEqual(calls, [])  # nothing reaches Microsoft until Send
+        sent = admin.post(f"/purchases/{number}/email", data={"note": "Before 10 please."}, follow_redirects=True)
+        self.assertIn(f"Emailed {number} to orders@mockdairy.example", sent.get_data(as_text=True))
+        token_call, send_call = calls
+        self.assertIn("/11111111-2222-3333-4444-555555555555/oauth2/v2.0/token", token_call["url"])
+        self.assertIn(b"grant_type=client_credentials", token_call["data"])
+        self.assertTrue(send_call["url"].endswith("/users/owner@yeems.test/sendMail"))
+        self.assertEqual(send_call["headers"]["Authorization"], "Bearer tok-1")
+        body = _json.loads(send_call["data"])
+        self.assertTrue(body["saveToSentItems"])
+        self.assertEqual([r["emailAddress"]["address"] for r in body["message"]["toRecipients"]], ["orders@mockdairy.example"])
+        self.assertEqual([r["emailAddress"]["address"] for r in body["message"]["ccRecipients"]], ["buyer@yeems.test"])
+        self.assertEqual(body["message"]["subject"], f"Purchase order {number} from Yeems Coffee")
+        self.assertEqual(body["message"]["body"]["contentType"], "HTML")
+        self.assertIn("Before 10 please.", body["message"]["body"]["content"])
+        emails = app.extensions["vendor_emails"]
+        self.assertEqual([(e["sent_to"], e["sent_by"]) for e in emails.sent(number)], [("orders@mockdairy.example", "Owner")])
+        # The test email goes to the person themselves, on the token Core already has.
+        test = admin.post("/purchases/vendors/test", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Sent a test email to owner@yeems.test", test)
+        self.assertEqual(len(calls), 3)  # no second sign-in
+        self.assertEqual([r["emailAddress"]["address"] for r in _json.loads(calls[-1]["data"])["message"]["toRecipients"]],
+                         ["owner@yeems.test"])
+        # Microsoft's refusals are said plainly, and nothing is recorded as sent.
+        for answer, expected in (((403, {"error": {"code": "ErrorAccessDenied"}}), "Core isn&#39;t allowed to send as owner@yeems.test"),
+                                 ((404, {"error": {"code": "ErrorInvalidUser"}}), "has no Microsoft 365 mailbox"),
+                                 ((429, {"error": {"code": "ApplicationThrottled"}}), "Wait a minute")):
+            reply["send"] = answer
+            page = admin.post(f"/purchases/{number}/email", follow_redirects=True).get_data(as_text=True)
+            self.assertIn(expected, page)
+        self.assertEqual(len(emails.sent(number)), 1)
+        vendor_email._tokens.clear()
+        reply["token"] = (401, {"error": "invalid_client", "error_description": "AADSTS7000215: Invalid client secret provided."})
+        page = admin.post(f"/purchases/{number}/email", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("secret (MS_CLIENT_SECRET) is wrong or has expired", page)
+        self.assertNotIn("s3cret-value", page)
+        self.assertEqual(len(emails.sent(number)), 1)
+        vendor_email._tokens.clear()
+
     def test_every_page_belongs_to_a_tab_or_is_general(self):
         import dashboard
         settings = {"dash.connection", "dash.api_log", "dash.team", "dash.team_add", "dash.team_update",

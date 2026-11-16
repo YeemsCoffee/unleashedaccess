@@ -5,15 +5,17 @@
   <h1>Email {{ po.number }} to {{ po.supplier_name }}</h1>
   <a href="{{ url_for('dash.purchase_detail', number=po.number) }}">← Back to the order</a>
 </div>
-{% if not can_send %}<p class="recon recon-warn">! Email isn't set up yet, so this can't be sent: an admin sets the mail server
-  (SMTP_HOST, MAIL_FROM; see the README). This is what would go.</p>{% endif %}
+{% if not can_send %}<p class="recon recon-warn">! Email isn't set up yet, so this can't be sent: an admin connects Microsoft 365 or a
+  mail server (see the README). This is what would go.</p>
+{% elif mode == 'microsoft' and not mailbox %}<p class="recon recon-warn">! Core sends from your own Microsoft 365 mailbox, so sign in to
+  Core with your own account to send this.</p>{% endif %}
 {% if sent %}<p class="recon recon-warn">! Already emailed {{ sent|length }} time{{ 's' if sent|length != 1 }}: last to {{ sent[0].sent_to }}
   by {{ sent[0].sent_by or 'someone' }} on {{ sent[0].sent_at[:10] }}. Sending again sends the order as it is now.</p>{% endif %}
 <form method="post" class="card">
   <dl class="facts">
     <div><dt>To</dt><dd>{{ to|join(', ') }}</dd></div>
     {% if cc %}<div><dt>Copy to</dt><dd>{{ cc|join(', ') }}</dd></div>{% endif %}
-    <div><dt>From</dt><dd>{{ sender }}</dd></div>
+    <div><dt>From</dt><dd>{{ sender }}{% if mode == 'microsoft' and mailbox %}<div class="muted small" style="font-weight:400">your Microsoft 365 mailbox; kept in your Sent Items</div>{% endif %}</dd></div>
     {% if reply_to %}<div><dt>Replies go to</dt><dd>{{ reply_to }}</dd></div>{% endif %}
     <div><dt>Subject</dt><dd>{{ subject }}</dd></div>
   </dl>
@@ -25,7 +27,7 @@
   <p class="muted small">It's sent like this and as a table, in the unit and at the price each line was ordered at.
     {% if note %}{% else %}A note typed above is added when it's sent.{% endif %}</p>
   <div class="run-actions">
-    <button class="btn btn-primary" {{ 'disabled' if not can_send }}>Send to {{ po.supplier_name }}</button>
+    <button class="btn btn-primary" {{ 'disabled' if not can_send or (mode == 'microsoft' and not mailbox) }}>Send to {{ po.supplier_name }}</button>
     <a class="btn" href="{{ url_for('dash.purchase_detail', number=po.number) }}">Cancel</a>
   </div>
 </form>

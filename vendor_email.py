@@ -5,16 +5,31 @@ so Core keeps the choice itself: for each vendor, whether they take orders by em
 which address (starting from the vendor's email in Unleashed). A placed purchase order to such
 a vendor can be emailed from its page; who sent what, to whom and when is kept.
 
-Mail goes out through an SMTP server named in the environment (SMTP_HOST, SMTP_PORT,
-SMTP_USER, SMTP_PASSWORD, SMTP_SECURITY, MAIL_FROM); without one, nothing can be sent and the
-pages say so. Recipients only ever come from the vendor's saved settings, never from the send
-form, so the page can't be used to send mail to anyone else.
+Mail goes out one of two ways, set in the environment; with neither, nothing can be sent and
+the pages say so:
+
+  Microsoft 365 (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET): Core is registered once as an
+      app in the organisation's Microsoft Entra, with the Mail.Send application permission. Each
+      email is then sent through Microsoft Graph from the mailbox of the person signed in to
+      Core (their Core sign-in email must be their Microsoft 365 address), and is kept in their
+      Sent Items. Used when set.
+  An SMTP server (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_SECURITY, MAIL_FROM):
+      every email from the one MAIL_FROM mailbox, replies going to the person who sent it.
+
+Recipients only ever come from the vendor's saved settings, never from the send form, so the
+page can't be used to send mail to anyone else.
 """
 import datetime as dt
 import html
+import json
 import re
 import smtplib
 import ssl
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid, parseaddr
 
@@ -57,20 +72,158 @@ def mail_settings(config):
             "security": security, "sender": sender}
 
 
+def microsoft_settings(config):
+    """Core's app registration in Microsoft Entra: {"tenant", "client_id", "secret"}; None unless
+    all three are set. The tenant and client id go into URLs, so anything but an id (or a
+    domain, for the tenant) is refused."""
+    tenant, client_id = (config.get("MS_TENANT_ID") or "").strip(), (config.get("MS_CLIENT_ID") or "").strip()
+    secret = config.get("MS_CLIENT_SECRET") or ""
+    if not (tenant and client_id and secret):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,120}", tenant) or not re.fullmatch(r"[A-Za-z0-9-]{1,60}", client_id):
+        return None
+    return {"tenant": tenant, "client_id": client_id, "secret": secret}
+
+
+def mail_mode(config):
+    """How email is sent: "outbox" (kept in MAIL_OUTBOX, for tests), "microsoft" (through Microsoft
+    365, from the sender's own mailbox), "smtp" (the mail server, from MAIL_FROM), or None."""
+    if config.get("MAIL_OUTBOX") is not None:
+        return "outbox"
+    if microsoft_settings(config):
+        return "microsoft"
+    return "smtp" if mail_settings(config) else None
+
+
 def can_send(config):
-    return config.get("MAIL_OUTBOX") is not None or mail_settings(config) is not None
+    return mail_mode(config) is not None
 
 
-def send(config, message):
-    """Send an EmailMessage. With MAIL_OUTBOX (a list, for tests and trying things out) it's
-    kept there instead of sent."""
-    outbox = config.get("MAIL_OUTBOX")
-    if outbox is not None:
-        outbox.append(message)
+NOT_SET_UP = ("Email isn't set up: an admin connects Microsoft 365 (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET) "
+              "or a mail server (SMTP_HOST, MAIL_FROM); see the README.")
+
+# ---------------------------------------------------------------- Microsoft 365 (Graph)
+
+GRAPH = "https://graph.microsoft.com/v1.0"
+_tokens, _token_lock = {}, threading.Lock()  # (tenant, client id) -> (token, good until)
+
+
+def _http(method, url, headers=None, data=None):
+    """One HTTPS request: (status, parsed JSON or {}). The default way Core reaches Microsoft."""
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            status, body = resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        status, body = e.code, e.read()
+    try:
+        return status, json.loads(body.decode("utf-8")) if body else {}
+    except ValueError:
+        return status, {}
+
+
+def _transport(config):
+    return config.get("MS_GRAPH_TRANSPORT") or _http
+
+
+def _microsoft_token(config, settings):
+    """An access token for Microsoft Graph as the app itself (client credentials), kept until
+    shortly before it runs out."""
+    key = (settings["tenant"], settings["client_id"])
+    with _token_lock:
+        token, until = _tokens.get(key, (None, 0))
+        if token and until > time.time():
+            return token
+    try:
+        status, body = _transport(config)(
+            "POST", f"https://login.microsoftonline.com/{settings['tenant']}/oauth2/v2.0/token",
+            {"Content-Type": "application/x-www-form-urlencoded"},
+            urllib.parse.urlencode({"client_id": settings["client_id"], "client_secret": settings["secret"],
+                                    "scope": "https://graph.microsoft.com/.default",
+                                    "grant_type": "client_credentials"}).encode())
+    except OSError as e:
+        raise MailError(f"Core couldn't reach Microsoft to sign in ({type(e).__name__}). Nothing was sent; try again.") from None
+    if status != 200 or not body.get("access_token"):
+        # Microsoft's error names what's wrong; its description (which quotes ids) stays out of the page.
+        code, detail = body.get("error") or f"HTTP {status}", body.get("error_description") or ""
+        if "AADSTS7000215" in detail or "AADSTS7000222" in detail or code == "invalid_client":
+            why = "the app's secret (MS_CLIENT_SECRET) is wrong or has expired: make a new one in Microsoft Entra"
+        elif "AADSTS700016" in detail or code == "unauthorized_client":
+            why = "the app (MS_CLIENT_ID) isn't registered in this Microsoft organisation"
+        elif "AADSTS90002" in detail or code == "invalid_request" and "tenant" in detail.lower():
+            why = "the organisation (MS_TENANT_ID) wasn't found"
+        else:
+            why = f"Microsoft said: {code}"
+        raise MailError(f"Microsoft refused Core's sign-in: {why}. Nothing was sent.")
+    with _token_lock:
+        _tokens[key] = (body["access_token"], time.time() + max(int(body.get("expires_in") or 0) - 120, 30))
+    return body["access_token"]
+
+
+def _recipients(header):
+    return [{"emailAddress": {"address": a}} for a in addresses(header or "")]
+
+
+def _send_through_microsoft(config, settings, message, mailbox):
+    """Send from `mailbox` (a person's Microsoft 365 address) with Graph's sendMail; it's kept
+    in their Sent Items."""
+    if not mailbox or not EMAIL_RE.match(mailbox):
+        raise MailError("Core sends from your own Microsoft 365 mailbox, so sign in to Core with your own account "
+                        "(its email must be your Microsoft 365 address).")
+    html_part = message.get_body(preferencelist=("html",))
+    plain_part = message.get_body(preferencelist=("plain",))
+    body = {"contentType": "HTML", "content": html_part.get_content()} if html_part is not None else \
+        {"contentType": "Text", "content": plain_part.get_content() if plain_part is not None else ""}
+    payload = {"message": {"subject": str(message["Subject"] or ""), "body": body,
+                           "toRecipients": _recipients(message["To"]), "ccRecipients": _recipients(message["Cc"])},
+               "saveToSentItems": True}
+    url = f"{GRAPH}/users/{urllib.parse.quote(mailbox, safe='@.')}/sendMail"
+    for attempt in (1, 2):
+        token = _microsoft_token(config, settings)
+        try:
+            status, reply = _transport(config)("POST", url, {"Authorization": f"Bearer {token}",
+                                                             "Content-Type": "application/json"},
+                                               json.dumps(payload).encode())
+        except OSError as e:
+            raise MailError(f"Core couldn't reach Microsoft ({type(e).__name__}). It may not have been sent: check "
+                            "your Sent Items before trying again.") from None
+        if status == 401 and attempt == 1:  # a token Microsoft no longer takes: get a fresh one once
+            with _token_lock:
+                _tokens.pop((settings["tenant"], settings["client_id"]), None)
+            continue
+        break
+    if status in (200, 202):
         return
+    code = ((reply.get("error") or {}).get("code") or f"HTTP {status}")[:80]
+    if status == 403 or code in ("ErrorAccessDenied", "AccessDenied", "Authorization_RequestDenied"):
+        why = (f"Core isn't allowed to send as {mailbox}. In Microsoft Entra, the app needs the Mail.Send application "
+               "permission with admin consent; if sending is limited to a group, they need to be in it")
+    elif status == 404 or code in ("ErrorInvalidUser", "ResourceNotFound", "MailboxNotEnabledForRESTAPI",
+                                   "Request_ResourceNotFound", "ErrorMailboxNotEnabledForRESTAPI"):
+        why = (f"{mailbox} has no Microsoft 365 mailbox. Your Core sign-in email must be your Microsoft 365 address "
+               "(an admin can change it on the Team page)")
+    elif status == 429 or code in ("ApplicationThrottled", "TooManyRequests"):
+        why = "Microsoft is limiting how fast mail is sent right now. Wait a minute and try again"
+    elif code in ("ErrorInvalidRecipients", "ErrorInvalidSmtpAddress"):
+        why = "Microsoft refused one of the vendor's addresses. Check it under Vendor emails"
+    else:
+        why = f"Microsoft said: {code}"
+    raise MailError(f"The email wasn't sent: {why}.")
+
+
+def send(config, message, mailbox=None):
+    """Send an EmailMessage. Through Microsoft 365 it goes from `mailbox` (the sender's own
+    address); through the mail server, from the message's From. With MAIL_OUTBOX (a list, for
+    tests and trying things out) it's kept there instead of sent."""
+    mode = mail_mode(config)
+    if mode == "outbox":
+        config["MAIL_OUTBOX"].append(message)
+        return
+    if mode == "microsoft":
+        return _send_through_microsoft(config, microsoft_settings(config), message, mailbox)
     settings = mail_settings(config)
     if settings is None:
-        raise MailError("Email isn't set up: an admin sets SMTP_HOST and MAIL_FROM (see the README).")
+        raise MailError(NOT_SET_UP)
     try:
         if settings["security"] == "ssl":
             server = smtplib.SMTP_SSL(settings["host"], settings["port"], timeout=20, context=ssl.create_default_context())
@@ -193,6 +346,37 @@ def build_message(po, to, cc, sender, company, note="", reply_to=None, deliver_t
     message["Message-ID"] = make_msgid(domain=domain)
     message.set_content("\n".join(text))
     message.add_alternative(body, subtype="html")
+    return message
+
+
+def sender_for(config, user, company):
+    """(From header, mailbox, reply-to) for an email sent now by `user` (the signed-in person:
+    {"name", "email"}, or None without accounts). Through Microsoft 365 it's from their own
+    mailbox (MAIL_FROM's, when nobody's signed in); through the mail server it's from MAIL_FROM
+    with replies to them."""
+    theirs = (user or {}).get("email") or ""
+    theirs = theirs if EMAIL_RE.match(theirs) else ""
+    shared = (config.get("MAIL_FROM") or "").strip()
+    if mail_mode(config) == "microsoft":
+        if theirs:
+            return named(user.get("name") or "", theirs), theirs, None
+        address = parseaddr(shared)[1]
+        return (shared, address, None) if EMAIL_RE.match(address or "") else (f"{company} <no mailbox>", None, None)
+    return (shared or f"{company} <not-set-up@example.invalid>", None,
+            named(user.get("name") or "", theirs) if theirs else None)
+
+
+def test_message(to, sender, company, how):
+    """A short email to check sending works."""
+    message = EmailMessage()
+    message["Subject"] = f"{company}: Core can send email"
+    message["From"], message["To"] = sender, to
+    text = (f"This is a test from Core.\n\nPurchase orders emailed to vendors from Core are sent {how}.\n"
+            "Nothing needs doing: if you're reading this, it works.\n")
+    message.set_content(text)
+    message.add_alternative("<div style='font-family:Arial,Helvetica,sans-serif;font-size:14px'>"
+                            + "".join(f"<p>{html.escape(p)}</p>" for p in text.strip().split("\n") if p) + "</div>",
+                            subtype="html")
     return message
 
 

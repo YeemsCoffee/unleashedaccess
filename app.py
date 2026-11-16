@@ -58,6 +58,10 @@ def create_app(test_config=None):
         SMTP_USER=env("SMTP_USER", "").strip(), SMTP_PASSWORD=env("SMTP_PASSWORD", ""),
         SMTP_SECURITY=env("SMTP_SECURITY", "starttls").strip().lower(),
         MAIL_FROM=env("MAIL_FROM", "").strip(),
+        # Or through Microsoft 365, each email from the mailbox of the person signed in to Core:
+        # Core's app registration in Microsoft Entra (with the Mail.Send application permission).
+        MS_TENANT_ID=env("MS_TENANT_ID", "").strip(), MS_CLIENT_ID=env("MS_CLIENT_ID", "").strip(),
+        MS_CLIENT_SECRET=env("MS_CLIENT_SECRET", "").strip(),
         # The business's name on emails to vendors.
         COMPANY_NAME=env("COMPANY_NAME", "Yeems Coffee").strip(),
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # maintenance attachments are up to 16 MB
