@@ -19,6 +19,7 @@ the pages say so:
 Recipients only ever come from the vendor's saved settings, never from the send form, so the
 page can't be used to send mail to anyone else.
 """
+import base64
 import datetime as dt
 import html
 import json
@@ -99,6 +100,26 @@ def can_send(config):
     return mail_mode(config) is not None
 
 
+def setup_report(config):
+    """Which email settings Core can see, by name only (never a value), so a misspelled or
+    missing one shows: [{"way", "settings": [{"name", "state": "set" | "missing" | "not valid"}],
+    "ready"}] for Microsoft 365 and the mail server."""
+    def state(name, valid=True):
+        if not (config.get(name) or "").strip():
+            return "missing"
+        return "set" if valid else "not valid"
+
+    tenant, client_id = (config.get("MS_TENANT_ID") or "").strip(), (config.get("MS_CLIENT_ID") or "").strip()
+    microsoft = [{"name": "MS_TENANT_ID", "state": state("MS_TENANT_ID", bool(re.fullmatch(r"[A-Za-z0-9.-]{1,120}", tenant)))},
+                 {"name": "MS_CLIENT_ID", "state": state("MS_CLIENT_ID", bool(re.fullmatch(r"[A-Za-z0-9-]{1,60}", client_id)))},
+                 {"name": "MS_CLIENT_SECRET", "state": state("MS_CLIENT_SECRET")}]
+    sender = parseaddr((config.get("MAIL_FROM") or "").strip())[1]
+    smtp = [{"name": "SMTP_HOST", "state": state("SMTP_HOST")},
+            {"name": "MAIL_FROM", "state": state("MAIL_FROM", bool(EMAIL_RE.match(sender or "")))}]
+    return [{"way": "Microsoft 365", "settings": microsoft, "ready": microsoft_settings(config) is not None},
+            {"way": "A mail server", "settings": smtp, "ready": mail_settings(config) is not None}]
+
+
 NOT_SET_UP = ("Email isn't set up: an admin connects Microsoft 365 (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET) "
               "or a mail server (SMTP_HOST, MAIL_FROM); see the README.")
 
@@ -177,6 +198,12 @@ def _send_through_microsoft(config, settings, message, mailbox):
     payload = {"message": {"subject": str(message["Subject"] or ""), "body": body,
                            "toRecipients": _recipients(message["To"]), "ccRecipients": _recipients(message["Cc"])},
                "saveToSentItems": True}
+    attached = [{"@odata.type": "#microsoft.graph.fileAttachment", "name": part.get_filename() or "attachment",
+                 "contentType": part.get_content_type(),
+                 "contentBytes": base64.b64encode(part.get_payload(decode=True) or b"").decode("ascii")}
+                for part in message.iter_attachments()]
+    if attached:
+        payload["message"]["attachments"] = attached
     url = f"{GRAPH}/users/{urllib.parse.quote(mailbox, safe='@.')}/sendMail"
     for attempt in (1, 2):
         token = _microsoft_token(config, settings)
@@ -269,13 +296,124 @@ def order_charges(po):
             for c in po.get("cost_lines") or [] if c.get("field") == "PurchaseOrderLines"]
 
 
+def order_pdf(po, company, deliver_to=None, supplier_codes=None, note=""):
+    """The purchase order as a PDF (bytes): what the vendor is sent as an attachment. The same
+    facts, lines, charges and totals as the email, a page or more of US Letter."""
+    from simple_pdf import PAGE_HEIGHT, PAGE_WIDTH, Pdf, width, wrap
+    supplier_codes = supplier_codes or {}
+    left, right, bottom = 54.0, PAGE_WIDTH - 54.0, 60.0
+    pdf = Pdf(title=f"Purchase order {po['number']}", author=company)
+    # Columns: product code, description (wrapped), quantity and unit, price, total (right-aligned).
+    col_desc, col_qty, col_price, col_total = left + 112, right - 190, right - 86, right
+    desc_width = col_qty - 62 - col_desc
+
+    def table_head(y):
+        pdf.box(left, y - 6, right - left, 20, gray=0.92)
+        for x, label, align in ((left + 6, "Product", "left"), (col_desc, "Description", "left"),
+                                (col_qty, "Quantity", "right"), (col_price, "Price", "right"),
+                                (col_total - 6, "Total", "right")):
+            pdf.text(x, y, label, size=9, bold=True, align=align)
+        return y - 22
+
+    def page_head():
+        pdf.text(left, PAGE_HEIGHT - 60, company, size=16, bold=True)
+        pdf.text(right, PAGE_HEIGHT - 58, "PURCHASE ORDER", size=13, bold=True, align="right", gray=0.25)
+        pdf.text(right, PAGE_HEIGHT - 76, po["number"], size=12, align="right")
+        pdf.line(left, PAGE_HEIGHT - 86, right, PAGE_HEIGHT - 86, thickness=1)
+        return PAGE_HEIGHT - 108
+
+    def room(y, needed):
+        """Start another page (with the heading and the table's head) when `needed` won't fit."""
+        if y - needed >= bottom:
+            return y
+        pdf.new_page()
+        return table_head(page_head())
+
+    y = page_head()
+    # Who it's to, and the order's facts, side by side.
+    pdf.text(left, y, "TO", size=8, bold=True, gray=0.4)
+    pdf.text(left, y - 14, po.get("supplier_name") or po.get("supplier_code") or "", size=11, bold=True)
+    facts = [("Order date", _day(po.get("order_date"))), ("Deliver by", _day(po.get("required_date"))),
+             ("Your reference", po.get("reference") or "")]
+    fy = y
+    for label, value in [f for f in facts if f[1]]:
+        pdf.text(right - 150, fy, label, size=9, gray=0.4)
+        pdf.text(right, fy, value, size=10, align="right")
+        fy -= 15
+    y -= 34
+    if deliver_to or po.get("warehouse"):
+        pdf.text(left, y, "DELIVER TO", size=8, bold=True, gray=0.4)
+        for line in wrap(deliver_to or po.get("warehouse"), 280, size=10):
+            y -= 14
+            pdf.text(left, y, line, size=10)
+        y -= 8
+    y = min(y, fy) - 10
+    if (note or "").strip():
+        for line in wrap(note.strip(), right - left, size=10):
+            pdf.text(left, y, line, size=10)
+            y -= 14
+        y -= 8
+
+    y = table_head(y)
+    for l in order_lines(po):
+        described = wrap(l["description"], desc_width, size=10)
+        theirs = supplier_codes.get(l["code"])
+        codes = wrap(l["code"], 100, size=10) + ([f"Yours: {c}" for c in wrap(theirs, 70, size=8)] if theirs else [])
+        rows = max(len(described), len(codes))
+        y = room(y, rows * 13 + 8)
+        for i, part in enumerate(codes):
+            ours = i < len(codes) - (1 if theirs else 0) or not theirs
+            pdf.text(left + 6, y - i * 13, part, size=10 if ours else 8, gray=0.0 if ours else 0.4)
+        for i, part in enumerate(described):
+            pdf.text(col_desc, y - i * 13, part, size=10)
+        pdf.text(col_qty, y, f"{l['qty']} {l['unit']}".strip(), size=10, align="right")
+        pdf.text(col_price, y, l["price"], size=10, align="right")
+        pdf.text(col_total - 6, y, l["total"], size=10, align="right")
+        y -= rows * 13 + 4
+        pdf.line(left, y + 6, right, y + 6, thickness=0.3, gray=0.75)
+        y -= 6
+    for c in order_charges(po):
+        y = room(y, 22)
+        pdf.text(col_desc, y, wrap(c["description"], col_price - col_desc, size=10)[0], size=10)
+        pdf.text(col_total - 6, y, c["amount"], size=10, align="right")
+        y -= 17
+        pdf.line(left, y + 6, right, y + 6, thickness=0.3, gray=0.75)
+        y -= 6
+
+    charged = sum(c["amount"] or 0 for c in po.get("cost_lines") or [] if c.get("field") == "PurchaseOrderLines")
+    totals = [("Goods", _money(po.get("goods")), False)]
+    if charged:
+        totals.append(("Charges", _money(charged), False))
+    if po.get("tax"):
+        totals.append(("Tax", _money(po["tax"]), False))
+    totals.append(("Total", _money((po.get("goods") or 0) + charged + (po.get("tax") or 0)), True))
+    y = room(y, len(totals) * 16 + 12) - 4
+    for label, value, strong in totals:
+        pdf.text(col_price, y, label, size=11 if strong else 10, bold=strong, align="right")
+        pdf.text(col_total - 6, y, value, size=11 if strong else 10, bold=strong, align="right")
+        y -= 16
+    if po.get("comments"):
+        lines = wrap(po["comments"], right - left, size=10)
+        y = room(y, len(lines) * 13 + 30) - 10
+        pdf.text(left, y, "COMMENTS", size=8, bold=True, gray=0.4)
+        for line in lines:
+            y -= 13
+            pdf.text(left, y, line, size=10)
+    count = pdf.page_number
+    for page in range(count):
+        pdf.text(left, 36, f"{company} · Purchase order {po['number']}", size=8, gray=0.45, page=page)
+        pdf.text(right, 36, f"Page {page + 1} of {count}", size=8, gray=0.45, align="right", page=page)
+    return pdf.render()
+
+
 def default_subject(po, company):
     return f"Purchase order {po['number']} from {company}"
 
 
 def build_message(po, to, cc, sender, company, note="", reply_to=None, deliver_to=None, supplier_codes=None):
-    """The email of a purchase order: plain text, and the same as HTML. `supplier_codes`:
-    {product code: the vendor's own code for it}, shown beside ours when known."""
+    """The email of a purchase order: plain text, the same as HTML, and the order as a PDF
+    attached (PO-….pdf). `supplier_codes`: {product code: the vendor's own code for it}, shown
+    beside ours when known."""
     supplier_codes = supplier_codes or {}
     lines, charges = order_lines(po), order_charges(po)
     charged = sum(c["amount"] or 0 for c in po.get("cost_lines") or [] if c.get("field") == "PurchaseOrderLines")
@@ -302,7 +440,8 @@ def build_message(po, to, cc, sender, company, note="", reply_to=None, deliver_t
     text += [f"Total: {_money(total)}", ""]
     if po.get("comments"):
         text += [f"Comments: {po['comments']}", ""]
-    text += ["Please reply to this email to confirm the order, or to tell us of anything you can't supply.", "",
+    text += ["The order is attached as a PDF.", "",
+             "Please reply to this email to confirm the order, or to tell us of anything you can't supply.", "",
              company]
 
     e = html.escape
@@ -331,6 +470,7 @@ def build_message(po, to, cc, sender, company, note="", reply_to=None, deliver_t
                   for h, a in (("Product", "left"), ("Description", "left"), ("Quantity", "right"), ("Price", "right"), ("Total", "right")))
         + f"</tr></thead><tbody>{rows}</tbody><tfoot>{totals}</tfoot></table>"
         + (f"<p style='white-space:pre-wrap'><strong>Comments:</strong> {e(po['comments'])}</p>" if po.get("comments") else "")
+        + "<p>The order is attached as a PDF.</p>"
         + "<p>Please reply to this email to confirm the order, or to tell us of anything you can't supply.</p>"
         f"<p>{e(company)}</p></div>")
 
@@ -346,7 +486,14 @@ def build_message(po, to, cc, sender, company, note="", reply_to=None, deliver_t
     message["Message-ID"] = make_msgid(domain=domain)
     message.set_content("\n".join(text))
     message.add_alternative(body, subtype="html")
+    message.add_attachment(order_pdf(po, company, deliver_to=deliver_to, supplier_codes=supplier_codes, note=note),
+                           maintype="application", subtype="pdf", filename=pdf_name(po))
     return message
+
+
+def pdf_name(po):
+    """The attachment's file name: the order's number, kept to plain characters."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", str(po.get("number") or "purchase-order"))[:60] + ".pdf"
 
 
 def sender_for(config, user, company):

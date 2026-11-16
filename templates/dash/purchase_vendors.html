@@ -8,18 +8,26 @@
 <p class="muted">Tick the vendors that take purchase orders by email. A placed order to one of them gets an
   <strong>Email to vendor</strong> button on its page; nothing is sent until someone presses it and checks the message.
   Unleashed has no such setting Core can read, so it's kept here. The address starts as the vendor's email in Unleashed.</p>
-{% if not can_send %}<p class="recon recon-warn">! Email isn't set up yet, so nothing can be sent: an admin connects Microsoft 365
-  (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET) or a mail server (SMTP_HOST, MAIL_FROM); see the README. The vendors can be
-  chosen meanwhile.</p>
+{% macro setup_lines() %}
+  <ul class="mail-setup">{% for way in setup %}<li><strong>{{ way.way }}:</strong>
+    {% for x in way.settings %}<span class="mono">{{ x.name }}</span> <span class="{{ 'setup-ok' if x.state == 'set' else 'setup-missing' }}">{{ '✓ set' if x.state == 'set' else x.state }}</span>{{ ', ' if not loop.last }}{% endfor %}
+    {{ '→ ready' if way.ready else '' }}</li>{% endfor %}</ul>
+{% endmacro %}
+{% if not can_send %}<div class="recon recon-warn"><p>! Email isn't set up yet, so nothing can be sent. This is what Core can see of its
+  settings (the names must be spelled exactly like this, in the environment properties; Core restarts when they're applied):</p>
+  {{ setup_lines() }}
+  <p>Core needs every setting of one of the two. The vendors can be chosen meanwhile.</p></div>
 {% else %}
-<form method="post" action="{{ url_for('dash.purchase_vendors_test') }}" class="mail-status">
-  <span class="muted small">{% if mode == 'microsoft' %}{% if mailbox %}Orders are sent through Microsoft 365 from the mailbox of whoever sends them:
+<p class="muted small">{% if mode == 'microsoft' %}{% if mailbox %}Orders are sent through Microsoft 365 from the mailbox of whoever sends them:
     yours go from <strong>{{ mailbox }}</strong>, and are kept in your Sent Items.{% else %}Orders are sent through Microsoft 365 from the
     sender's own mailbox: sign in to Core with your own account to send.{% endif %}
     {% elif mode == 'smtp' %}Orders are sent from {{ sender }}; replies go to whoever sent the order.
-    {% else %}Emails are being kept, not sent (a test setup).{% endif %}</span>
-  <button class="btn btn-quiet">Send a test email to myself</button>
-</form>{% endif %}
+    {% else %}Emails are being kept, not sent (a test setup).{% endif %} Each has the order attached as a PDF.</p>
+{% endif %}
+<form method="post" action="{{ url_for('dash.purchase_vendors_test') }}" class="mail-status">
+  <button class="btn">Send a test email to myself</button>
+  <span class="muted small">{{ 'Checks that sending works before a vendor is sent anything.' if can_send else "Once it's set up, this checks that sending works." }}</span>
+</form>
 {% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
 <form method="post" class="card">
   <div class="table-wrap"><table class="vendor-emails">

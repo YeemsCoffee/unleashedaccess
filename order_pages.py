@@ -19,7 +19,7 @@ from unleashed.order_writes import (OPEN_PURCHASES, OPEN_SALES, RECEIVED_PURCHAS
                                     update_sales_order)
 from unleashed.sync import RECHECK_FROM
 from vendor_email import (NOT_SET_UP, SENDABLE, MailError, addresses, build_message, can_send, mail_mode,
-                          sender_for, send, test_message)
+                          order_pdf, pdf_name, sender_for, send, setup_report, test_message)
 
 
 # ---------------------------------------------------------------- shared
@@ -955,7 +955,29 @@ def _mail_facts():
     carry), "mailbox" (the Microsoft 365 mailbox it's sent from, or None)}."""
     config = current_app.config
     sender, mailbox, _ = sender_for(config, current_user(), config.get("COMPANY_NAME") or "Yeems Coffee")
-    return {"can_send": can_send(config), "mode": mail_mode(config), "sender": sender, "mailbox": mailbox}
+    return {"can_send": can_send(config), "mode": mail_mode(config), "sender": sender, "mailbox": mailbox,
+            "setup": setup_report(config)}
+
+
+def _supplier_codes(supplier_code):
+    """{product code: the vendor's own code for it}, for the products bought from them."""
+    return {p.get("ProductCode"): (p.get("Supplier") or {}).get("SupplierProductCode")
+            for p in reports().products()
+            if (p.get("Supplier") or {}).get("SupplierCode") == supplier_code
+            and (p.get("Supplier") or {}).get("SupplierProductCode")}
+
+
+@bp.get("/purchases/<number>/pdf")
+def purchase_order_pdf(number):
+    """The purchase order as a PDF: what's attached when it's emailed to the vendor."""
+    po = _open_purchase_order(number)
+    company = current_app.config.get("COMPANY_NAME") or "Yeems Coffee"
+    data = order_pdf(po, company, deliver_to=_deliver_to(po.get("warehouse")),
+                     supplier_codes=_supplier_codes(po["supplier_code"]), note=(request.args.get("note") or "")[:2000])
+    how = "attachment" if request.args.get("download") else "inline"
+    return current_app.response_class(data, mimetype="application/pdf", headers={
+        "Content-Disposition": f'{how}; filename="{pdf_name(po)}"', "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff"})
 
 
 @bp.post("/purchases/vendors/test")
@@ -1001,10 +1023,7 @@ def purchase_order_email(number):
     # server, MAIL_FROM with replies to them (shown even before email is set up, so the page reads true).
     sender, mailbox, reply_to = sender_for(config, current_user(), company)
     note = (request.form.get("note") or "").strip()[:2000]
-    codes = {p.get("ProductCode"): (p.get("Supplier") or {}).get("SupplierProductCode")
-             for p in reports().products()
-             if (p.get("Supplier") or {}).get("SupplierCode") == po["supplier_code"]
-             and (p.get("Supplier") or {}).get("SupplierProductCode")}
+    codes = _supplier_codes(po["supplier_code"])
     message = build_message(po, to, cc, sender, company, note=note, reply_to=reply_to,
                             deliver_to=_deliver_to(po.get("warehouse")), supplier_codes=codes)
     if request.method == "POST":
@@ -1023,4 +1042,4 @@ def purchase_order_email(number):
                            sender=message["From"], reply_to=message["Reply-To"],
                            text=message.get_body(preferencelist=("plain",)).get_content(),
                            sent=emails.sent(number), can_send=can_send(config), note=note,
-                           mode=mail_mode(config), mailbox=mailbox)
+                           mode=mail_mode(config), mailbox=mailbox, attachment=pdf_name(po))

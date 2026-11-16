@@ -26,6 +26,8 @@
   <pre class="email-preview">{{ text }}</pre>
   <p class="muted small">It's sent like this and as a table, in the unit and at the price each line was ordered at.
     {% if note %}{% else %}A note typed above is added when it's sent.{% endif %}</p>
+  <p>📎 Attached: <a href="{{ url_for('dash.purchase_order_pdf', number=po.number) }}" target="_blank" rel="noopener">{{ attachment }}</a>
+    <span class="muted small">(the order as a PDF; open it to see what the vendor gets)</span></p>
   <div class="run-actions">
     <button class="btn btn-primary" {{ 'disabled' if not can_send or (mode == 'microsoft' and not mailbox) }}>Send to {{ po.supplier_name }}</button>
     <a class="btn" href="{{ url_for('dash.purchase_detail', number=po.number) }}">Cancel</a>

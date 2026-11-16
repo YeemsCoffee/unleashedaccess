@@ -929,6 +929,21 @@ class OrderPageTests(unittest.TestCase):
                          "- 5 Each x Whole Milk 1 gal (MILK-WHL-GAL) at $4.20 = $21.00", "Total: $95.40", "Deliver to: Gardena Store"):
             self.assertIn(expected, text)
         self.assertIn("<table", message.get_body(preferencelist=("html",)).get_content())
+        # The order goes as a PDF attachment too, named for the order.
+        attached = list(message.iter_attachments())
+        self.assertEqual([(a.get_content_type(), a.get_filename()) for a in attached], [("application/pdf", f"{number}.pdf")])
+        pdf = attached[0].get_payload(decode=True)
+        self.assertTrue(pdf.startswith(b"%PDF-1.4") and pdf.rstrip().endswith(b"%%EOF"))
+        for expected in (b"PURCHASE ORDER", number.encode(), b"Oat Milk Barista 32 oz", b"2 Case", b"$74.40", b"$95.40",
+                         b"Back door, before 10.", b"Page 1 of 1"):
+            self.assertIn(expected, pdf)
+        self.assertIn("The order is attached as a PDF.", text)
+        self.assertIn(f"{number}.pdf", preview)
+        shown = self.c.get(f"/purchases/{number}/pdf")
+        self.assertEqual((shown.status_code, shown.mimetype), (200, "application/pdf"))
+        self.assertIn(f'inline; filename="{number}.pdf"', shown.headers["Content-Disposition"])
+        self.assertIn("attachment;", self.c.get(f"/purchases/{number}/pdf?download=1").headers["Content-Disposition"])
+        self.assertIn("Open as a PDF", self.c.get(f"/purchases/{number}").get_data(as_text=True))
         log = self.app.extensions["vendor_emails"].sent(number)
         self.assertEqual([(e["sent_to"], e["sent_by"]) for e in log], [("orders@mockdairy.example", "Team")])
         # A parked order (a draft) isn't sent; nor is anything without a mail server.
@@ -940,6 +955,47 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("Email isn&#39;t set up yet, so nothing was sent", res)
         self.assertEqual(len(self.app.extensions["vendor_emails"].sent(number)), 1)
         self.assertEqual(len(outbox), 1)
+        # Not set up: the page names each setting Core can and can't see (never a value), so a
+        # misspelled one shows, and the test button says what's missing.
+        self.app.config.update(MS_TENANT_ID="11111111-2222-3333-4444-555555555555", MS_CLIENT_SECRET="s3cret-value")
+        page = self.c.get("/purchases/vendors").get_data(as_text=True)
+        for expected in ("Email isn't set up yet", "MS_TENANT_ID</span> <span class=\"setup-ok\">✓ set",
+                         "MS_CLIENT_ID</span> <span class=\"setup-missing\">missing", "Send a test email to myself"):
+            self.assertIn(expected, page)
+        self.assertNotIn("s3cret-value", page)
+        self.assertIn("Email isn&#39;t set up", self.c.post("/purchases/vendors/test", follow_redirects=True).get_data(as_text=True))
+
+    def test_the_pdf_writer_measures_wraps_and_paginates(self):
+        from simple_pdf import Pdf, clean, width, wrap
+        self.assertAlmostEqual(width("Total", 10), (611 + 556 + 278 + 556 + 222) / 100)
+        self.assertGreater(width("Total", 10, bold=True), width("Total", 10))
+        self.assertEqual(clean("Café \u2014 d\u00e9j\u00e0\n 抹茶"), "Café \u2014 d\u00e9j\u00e0 ??")  # outside Windows-1252: "?"
+        lines = wrap("Oat Milk Barista 32 oz carton, shelf stable, case of twelve", 150, size=10)
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(all(width(l, 10) <= 150 for l in lines))
+        self.assertTrue(all(width(l, 10) <= 60 for l in wrap("A" * 80, 60, size=10)))  # a word too long is cut
+        pdf = Pdf(title="A (test) \\ title")
+        pdf.text(72, 700, "Hello (world)")
+        pdf.new_page()
+        pdf.text(72, 700, "Page two")
+        data = pdf.render()
+        self.assertIn(b"/Count 2", data)
+        self.assertIn(b"(Hello \\(world\\))", data)
+        # The cross-reference table points at each object.
+        start = int(data.rsplit(b"startxref\n", 1)[1].split(b"\n")[0])
+        self.assertTrue(data[start:].startswith(b"xref\n"))
+        offsets = [int(l[:10]) for l in data[start:].split(b"\n")[3:] if len(l) >= 18 and l[10:11] == b" " and l.rstrip().endswith(b"n")]
+        self.assertTrue(offsets and all(re.match(rb"\d+ 0 obj\n", data[o:o + 12]) for o in offsets))
+        # A long order runs onto more pages, each with the table's head and a page number.
+        from vendor_email import order_pdf
+        po = {"number": "PO-1", "supplier_name": "Vendor", "order_date": TODAY, "goods": 60.0, "tax": 0, "cost_lines": [],
+              "lines": [{"product_code": f"P{i}", "description": "Thing", "order_qty": 1, "order_unit": "Each",
+                         "order_price": 1.0, "line_total": 1.0} for i in range(60)]}
+        long = order_pdf(po, "Yeems Coffee")
+        pages = int(re.search(rb"/Count (\d+)", long).group(1))
+        self.assertGreater(pages, 1)
+        self.assertIn(f"Page {pages} of {pages}".encode(), long)
+        self.assertEqual(long.count(b"(Description)"), pages)
 
     def test_products_are_typed_and_the_next_number_is_shown(self):
         last_so = max(int(n[3:]) for n in self.app.extensions["unleashed"]["store"].document_numbers("SalesOrders")
@@ -3646,6 +3702,11 @@ class TeamAccountTests(unittest.TestCase):
         self.assertEqual([r["emailAddress"]["address"] for r in body["message"]["ccRecipients"]], ["buyer@yeems.test"])
         self.assertEqual(body["message"]["subject"], f"Purchase order {number} from Yeems Coffee")
         self.assertEqual(body["message"]["body"]["contentType"], "HTML")
+        import base64 as _b64
+        (attachment,) = body["message"]["attachments"]
+        self.assertEqual((attachment["@odata.type"], attachment["name"], attachment["contentType"]),
+                         ("#microsoft.graph.fileAttachment", f"{number}.pdf", "application/pdf"))
+        self.assertTrue(_b64.b64decode(attachment["contentBytes"]).startswith(b"%PDF-1.4"))
         self.assertIn("Before 10 please.", body["message"]["body"]["content"])
         emails = app.extensions["vendor_emails"]
         self.assertEqual([(e["sent_to"], e["sent_by"]) for e in emails.sent(number)], [("orders@mockdairy.example", "Owner")])

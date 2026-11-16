@@ -181,8 +181,15 @@ keeps the choice and sends the email itself.
   it as it is now (after a change, say). A parked order (a draft) isn't sent.
 - The email goes only to the addresses saved for the vendor, never to one typed on the send
   page.
+- **The order is attached as a PDF** (`PO-….pdf`), as well as being in the email itself. The
+  order's page has **Open as a PDF** and **Download** for the same file, and the send page links
+  to it, so you can see what the vendor gets. The PDF is Core's own layout: Unleashed's API
+  doesn't give its purchase order template. It's made by Core itself (`simple_pdf.py`), with
+  nothing extra to install.
 - **Send a test email to myself** on the Vendor emails page checks that sending works before
-  a vendor is sent anything.
+  a vendor is sent anything. While email isn't set up, that page lists each setting by name and
+  whether Core can see it (never its value), so a misspelled name in the environment
+  properties shows as missing.
 - Until email is set up (one of the two ways below), the pages show what would be sent and say
   that email isn't set up.
 
@@ -859,7 +866,8 @@ unleashedaccess/
 ├── order_pages.py      # Making, changing, completing and receiving sales and purchase orders
 ├── stock_pages.py      # the Transactions tab: recent, history, adjustments, transfers, stock counts
 ├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
-├── vendor_email.py     # vendors that take purchase orders by email, building and sending the email
+├── vendor_email.py     # vendors that take purchase orders by email; the email and its PDF; sending (Microsoft 365 or SMTP)
+├── simple_pdf.py       # a small PDF writer (text, lines, boxes) with nothing to install
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
 ├── maintenance_store.py # maintenance locations, tasks, usage schedules, work recorded; new columns
 ├── maintenance_assets.py # equipment, its moves, counters and readings, files
