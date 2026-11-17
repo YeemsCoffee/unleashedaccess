@@ -123,6 +123,40 @@ function fromTemplate(id, values) {
   return holder.content.firstElementChild;
 }
 
+// A task's hazards: rows are added without saving, like its steps.
+(function () {
+  "use strict";
+  var count = document.querySelector("[data-hazard-count]");
+  if (!count) return;
+  var list = document.querySelector("[data-hazards]"), add = document.querySelector("[data-add-hazard]");
+  var max = +count.dataset.max;
+  add.hidden = false;
+  add.disabled = +count.value >= max;
+  add.addEventListener("click", function () {
+    var i = +count.value;
+    if (i >= max) return;
+    var row = fromTemplate("hazard-template", { __I__: i });
+    list.appendChild(row);
+    count.value = i + 1;
+    add.disabled = i + 1 >= max;
+    row.querySelector("input").focus();
+  });
+})();
+
+// A task is due by time or by usage: only the chosen one's fields show.
+(function () {
+  "use strict";
+  var choices = document.querySelectorAll("[data-schedule-by]");
+  if (!choices.length) return;
+  function show() {
+    var by = "time";
+    choices.forEach(function (c) { if (c.checked) by = c.value; });
+    document.querySelectorAll("[data-schedule]").forEach(function (el) { el.hidden = el.dataset.schedule !== by; });
+  }
+  choices.forEach(function (c) { c.addEventListener("change", show); });
+  show();
+})();
+
 (function () {
   "use strict";
   var count = document.querySelector("[data-op-count]");

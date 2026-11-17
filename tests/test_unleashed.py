@@ -2417,15 +2417,44 @@ class MaintenancePlantTests(unittest.TestCase):
                            follow_redirects=True).get_data(as_text=True)
         self.assertIn("next due at 20,300 shots", done)
         self.assertEqual(self.store.task(task, TODAY)["usage"]["due_at"], 20300)
-        # Every 90 days or 20,000 shots, whichever first: done now, both clocks start again.
+        # A task is due by time or by usage, one or the other.
+        refused = self.c.post("/maintenance/tasks/new", data={
+            "name": "Service", "equipment_id": str(machine), "counter_id": str(counter), "usage_interval": "20000",
+            "frequency_days": "90", "next_due": "2026-07-01"})
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("by time or by usage, not both", refused.get_data(as_text=True))
+        self.assertIn("Choose the counter", self.c.post("/maintenance/tasks/new", data={
+            "name": "Service", "equipment_id": str(machine), "schedule_by": "usage", "usage_interval": "5"}).get_data(as_text=True))
+        # The one chosen is read; the other's boxes are left unread.
+        timed = self._new_id(self._post("/maintenance/tasks/new", name="Wipe down", equipment_id=str(machine),
+                                        schedule_by="time", frequency_days="7", next_due=TODAY.isoformat(),
+                                        counter_id=str(counter), usage_interval="20000"))
+        t = self.store.task(timed, TODAY)
+        self.assertEqual((t["frequency_days"], t["counter_id"], t["usage"]), (7, None, None))
+        counted = self._new_id(self._post("/maintenance/tasks/new", name="Regrind", equipment_id=str(machine),
+                                          schedule_by="usage", frequency_days="7", next_due="2026-07-01",
+                                          counter_id=str(counter), usage_interval="20000"))
+        t = self.store.task(counted, TODAY)
+        self.assertEqual((t["frequency_days"], t["counter_id"], t["time_due"]), (0, counter, None))
+        form = self.c.get(f"/maintenance/tasks/{counted}/edit").get_data(as_text=True)
+        self.assertIn('name="schedule_by" value="usage" checked', form)
+        self.assertIn('name="usage_interval" value="20000"', form)  # a plain number the box can show
+        # A task from before that (every 90 days or 20,000 shots, whichever first) keeps both until
+        # it's saved as one: done now, both clocks start again.
         both = self._new_id(self._post("/maintenance/tasks/new", name="Service", equipment_id=str(machine),
-                                       counter_id=str(counter), usage_interval="20000", frequency_days="90",
-                                       next_due="2026-07-01"))
+                                       schedule_by="usage", counter_id=str(counter), usage_interval="20000"))
+        db.execute("UPDATE maint_tasks SET frequency_days = 90, next_due = '2026-07-01' WHERE id = ?", (both,))
         self.assertEqual(self.store.task(both, TODAY)["status"], "overdue")  # by date
         self._post(f"/maintenance/tasks/{both}/complete", status="completed")
         t = self.store.task(both, TODAY)
         self.assertEqual((t["time_due"], t["usage"]["due_at"]), (TODAY + dt.timedelta(days=90), 35300))
         self.assertFalse(t["movable"] and t["usage"]["projected"] and t["usage"]["projected"] < t["time_due"])
+        form = self.c.get(f"/maintenance/tasks/{both}/edit").get_data(as_text=True)
+        self.assertIn("was due by time and by usage", form)
+        self._post(f"/maintenance/tasks/{both}/edit", name="Service", equipment_id=str(machine), schedule_by="time",
+                   frequency_days="90", next_due="2026-10-01", counter_id=str(counter), usage_interval="20000")
+        t = self.store.task(both, TODAY)
+        self.assertEqual((t["frequency_days"], t["counter_id"], t["usage"]), (90, None, None))
 
     def test_steps_are_written_on_the_task_and_ticked_off(self):
         task = self._new_id(self._post("/maintenance/tasks/new", name="Burr clean", frequency_days="7",
@@ -2505,10 +2534,10 @@ class MaintenancePlantTests(unittest.TestCase):
                                       next_due=TODAY.isoformat(), location_id=str(kit)))
         t = self.store.task(old, TODAY)
         self.assertEqual([p["letter"] for p in t["simptww"]], list("SIMPTWW"))
-        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["where"])
+        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["where", "when"])  # every task has its schedule
         listing = self.c.get("/maintenance/tasks?status=simptww").get_data(as_text=True)
         self.assertIn("Mop kitchen", listing)
-        self.assertIn("SIMPTWW: 1 of 7 filled in (missing Safety, Information, Material, People, Tools, When &amp; who)",
+        self.assertIn("SIMPTWW: 2 of 7 filled in (missing Safety, Information, Material, People, Tools)",
                       listing)
 
         form = self.c.get("/maintenance/tasks/new").get_data(as_text=True)
@@ -2518,7 +2547,9 @@ class MaintenancePlantTests(unittest.TestCase):
 
         res = self.c.post("/maintenance/tasks/new", content_type="multipart/form-data", data={
             "name": "Descale espresso machine", "frequency_days": "90", "next_due": TODAY.isoformat(),
-            "location_id": str(esp), "safety": "Lock out at the wall switch. Let it cool 30 min.",
+            "location_id": str(esp), "hazard_rows": "3", "hazard-0": "Live electrics",
+            "mitigation-0": "Lock out at the wall switch", "hazard-1": "Hot boiler", "mitigation-1": "",
+            "hazard-2": "", "mitigation-2": "",
             "rows": "1", "op-text-0": "Run descaler through each group", "materials": "Descaler 500 ml",
             "people_needed": "2", "skills": "Barista lead", "tools": "Blind basket, bucket",
             "where_notes": "Pull the machine forward", "when_notes": "After close",
@@ -2531,36 +2562,66 @@ class MaintenancePlantTests(unittest.TestCase):
         task = self.store.task(new["id"], TODAY)
         self.assertEqual(task["simptww_filled"], 7)
         self.assertEqual((task["people_needed"], task["tools"]), (2, "Blind basket, bucket"))
+        self.assertEqual(task["hazards"], [{"hazard": "Live electrics", "mitigation": "Lock out at the wall switch"},
+                                           {"hazard": "Hot boiler", "mitigation": ""}])  # empty rows left out
+        self.assertIsNone(task["skills"])  # people is just how many
         self.assertEqual([f["filename"] for f in task["pictures"]["safety"]], ["lockout.png"])
         self.assertEqual([f["filename"] for f in task["pictures"]["tools"]], ["tools.png"])
         self.assertEqual(task["attachments"], [])  # section pictures aren't listed under Files
-        for text in ("SIMPTWW", "7 of 7 filled in", "⚠ Safety first", "Lock out at the wall switch",
-                     "2 people · Barista lead", "Pull the machine forward", "After close",
+        for text in ("SIMPTWW", "7 of 7 filled in", "⚠ Safety first", "<td>Live electrics</td><td>Lock out at the wall switch</td>",
+                     "<td>Hot boiler</td><td>—</td>", "<div>2 people</div>", "Pull the machine forward", "After close",
                      f'src="/maintenance/attachments/{task["pictures"]["safety"][0]["id"]}?view=1"'):
             self.assertIn(text, page)
+        self.assertNotIn("Barista lead", page)
+        self.assertNotIn("not assigned", page)  # When is the schedule, not who
         self.assertNotIn("Descale espresso machine", self.c.get("/maintenance/tasks?status=simptww").get_data(as_text=True))
+        # What's done about a hazard needs the hazard named.
+        nameless = self.c.post("/maintenance/tasks/new", data={
+            "name": "X", "frequency_days": "7", "next_due": TODAY.isoformat(), "hazard_rows": "1", "hazard-0": "",
+            "mitigation-0": "Wear gloves"})
+        self.assertEqual(nameless.status_code, 400)
+        self.assertIn("Say what the hazard is for “Wear gloves”", nameless.get_data(as_text=True))
+        self.assertIn('name="mitigation-0" value="Wear gloves"', nameless.get_data(as_text=True))  # kept as typed
 
         # Editing an existing task: its sheet is filled in, a picture removed and another added.
         edit = self.c.get(f"/maintenance/tasks/{new['id']}/edit").get_data(as_text=True)
         self.assertIn("Blind basket, bucket", edit)
         self.assertIn('name="remove_picture"', edit)
+        for text in ('name="hazard-0" value="Live electrics"', 'name="mitigation-0" value="Lock out at the wall switch"',
+                     "+ Add a hazard", 'name="schedule_by" value="time" checked'):
+            self.assertIn(text, edit)
+        for gone in ('name="skills"', 'name="safety"', "Who does it", "When &amp; who"):
+            self.assertNotIn(gone, edit)
         lockout = task["pictures"]["safety"][0]["id"]
         res = self.c.post(f"/maintenance/tasks/{old}/edit", content_type="multipart/form-data", data={
             "name": "Mop kitchen", "frequency_days": "1", "next_due": TODAY.isoformat(), "location_id": str(kit),
-            "safety": "Wet floor sign out", "remove_picture": str(lockout),  # another task's: left alone
+            "hazard_rows": "1", "hazard-0": "Wet floor", "mitigation-0": "Sign out",
+            "remove_picture": str(lockout),  # another task's: left alone
             "pictures-where": [(io.BytesIO(png), "kitchen.png")]})
         self.assertEqual(res.status_code, 302)
         t = self.store.task(old, TODAY)
-        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["safety", "where"])
+        self.assertEqual([p["key"] for p in t["simptww"] if p["filled"]], ["safety", "where", "when"])
         self.assertEqual([f["filename"] for f in t["pictures"]["where"]], ["kitchen.png"])
         self.assertEqual(len(self.store.task(new["id"], TODAY)["pictures"]["safety"]), 1)
         self.c.post(f"/maintenance/tasks/{new['id']}/edit", data={
             "name": "Descale espresso machine", "frequency_days": "90", "next_due": TODAY.isoformat(),
             "location_id": str(esp), "remove_picture": str(lockout)})
         t = self.store.task(new["id"], TODAY)
-        self.assertEqual((t["pictures"]["safety"], t["safety"]), ([], None))  # cleared fields stay cleared
+        self.assertEqual((t["pictures"]["safety"], t["hazards"]), ([], []))  # cleared fields stay cleared
+        # Safety notes written before the list are kept and shown until they're removed.
+        self.store.db.execute("UPDATE maint_tasks SET safety = 'Unplug before opening' WHERE id = ?", (new["id"],))
+        edit = self.c.get(f"/maintenance/tasks/{new['id']}/edit").get_data(as_text=True)
+        self.assertIn("Safety notes written before this list", edit)
+        self.assertIn("Unplug before opening", self.c.get(f"/maintenance/tasks/{new['id']}").get_data(as_text=True))
+        keep = {"name": "Descale espresso machine", "frequency_days": "90", "next_due": TODAY.isoformat(), "location_id": str(esp)}
+        self.c.post(f"/maintenance/tasks/{new['id']}/edit", data=keep)
+        self.assertEqual(self.store.task(new["id"], TODAY)["safety"], "Unplug before opening")
+        self.c.post(f"/maintenance/tasks/{new['id']}/edit", data=dict(keep, remove_safety_notes="1"))
+        self.assertIsNone(self.store.task(new["id"], TODAY)["safety"])
         csv = self.c.get("/maintenance/tasks?format=csv").get_data(as_text=True)
         self.assertIn("SIMPTWW filled in", csv.splitlines()[0])
+        self.assertNotIn("Skills", csv.splitlines()[0])
+        self.assertIn("Wet floor: Sign out", csv)
 
     def _equipment(self, name, location, counter=None):
         item = self._new_id(self._post("/maintenance/equipment/new", name=name, location_id=str(location)))
@@ -2670,7 +2731,8 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertIn("Tick several to make the same task on each", form)
         png = b"\x89PNG\r\n\x1a\n" + b"\0" * 40
         data = {"name": "Clean burrs", "frequency_days": "7", "next_due": TODAY.isoformat(), "equipment_id": [str(a), str(b)],
-                "safety": "Unplug it", "rows": "1", "op-text-0": "Remove the hopper", "pictures-safety": [(io.BytesIO(png), "plug.png")]}
+                "hazard_rows": "1", "hazard-0": "Moving burrs", "mitigation-0": "Unplug it",
+                "rows": "1", "op-text-0": "Remove the hopper", "pictures-safety": [(io.BytesIO(png), "plug.png")]}
         res = self.c.post("/maintenance/tasks/new", data=data, content_type="multipart/form-data", follow_redirects=True)
         page = res.get_data(as_text=True)
         self.assertIn("Added Clean burrs on 2 equipment", page)
@@ -2679,8 +2741,8 @@ class MaintenancePlantTests(unittest.TestCase):
         self.assertEqual({t["location"] for t in made}, {"Gardena › Kitchen › Espresso station", "Gardena › Kitchen"})  # where each is
         for t in made:
             full = self.store.task(t["id"], TODAY)
-            self.assertEqual((full["safety"], [s["text"] for s in full["steps"]], [f["filename"] for f in full["pictures"]["safety"]]),
-                             ("Unplug it", ["Remove the hopper"], ["plug.png"]))  # each has the plan and the picture
+            self.assertEqual((full["hazards"], [s["text"] for s in full["steps"]], [f["filename"] for f in full["pictures"]["safety"]]),
+                             ([{"hazard": "Moving burrs", "mitigation": "Unplug it"}], ["Remove the hopper"], ["plug.png"]))  # each has the plan and the picture
         # Their own history: recording one doesn't move the other.
         first, second = made[0]["id"], made[1]["id"]
         self._post(f"/maintenance/tasks/{first}/complete", status="completed")
@@ -2709,8 +2771,12 @@ class MaintenancePlantTests(unittest.TestCase):
         a, b, c3 = (self._equipment(n, kit, counter="Shots") for n in ("Grinder 1", "Grinder 2", "Grinder 3"))
         counter = self.store.db.query("SELECT id FROM maint_counters WHERE equipment_id = ?", (a,))[0]["id"]
         src = self._new_id(self._post("/maintenance/tasks/new", name="Replace burrs", usage_interval="5000", counter_id=str(counter),
-                                      frequency_days="90", next_due="2026-08-01", equipment_id=str(a), part_name="Burr set",
-                                      vendor="Mazzer", assigned_to="", safety="Unplug first", rows="1", **{"op-text-0": "Open the case"}))
+                                      equipment_id=str(a), part_name="Burr set", vendor="Mazzer", assigned_to="",
+                                      hazard_rows="1", rows="1", **{"hazard-0": "Sharp burrs", "mitigation-0": "Cut gloves",
+                                                                   "op-text-0": "Open the case"}))
+        # As a task from before would be: due by time as well, with safety notes.
+        self.store.db.execute("UPDATE maint_tasks SET frequency_days = 90, next_due = '2026-08-01', safety = 'Unplug first'"
+                              " WHERE id = ?", (src,))
         self.store.add_attachment(src, "manual.pdf", b"%PDF-1.4 manual", "x")
         page = self.c.get(f"/maintenance/tasks/{src}/copy").get_data(as_text=True)
         self.assertIn("Grinder 2", page)
@@ -2727,6 +2793,7 @@ class MaintenancePlantTests(unittest.TestCase):
             self.assertEqual((full["part_name"], full["vendor"], full["safety"], full["frequency_days"], full["usage_interval"],
                               [s["text"] for s in full["steps"]], full["stored_due"]),
                              ("Burr set", "Mazzer", "Unplug first", 90, 5000.0, ["Open the case"], "2026-09-01"))
+            self.assertEqual(full["hazards"], [{"hazard": "Sharp burrs", "mitigation": "Cut gloves"}])
             self.assertEqual(self.store.counters_of(full["equipment_id"]) if hasattr(self.store, "counters_of") else full["counter_id"],
                              full["counter_id"])
             self.assertEqual(full["usage"]["counter"], "Shots")

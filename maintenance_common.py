@@ -4,6 +4,7 @@ import re
 DUE_SOON_DAYS = 7
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_OPERATIONS = 100  # steps on a task
+MAX_HAZARDS = 50  # hazards on a task, each with what's done about it
 # What can be attached, and the type each is served as.
 FILE_TYPES = {
     "pdf": "application/pdf", "txt": "text/plain", "png": "image/png", "jpg": "image/jpeg",
@@ -24,13 +25,13 @@ TASK_STATES = {"active": "Active", "inactive": "Inactive", "obsolete": "Obsolete
 # A task's job plan, SIMPTWW: what to know before starting. (key, letter, heading, what it
 # covers); pictures attached to a task can be filed under one of the keys.
 SIMPTWW = (
-    ("safety", "S", "Safety", "Hazards, PPE, lockout/tagout and isolation points"),
+    ("safety", "S", "Safety", "Each hazard and what's done about it: PPE, lockout/tagout, isolation"),
     ("info", "I", "Information", "Steps, instructions and the documents to follow"),
     ("material", "M", "Material", "The part to order, consumables, chemicals"),
-    ("people", "P", "People", "How many people and what skills or trade"),
+    ("people", "P", "People", "How many people it takes"),
     ("tools", "T", "Tools", "Tools and equipment to bring"),
     ("where", "W", "Where", "The location or equipment, and how to get to it"),
-    ("when", "W", "When & who", "The schedule, the best time to do it, and who does it"),
+    ("when", "W", "When", "How often it's due, by time or by usage, and the best time to do it"),
 )
 SIMPTWW_KEYS = tuple(s[0] for s in SIMPTWW)
 
@@ -139,3 +140,29 @@ def form_steps(form):
             steps.append({"text": step, "minutes": whole(form.get(f"op-minutes-{i}"), f"Minutes for “{step}”",
                                                           minimum=0)})
     return steps
+
+
+def form_hazards(form):
+    """A task's hazards from the form's hazard-N / mitigation-N rows ("hazard_rows" of them):
+    [{"hazard", "mitigation"}], empty rows left out. A mitigation needs its hazard named."""
+    hazards = []
+    for i in range(min(whole(form.get("hazard_rows"), "Rows") or 0, MAX_HAZARDS)):
+        hazard, mitigation = text(form, f"hazard-{i}", 300), text(form, f"mitigation-{i}", 500)
+        if mitigation and not hazard:
+            raise MaintenanceError(f"Say what the hazard is for “{mitigation[:60]}”.")
+        if hazard:
+            hazards.append({"hazard": hazard, "mitigation": mitigation or ""})
+    return hazards
+
+
+def schedule_choice(form):
+    """How a task's form says it's scheduled: "time" (every so many days) or "usage" (every so
+    much on a counter). It's one or the other. A form that doesn't say (schedule_by) is read
+    from what's filled in, and refused when both are."""
+    chosen = (form.get("schedule_by") or "").strip()
+    if chosen in ("time", "usage"):
+        return chosen
+    by_time, by_usage = bool(str(form.get("frequency_days") or "").strip()), bool(str(form.get("counter_id") or "").strip())
+    if by_time and by_usage:
+        raise MaintenanceError("A task is due by time or by usage, not both: choose one.")
+    return "usage" if by_usage else "time"

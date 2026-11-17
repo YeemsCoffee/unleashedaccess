@@ -2,6 +2,13 @@
 {% from "maint/_macros.html" import task_pill, every %}
 {% block title %}{{ task.name }}{% endblock %}
 {% block content %}
+{% macro hazard_table(task) %}
+  {% if task.hazards %}<table class="simptww-hazards">
+    <thead><tr><th>Hazard</th><th>What's done about it</th></tr></thead>
+    <tbody>{% for h in task.hazards %}<tr><td>{{ h.hazard }}</td><td>{{ h.mitigation or '—' }}</td></tr>{% endfor %}</tbody>
+  </table>{% endif %}
+  {% if task.safety %}<p class="instructions">{{ task.safety }}</p>{% endif %}
+{% endmacro %}
 <div class="page-head">
   <h1>{{ task.name }} {{ task_pill(task) }}</h1>
   <a href="{{ url_for('maint.tasks', location=task.location_id) }}">← {{ task.location or 'All tasks' }}</a>
@@ -51,7 +58,7 @@
       <div class="simptww-body">
         <h3>{{ part.title }}</h3>
         {% if part.key == 'safety' %}
-          {% if task.safety %}<p class="instructions">{{ task.safety }}</p>{% endif %}
+          {{ hazard_table(task) }}
         {% elif part.key == 'info' %}
           {% if task.steps %}<ol class="simptww-steps">{% for op in task.steps %}<li>{{ op.text }}{% if op.minutes %} <span class="muted small nowrap">({{ op.minutes }} min)</span>{% endif %}</li>{% endfor %}</ol>
             {% if task.step_minutes %}<div class="muted small">About {{ task.step_minutes }} minutes in all.</div>{% endif %}{% endif %}
@@ -61,7 +68,7 @@
           {% if task.part_name %}<div>{{ task.part_name }}{% if task.vendor_part_number %} ({{ task.vendor_part_number }}){% endif %}{% if task.vendor %} from {{ task.vendor }}{% endif %}{% if task.lead_time_days %} · {{ task.lead_time_days }} day{{ 's' if task.lead_time_days != 1 }} lead time{% endif %}</div>{% endif %}
           {% if task.materials %}<p class="instructions">{{ task.materials }}</p>{% endif %}
         {% elif part.key == 'people' %}
-          {% if task.people_needed or task.skills %}<div>{% if task.people_needed %}{{ task.people_needed }} {{ 'person' if task.people_needed == 1 else 'people' }}{% endif %}{% if task.people_needed and task.skills %} · {% endif %}{{ task.skills or '' }}</div>{% endif %}
+          {% if task.people_needed %}<div>{{ task.people_needed }} {{ 'person' if task.people_needed == 1 else 'people' }}</div>{% endif %}
         {% elif part.key == 'tools' %}
           {% if task.tools %}<p class="instructions">{{ task.tools }}</p>{% endif %}
         {% elif part.key == 'where' %}
@@ -71,7 +78,7 @@
             {%- if task.location_id %}<a href="{{ url_for('maint.location', location_id=task.location_id) }}">{{ task.location }}</a>{% endif %}</div>{% endif %}
           {% if task.where_notes %}<p class="instructions">{{ task.where_notes }}</p>{% endif %}
         {% elif part.key == 'when' %}
-          <div>{{ every(task) }}{{ ', whichever comes first' if task.frequency_days and task.usage }}{% if task.next_due %} · next {{ task.next_due|d }}{% endif %} · {{ task.assignee_name or 'not assigned' }}</div>
+          <div>{{ every(task) }}{{ ', whichever comes first' if task.frequency_days and task.usage }}{% if task.next_due %} · next {{ task.next_due|d }}{% endif %}</div>
           {% if task.when_notes %}<p class="instructions">{{ task.when_notes }}</p>{% endif %}
         {% endif %}
         {% if task.pictures[part.key] %}<div class="file-pictures">{% for f in task.pictures[part.key] %}
@@ -102,7 +109,7 @@
 {% if task.state == 'active' and not task.in_template %}
 <section class="card" id="record">
   <h2>Record work</h2>
-  {% if task.safety %}<div class="simptww-safety"><strong>⚠ Safety first</strong><p class="instructions">{{ task.safety }}</p></div>{% endif %}
+  {% if task.hazards or task.safety %}<div class="simptww-safety"><strong>⚠ Safety first</strong>{{ hazard_table(task) }}</div>{% endif %}
   <form method="post" action="{{ url_for('maint.task_complete', task_id=task.id) }}" class="maint-form">
     {% if task.steps %}
     <div class="checklist">

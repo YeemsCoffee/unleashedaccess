@@ -6,6 +6,10 @@
     <li><input class="text-input wide" name="op-text-{{ i }}" value="{{ op.text }}" maxlength="300" placeholder="{{ placeholder }}" aria-label="Step {{ n }}">
       <input class="qty-input" type="number" name="op-minutes-{{ i }}" value="{{ op.minutes if op.minutes is not none else '' }}" min="0" step="1" placeholder="min" aria-label="Minutes for step {{ n }}"></li>
 {%- endmacro %}
+{% macro hazard_row(i, h) %}
+      <tr><td><input class="text-input wide" name="hazard-{{ i }}" value="{{ h.hazard }}" maxlength="300" placeholder="{{ 'e.g. Hot boiler and steam' if i == 0 else 'Another hazard (optional)' }}" aria-label="Hazard {{ i|int + 1 if i is number else '' }}"></td>
+        <td><input class="text-input wide" name="mitigation-{{ i }}" value="{{ h.mitigation }}" maxlength="500" placeholder="{{ 'e.g. Switch off and let it cool 30 minutes; heat gloves' if i == 0 else 'What is done about it' }}" aria-label="What is done about hazard {{ i|int + 1 if i is number else '' }}"></td></tr>
+{%- endmacro %}
 {% macro part_head(key) %}{% set s = (simptww|selectattr(0, 'equalto', key)|first) %}
   <legend><span class="simptww-letter" aria-hidden="true">{{ s[1] }}</span> {{ s[2] }} <span class="muted small">{{ s[3] }}</span></legend>
 {%- endmacro %}
@@ -25,12 +29,33 @@
 <form method="post" class="card maint-form" enctype="multipart/form-data">
   {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
   <label class="block">Task <input class="text-input wide" name="name" value="{{ form.name or '' }}" maxlength="150" required placeholder="e.g. Descale espresso machine"></label>
+  {% if people %}
+  <label class="block">Assigned to <span class="muted small">(optional)</span>
+    <select name="assigned_to">
+      <option value="">No one</option>
+      {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
+      {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
+    </select></label>
+  {% endif %}
   <p class="muted small">The job plan below is the task's SIMPTWW: Safety, Information, Material, People, Tools, Where and
-    When &amp; who. Fill in what applies; each part can have pictures (the lockout point, the part, the tools laid out).</p>
+    When. Fill in what applies; each part can have pictures (the lockout point, the part, the tools laid out).</p>
 
   <fieldset class="simptww-part">
     {{ part_head('safety') }}
-    <label class="block">What to watch for <textarea name="safety" rows="3" maxlength="5000" placeholder="e.g. Unplug and lock out at the wall switch. Let the boiler cool 30 min. Gloves and safety glasses for the descaler.">{{ form.safety or '' }}</textarea></label>
+    <p class="muted small">One row for each hazard, with what's done about it beside it. Empty rows are left out.</p>
+    <input type="hidden" name="hazard_rows" value="{{ hazards|length }}" data-hazard-count data-max="{{ max_hazards }}">
+    <div class="table-wrap"><table class="hazard-table">
+      <thead><tr><th>Hazard</th><th>What's done about it</th></tr></thead>
+      <tbody data-hazards>{% for h in hazards %}{{ hazard_row(loop.index0, h) }}
+      {% endfor %}</tbody>
+    </table></div>
+    <template id="hazard-template">{{ hazard_row('__I__', {'hazard': '', 'mitigation': ''}) }}</template>
+    <div><button type="button" class="btn" data-add-hazard hidden>+ Add a hazard</button></div>
+    {% if task and task.safety %}
+    <div class="legacy-notes"><strong class="small">Safety notes written before this list</strong>
+      <p class="instructions">{{ task.safety }}</p>
+      <label class="check-field small"><input type="checkbox" name="remove_safety_notes" value="1" {{ 'checked' if form.remove_safety_notes }}> Remove these notes (once they're in the list above)</label></div>
+    {% endif %}
     {{ pictures('safety', 'lockout points, PPE, warning signs') }}
   </fieldset>
 
@@ -75,7 +100,6 @@
     {{ part_head('people') }}
     <div class="filters new-order">
       <label>People needed <input type="number" name="people_needed" value="{{ form.people_needed or '' }}" min="1" step="1" inputmode="numeric" placeholder="1"></label>
-      <label class="wide">Skills or trade <input name="skills" value="{{ form.skills or '' }}" maxlength="300" placeholder="e.g. Trained barista lead; licensed electrician for the wiring"></label>
     </div>
     {{ pictures('people', '') }}
   </fieldset>
@@ -119,30 +143,29 @@
 
   <fieldset class="simptww-part">
     {{ part_head('when') }}
-    <div class="filters new-order">
+    {% if had_both %}<p class="recon recon-warn">! This task was due by time and by usage, whichever came first. A task is now one or the
+      other: choose which, and save.</p>{% endif %}
+    <div class="schedule-choice" role="radiogroup" aria-label="How it comes due">
+      <label class="check-field"><input type="radio" name="schedule_by" value="time" {{ 'checked' if schedule_by != 'usage' }} data-schedule-by> By time: every so many days</label>
+      <label class="check-field"><input type="radio" name="schedule_by" value="usage" {{ 'checked' if schedule_by == 'usage' }} data-schedule-by> By usage: every so much on a counter</label>
+    </div>
+    <div class="filters new-order" data-schedule="time">
       <label>Every (days) <input type="number" name="frequency_days" value="{{ form.frequency_days or '' }}" min="1" step="1" inputmode="numeric" placeholder="90"></label>
-      <label>Next due <input type="date" name="next_due" value="{{ form.next_due if form.next_due is defined and form.next_due else (today.isoformat() if not task else '') }}"></label>
-      <label>Or by usage: counter
+      <label>Next due <input type="date" name="next_due" value="{{ form.next_due if form.next_due is defined and form.next_due else (today.isoformat() if not task or not task.frequency_days else '') }}"></label>
+    </div>
+    <div class="filters new-order" data-schedule="usage">
+      <label>Counter
         <select name="counter_id">
-          <option value="">None</option>
+          <option value="">Choose…</option>
           {% for c in counters %}<option value="{{ c.id }}" {{ 'selected' if form.counter_id|string == c.id|string }}>{{ c.label }}</option>{% endfor %}
         </select></label>
-      <label>Every (usage) <input type="number" name="usage_interval" value="{{ form.usage_interval|n if form.usage_interval else '' }}" min="0" step="any" inputmode="decimal" placeholder="10000"></label>
-      <label>Last done at <input type="number" name="last_reading" value="{{ form.last_reading|n if form.last_reading is not none and form.last_reading != '' else '' }}" min="0" step="any" inputmode="decimal" placeholder="the reading now"></label>
+      <label>Every <input type="number" name="usage_interval" value="{{ ('%g'|format(form.usage_interval|float)) if form.usage_interval else '' }}" min="0" step="any" inputmode="decimal" placeholder="10000"></label>
+      <label>Last done at <input type="number" name="last_reading" value="{{ ('%g'|format(form.last_reading|float)) if form.last_reading is not none and form.last_reading != '' and form.last_reading is defined else '' }}" min="0" step="any" inputmode="decimal" placeholder="the reading now"></label>
     </div>
-    <p class="muted small">By time (every so many days), by usage on one of its equipment's counters (e.g. every 10,000 shots),
-      or both: it's due at whichever comes first. A usage-based task's date is estimated from the counter's readings.
-      {% if not counters %}Add counters on an equipment page to use them here.{% endif %}</p>
+    <p class="muted small" data-schedule="usage">{% if counters %}The counter is one of the task's equipment's (e.g. every 10,000 shots); its
+      date is estimated from the counter's readings.{% else %}There are no counters yet: add one on an equipment's page to use it here.{% endif %}</p>
     <div class="filters new-order">
       <label class="wide">Best time <input name="when_notes" value="{{ form.when_notes or '' }}" maxlength="1000" placeholder="Optional, e.g. After close, machine cold; takes it out of service 1 hour"></label>
-      {% if people %}
-      <label>Who does it
-        <select name="assigned_to">
-          <option value="">No one</option>
-          {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if form.assigned_to|string == p.id|string }}>{{ p.name }}</option>{% endfor %}
-          {% if task and task.assigned_to and task.assigned_to not in people|map(attribute='id')|list %}<option value="{{ task.assigned_to }}" {{ 'selected' if form.assigned_to|string == task.assigned_to|string }}>{{ task.assignee_name or 'Someone' }} (no Maintenance access now)</option>{% endif %}
-        </select></label>
-      {% endif %}
     </div>
     {{ pictures('when', '') }}
   </fieldset>

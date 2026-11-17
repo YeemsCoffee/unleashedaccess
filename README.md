@@ -306,9 +306,11 @@ The maintenance scheduler, brought into Core and kept in its database (the
   its cost center and criticality from where it's installed, unless it has its own.
 - **Counters** on equipment (shots, hours, gallons) take readings that only go up;
   the usage rate per day comes from the last 180 days of readings.
-- **Tasks** repeat every so many days, or every so much use (every 10,000 shots),
-  or both, whichever comes first. A usage task's due date is estimated from the
-  usage rate. Dates are in the business's time zone (`TIMEZONE`). A task is
+- **Tasks** repeat by time (every so many days) or by usage (every so much on one of
+  its equipment's counters: every 10,000 shots), one or the other, chosen on the
+  task's form. A usage task's due date is estimated from the usage rate. (A task
+  from before that choice may be due by both, whichever comes first; it stays so
+  until it's edited and saved as one.) Dates are in the business's time zone (`TIMEZONE`). A task is
   overdue once its date has passed; one being worked on can be marked in progress.
   Each can be assigned to someone who can open Maintenance, have **steps**,
   and have a part with its vendor, part number and lead time: the part shows under
@@ -332,13 +334,15 @@ The maintenance scheduler, brought into Core and kept in its database (the
   are added with **+ Add a step**, and a new task can start from another task's
   steps. Recording the work ticks them off.
 - **SIMPTWW**: each task's form and page are its job plan, in seven parts:
-  **S**afety (hazards, PPE, lockout/tagout), **I**nformation (the steps and
-  instructions), **M**aterial (the part to order, consumables, chemicals), **P**eople
-  (how many, what skills or trade), **T**ools, **W**here (the location or equipment and
-  how to get to it) and **W**hen & who (the schedule, the best time, who does it).
+  **S**afety (a list: each hazard, with what's done about it beside it), **I**nformation
+  (the steps and instructions), **M**aterial (the part to order, consumables, chemicals),
+  **P**eople (how many it takes), **T**ools, **W**here (the location or equipment and
+  how to get to it) and **W**hen (by time or by usage, and the best time to do it).
+  Who it's assigned to is beside the task's name, not part of the plan.
   Each part can have pictures (the lockout point, the part, the tools laid out),
   added or removed when adding or editing the task; other files stay under Files.
-  The safety notes show again where the work is recorded. Tasks made before SIMPTWW
+  The hazards show again where the work is recorded. Safety notes written before
+  hazards were a list are kept and shown under it until they're removed on the form. Tasks made before SIMPTWW
   keep what they had and are filled in by editing them: the letters under each task
   in the lists are solid for the parts filled in, and Tasks → Show → **SIMPTWW not
   filled in** lists the ones with gaps. The CSV has the SIMPTWW columns.

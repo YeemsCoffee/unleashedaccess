@@ -25,8 +25,8 @@ import json
 import math
 
 from maintenance_assets import Assets
-from maintenance_common import (CRITICALITIES, form_steps, DUE_SOON_DAYS, MaintenanceError, SIMPTWW, SIMPTWW_KEYS,
-                                TASK_STATES,
+from maintenance_common import (CRITICALITIES, form_hazards, form_steps, DUE_SOON_DAYS, MaintenanceError, SIMPTWW,
+                                SIMPTWW_KEYS, TASK_STATES, schedule_choice,
                                 checked_file, code, date, fmt_number, long_text, number, text, whole)
 from maintenance_work import Work
 from unleashed.store import utc_now
@@ -40,15 +40,18 @@ NEW_COLUMNS = {
     "maint_tasks": {"equipment_id": "INTEGER", "tasklist_id": "INTEGER", "counter_id": "INTEGER",
                     "usage_interval": "REAL", "last_reading": "REAL", "steps": "TEXT",
                     # SIMPTWW: what the task's other fields don't already cover
-                    "safety": "TEXT", "materials": "TEXT", "people_needed": "INTEGER", "skills": "TEXT",
+                    "safety": "TEXT", "hazards": "TEXT", "materials": "TEXT", "people_needed": "INTEGER", "skills": "TEXT",
                     "tools": "TEXT", "where_notes": "TEXT", "when_notes": "TEXT",
                     "state": "TEXT", "state_note": "TEXT", "state_by": "TEXT", "state_at": "TEXT"},
     "maint_completions": {"parts_cost": "REAL", "reading": "REAL", "checklist": "TEXT"},
     "maint_attachments": {"section": "TEXT"},  # a SIMPTWW key, for a picture filed under it
 }
 # The SIMPTWW fields saved as typed: (column, longest).
-SIMPTWW_TEXT = (("safety", 5000), ("materials", 2000), ("skills", 300), ("tools", 2000),
-                ("where_notes", 1000), ("when_notes", 1000))
+# The job plan's free-text parts the form writes. Safety is a list of hazards, each with what's done
+# about it ("hazards": JSON); "safety" holds the notes written before that, and "skills" what was
+# asked before people became just a number: both are kept as they are and copied with the task.
+SIMPTWW_TEXT = (("materials", 2000), ("tools", 2000), ("where_notes", 1000), ("when_notes", 1000))
+PLAN_COLUMNS = ("people_needed", "safety", "hazards", "materials", "skills", "tools", "where_notes", "when_notes")
 
 
 def migrate(db):
@@ -270,7 +273,7 @@ class Maintenance(Assets, Work):
                 for t in self.db.query("SELECT * FROM maint_tasks WHERE equipment_id IS NULL"
                                        " AND COALESCE(state, 'active') = 'active'"):
                     if t["location_id"] in new_ids:
-                        plan = ("people_needed",) + tuple(c for c, _ in SIMPTWW_TEXT)
+                        plan = PLAN_COLUMNS
                         self.db.execute(
                             "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to,"
                             " in_progress, part_name, vendor, vendor_part_number, lead_time_days, instructions,"
@@ -357,16 +360,25 @@ class Maintenance(Assets, Work):
         if not name:
             raise MaintenanceError("Give the task a name.")
         equipment_id = whole(form.get("equipment_id"), "Equipment")
-        counter_id = whole(form.get("counter_id"), "Counter")
-        usage = number(form.get("usage_interval"), "Usage between", maximum=1e12) if counter_id else None
-        if counter_id and not usage:
-            raise MaintenanceError("Say how much use between times, e.g. every 10,000 shots.")
-        frequency = whole(form.get("frequency_days"), "How often", minimum=1, required=not counter_id) or 0
-        due_text = form.get("next_due") or ""
-        try:
-            next_due = dt.date.fromisoformat(due_text) if (frequency or due_text) else (today or dt.date.today())
-        except ValueError:
-            raise MaintenanceError("Enter the date it's next due.") from None
+        # Due by time or by usage, one or the other: the other's fields are left unread.
+        if schedule_choice(form) == "usage":
+            counter_id = whole(form.get("counter_id"), "Counter")
+            if counter_id is None:
+                raise MaintenanceError("Choose the counter it's counted on (add counters on the equipment's page), "
+                                       "or make it due by time.")
+            usage = number(form.get("usage_interval"), "Usage between", maximum=1e12)
+            if not usage:
+                raise MaintenanceError("Say how much use between times, e.g. every 10,000 shots.")
+            frequency, next_due = 0, today or dt.date.today()
+        else:
+            counter_id, usage = None, None
+            if not str(form.get("frequency_days") or "").strip():
+                raise MaintenanceError("Say how often it's due: every how many days?")
+            frequency = whole(form.get("frequency_days"), "How often", minimum=1)
+            try:
+                next_due = dt.date.fromisoformat(form.get("next_due") or "")
+            except ValueError:
+                raise MaintenanceError("Enter the date it's next due.") from None
         lead_time = whole(form.get("lead_time_days"), "Lead time", minimum=0) or 0
         location_id = whole(form.get("location_id"), "Location")
         if equipment_id is not None:
@@ -386,8 +398,10 @@ class Maintenance(Assets, Work):
             given = number(form.get("last_reading"), "Last done at", maximum=1e12)
             last_reading = given if given is not None else self.counter_states().get(counter_id, {}).get("value", 0)
         steps = form_steps(form)
+        hazards = form_hazards(form)
         people_needed = whole(form.get("people_needed"), "People needed", minimum=1)
-        plan = (people_needed,) + tuple(long_text(form, c, limit) for c, limit in SIMPTWW_TEXT)
+        plan = (people_needed, json.dumps(hazards) if hazards else None) + \
+            tuple(long_text(form, c, limit) for c, limit in SIMPTWW_TEXT)
         assigned_to = whole(form.get("assigned_to"), "Assigned to")
         if assigned_to is not None and assigned_to not in assignable:
             raise MaintenanceError("Assign it to someone who can open Maintenance.")
@@ -395,7 +409,7 @@ class Maintenance(Assets, Work):
                   1 if form.get("in_progress") else 0, text(form, "part_name", 150), text(form, "vendor", 100),
                   text(form, "vendor_part_number", 100), lead_time, long_text(form, "instructions"),
                   equipment_id, json.dumps(steps) if steps else None, counter_id, usage) + plan
-        plan_columns = ("people_needed",) + tuple(c for c, _ in SIMPTWW_TEXT)
+        plan_columns = ("people_needed", "hazards") + tuple(c for c, _ in SIMPTWW_TEXT)
         if task_id is None:
             return self.db.query(
                 "INSERT INTO maint_tasks (name, location_id, frequency_days, next_due, assigned_to, in_progress,"
@@ -411,6 +425,8 @@ class Maintenance(Assets, Work):
             " equipment_id = ?, steps = ?, counter_id = ?, usage_interval = ?,"
             f" {', '.join(c + ' = ?' for c in plan_columns)}, last_reading = ? WHERE id = ?",
             values + (last_reading, task_id))
+        if form.get("remove_safety_notes"):  # the notes from before hazards were a list, once they're in it
+            self.db.execute("UPDATE maint_tasks SET safety = NULL WHERE id = ?", (task_id,))
         return task_id
 
     def save_new_tasks(self, form, assignable, by, today=None):
@@ -426,7 +442,7 @@ class Maintenance(Assets, Work):
         if len(wanted) <= 1:
             return [self.save_task(None, form, assignable, by, today)]
         counter_name = None
-        counter_id = whole(form.get("counter_id"), "Counter")
+        counter_id = whole(form.get("counter_id"), "Counter") if schedule_choice(form) == "usage" else None
         if counter_id is not None:
             rows = self.db.query("SELECT name FROM maint_counters WHERE id = ?", (counter_id,))
             if not rows:
@@ -495,8 +511,7 @@ class Maintenance(Assets, Work):
                 reading = self.counter_states().get(matched, {}).get("value", 0)
             plan.append((equipment_id, item[0]["location_id"], matched, reading))
         same = ("name", "frequency_days", "assigned_to", "part_name", "vendor", "vendor_part_number", "lead_time_days",
-                "instructions", "steps", "usage_interval", "people_needed", "safety", "materials", "skills", "tools",
-                "where_notes", "when_notes")
+                "instructions", "steps", "usage_interval") + PLAN_COLUMNS
         made = []
         with self.db.connect() as conn:
             for equipment_id, location_id, counter_id, reading in plan:
@@ -806,15 +821,16 @@ def _task(row, ctx):
     task["equipment_status"] = item["status"] if item else None
     task["steps"] = json.loads(row["steps"]) if row.get("steps") else []
     task["step_minutes"] = sum(op.get("minutes") or 0 for op in task["steps"])
+    task["hazards"] = json.loads(row["hazards"]) if row.get("hazards") else []
     pictured = ctx["pictured"].get(row["id"], set())
     filled = {
-        "safety": row.get("safety"),
+        "safety": task["hazards"] or row.get("safety"),
         "info": row["instructions"] or task["steps"],
         "material": row["part_name"] or row.get("materials"),
-        "people": row.get("people_needed") or row.get("skills"),
+        "people": row.get("people_needed"),
         "tools": row.get("tools"),
         "where": row["location_id"] or row["equipment_id"] or row.get("where_notes"),
-        "when": row["assigned_to"] or row.get("when_notes"),
+        "when": True,  # every task has its schedule
     }
     task["simptww"] = [{"key": k, "letter": letter, "title": title, "hint": hint,
                         "filled": bool(filled[k]) or k in pictured} for k, letter, title, hint in SIMPTWW]

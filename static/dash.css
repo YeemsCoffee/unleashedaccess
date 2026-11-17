@@ -613,3 +613,18 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .mail-setup li { margin: 3px 0; }
 .setup-ok { color: var(--good-ink); }
 .setup-missing { color: var(--bad-ink); font-weight: 600; }
+
+/* A task form: the hazards table, the notes from before it, and the time-or-usage choice. */
+.hazard-table { width: 100%; }
+.hazard-table th { text-align: left; }
+.hazard-table td { padding: 3px 6px 3px 0; vertical-align: top; width: 50%; }
+.hazard-table .text-input.wide { width: 100%; min-width: 9rem; }
+.legacy-notes { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; margin: 10px 0; }
+.schedule-choice { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 4px 0 10px; }
+[data-schedule][hidden] { display: none; }
+.simptww-hazards { border-collapse: collapse; margin: 2px 0 6px; }
+.simptww-hazards th { text-align: left; font-size: 12px; color: var(--text-secondary); padding: 2px 16px 2px 0; }
+.simptww-hazards td { padding: 4px 16px 4px 0; vertical-align: top; border-top: 1px solid var(--line); }
+.simptww-hazards { width: 100%; table-layout: fixed; }
+.simptww-hazards th, .simptww-hazards td { white-space: normal; overflow-wrap: anywhere; }
+.simptww-body { min-width: 0; }

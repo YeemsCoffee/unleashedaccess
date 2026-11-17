@@ -15,7 +15,8 @@ from flask import (Blueprint, Response, abort, current_app, flash, jsonify, redi
 
 import dashboard
 from dashboard import _csv, _csv_url, _wants_csv, current_user, is_admin
-from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_OPERATIONS, SIMPTWW, SIMPTWW_KEYS,
+from maintenance_common import (CRITICALITIES, DUE_SOON_DAYS, FILE_TYPES, MAX_HAZARDS, MAX_OPERATIONS, SIMPTWW,
+                                SIMPTWW_KEYS,
                                 TASK_STATES, MaintenanceError, fmt_number)
 from maintenance_store import COMPLETION_STATUSES, SIMPTWW_TEXT, Maintenance
 from production_runs import picture_type
@@ -182,8 +183,11 @@ def tasks():
             ("Last completed", lambda t: (t["last_completed"] or "")[:10]), ("Times done", "times_done"),
             ("State", "state_label"),
             ("SIMPTWW filled in", lambda t: f"{t['simptww_filled']} of {len(SIMPTWW)}"),
-            ("Safety", "safety"), ("Instructions", "instructions"), ("Materials", "materials"),
-            ("People needed", "people_needed"), ("Skills", "skills"), ("Tools", "tools"),
+            ("Safety", lambda t: "; ".join(
+                [f"{h['hazard']}: {h['mitigation']}" if h.get("mitigation") else h["hazard"] for h in t["hazards"]]
+                + ([t["safety"]] if t.get("safety") else []))),
+            ("Instructions", "instructions"), ("Materials", "materials"),
+            ("People needed", "people_needed"), ("Tools", "tools"),
             ("Where", "where_notes"), ("When", "when_notes"),
         ], shown)
     all_tasks = store.tasks(today, include_templates=True)
@@ -222,6 +226,17 @@ def _task_form(task=None, form=None, error=None):
     else:
         steps = list((task or {}).get("steps") or [])
     steps += [{"text": "", "minutes": ""}] * max(1, 3 - len(steps))
+    if hasattr(form, "getlist"):  # the hazards as typed
+        hazards = [{"hazard": form.get(f"hazard-{i}", ""), "mitigation": form.get(f"mitigation-{i}", "")}
+                   for i in range(min(form.get("hazard_rows", 0, type=int), MAX_HAZARDS))]
+    else:
+        hazards = list((task or {}).get("hazards") or [])
+    hazards += [{"hazard": "", "mitigation": ""}] * max(1, 3 - len(hazards))
+    # Due by time or by usage: as chosen, as the task is, or by time to start with. A task from
+    # before it was one or the other may have both; it keeps both until it's saved as one.
+    schedule_by = form.get("schedule_by") or ("usage" if task and task.get("counter_id") and not task.get("frequency_days")
+                                               else "time")
+    had_both = bool(task and task.get("counter_id") and task.get("frequency_days"))
     # Other tasks' steps, to start from: each distinct set once.
     sources, seen = [], set()
     for t in _store().tasks(_today(), include_templates=True, state="all"):
@@ -237,7 +252,8 @@ def _task_form(task=None, form=None, error=None):
     ticked = [v for v in (form.getlist("equipment_id") if hasattr(form, "getlist") else [form.get("equipment_id")]) if v]
     return render_template("maint/task_form.html", task=task, form=form, error=error, today=_today(), ticked=ticked,
                            return_to=_return_to(), steps=steps, step_sources=sources, simptww=SIMPTWW,
-                           picture_types=_picture_types(), max_steps=MAX_OPERATIONS,
+                           picture_types=_picture_types(), max_steps=MAX_OPERATIONS, hazards=hazards,
+                           max_hazards=MAX_HAZARDS, schedule_by=schedule_by, had_both=had_both,
                            **_form_options()), 400 if error else 200
 
 
