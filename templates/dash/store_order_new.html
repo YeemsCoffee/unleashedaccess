@@ -1,0 +1,36 @@
+{% extends "dash/base.html" %}
+{% block title %}Request for {{ name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Request stock for {{ name }}</h1>
+  <a href="{{ url_for('dash.store_orders') }}">← Store orders</a>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card" data-par-sheet>
+  <input type="hidden" name="store" value="{{ code }}">
+  <p class="muted small">Count what's on the shelf and type it in <strong>On hand</strong>: <strong>Ask for</strong> fills in with what's needed to get
+    back to the par level. Change it if you need more or less; leave it empty or 0 for none.</p>
+  <div class="table-wrap"><table class="par-sheet">
+    <thead><tr><th>Product</th><th class="num">Par</th><th class="num">On hand</th><th class="num">Ask for</th></tr></thead>
+    <tbody>
+    {% for p in pars %}{% set prod = products[p.product_code] %}
+    <tr data-par="{{ p.par }}">
+      <td><input type="hidden" name="product" value="{{ p.product_code }}">{{ prod.name or p.product_code }}
+        <div class="muted small mono">{{ p.product_code }}{{ ' · ' ~ prod.unit if prod.unit }}</div></td>
+      <td class="num">{{ p.par|qty }}</td>
+      <td class="num"><input class="qty-input" type="number" name="on_hand-{{ p.product_code }}" value="{{ form.get('on_hand-' ~ p.product_code, '') }}" min="0" step="any" inputmode="decimal" aria-label="On hand of {{ prod.name }}" data-on-hand></td>
+      <td class="num"><input class="qty-input" type="number" name="qty-{{ p.product_code }}" value="{{ form.get('qty-' ~ p.product_code, '') }}" min="0" step="any" inputmode="decimal" aria-label="Ask for {{ prod.name }}" data-ask></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">This store has no par levels yet{{ ': set them first' if warehouse else ': the warehouse sets them' }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div class="filters new-order">
+    <label>Needed by <input type="date" name="needed_by" value="{{ form.get('needed_by', '') }}" min="{{ today.isoformat() }}"></label>
+    <label class="wide">Notes for the warehouse <input class="text-input wide" name="notes" value="{{ form.get('notes', '') }}" maxlength="1000" placeholder="Optional"></label>
+  </div>
+  <div class="run-actions"><button class="btn btn-primary" {{ 'disabled' if not pars }}>Send to the warehouse</button>
+    <a class="btn" href="{{ url_for('dash.store_orders') }}">Cancel</a></div>
+</form>
+{% endblock %}

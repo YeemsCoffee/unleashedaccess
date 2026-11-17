@@ -839,3 +839,44 @@ function fromTemplate(id, values) {
     });
   });
 })();
+
+// A store's request: typing what's on hand fills in what to ask for (par - on hand, rounded up),
+// until "Ask for" is typed in by hand.
+(function () {
+  "use strict";
+  var sheet = document.querySelector("[data-par-sheet]");
+  if (!sheet) return;
+  sheet.addEventListener("input", function (e) {
+    var row = e.target.closest("tr[data-par]");
+    if (!row) return;
+    var ask = row.querySelector("[data-ask]");
+    if (e.target === ask) { ask.dataset.typed = ask.value === "" ? "" : "1"; return; }
+    if (!e.target.matches("[data-on-hand]") || ask.dataset.typed) return;
+    var onHand = e.target.value === "" ? null : parseFloat(e.target.value);
+    if (onHand === null || isNaN(onHand)) { ask.value = ""; return; }
+    var need = Math.ceil(Math.max(parseFloat(row.dataset.par) - onHand, 0) - 1e-9);
+    ask.value = need > 0 ? String(need) : "0";
+  });
+})();
+
+// A store's par levels: product names shown as they're typed, and rows added.
+(function () {
+  "use strict";
+  var rows = document.querySelector("[data-par-rows]");
+  if (!rows) return;
+  var names = JSON.parse(document.getElementById("store-product-names").textContent);
+  var lower = {};
+  Object.keys(names).forEach(function (c) { lower[c.toLowerCase()] = c; });
+  rows.addEventListener("change", function (e) {
+    if (!e.target.matches(".line-product")) return;
+    var code = lower[e.target.value.trim().toLowerCase()], label = e.target.parentNode.querySelector("[data-par-name]");
+    if (code) e.target.value = code;
+    label.textContent = code ? names[code] : (e.target.value.trim() ? "Not a product: pick one from the list" : "");
+    label.classList.toggle("due-late", !code && !!e.target.value.trim());
+  });
+  document.querySelector("[data-add-par]").addEventListener("click", function () {
+    var row = fromTemplate("par-row-template", {});
+    rows.appendChild(row);
+    row.querySelector("input").focus();
+  });
+})();

@@ -633,3 +633,10 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .to-order-hint { color: var(--brand-soft-ink); margin-top: 2px; }
 .order-from { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 6px; }
 .order-from .btn { padding: 2px 10px; }
+
+/* Store ordering. */
+.store-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.store-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.store-card .run-actions { margin-top: 8px; }
+.par-sheet td, .par-list td { vertical-align: top; }
+.cancel-request { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }

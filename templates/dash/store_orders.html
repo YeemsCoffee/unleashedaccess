@@ -1,0 +1,53 @@
+{% extends "dash/base.html" %}
+{% block title %}Store orders{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Store orders</h1>
+  <form method="get" class="filters">
+    <label>Store <select name="store"><option value="">All stores</option>
+      {% for c, n in stores %}<option value="{{ c }}" {{ 'selected' if c == store }}>{{ n }}</option>{% endfor %}</select></label>
+    <label>Status <select name="status"><option value="">All</option>
+      {% for k, v in (('submitted', 'Waiting for the warehouse'), ('ordered', 'Sales order made'), ('cancelled', 'Cancelled')) %}<option value="{{ k }}" {{ 'selected' if k == status }}>{{ v }}</option>{% endfor %}</select></label>
+    <button class="btn">Show</button>
+  </form>
+</div>
+{% if not stores %}
+<p class="recon recon-warn">! No stores yet. A store is an Unleashed customer ticked as a store under Settings → COGS{{ ' (an admin does this)' }}.</p>
+{% else %}
+<section class="card">
+  <h2>Ask the warehouse for stock</h2>
+  <p class="muted small">Count what the store has; the request is what's needed to get back to its par levels, and can be changed before it's sent.</p>
+  <div class="store-cards">
+  {% for c, n in stores %}
+    <div class="store-card">
+      <strong>{{ n }}</strong>
+      <div class="muted small">{{ pars.get(c, 0) }} product{{ 's' if pars.get(c, 0) != 1 }} with a par level</div>
+      <div class="run-actions">
+        {% if pars.get(c) %}<a class="btn btn-primary" href="{{ url_for('dash.store_order_new', store=c) }}">New request</a>{% endif %}
+        {% if warehouse %}<a class="btn btn-quiet" href="{{ url_for('dash.store_pars', store=c) }}">{{ 'Par levels' if pars.get(c) else 'Set par levels' }}</a>{% endif %}
+      </div>
+      {% if not pars.get(c) and not warehouse %}<div class="muted small">The warehouse sets this store's par levels first.</div>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Requests{% if waiting %} <span class="pill pill-placed">{{ waiting }} waiting</span>{% endif %}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>#</th><th>Store</th><th>Status</th><th class="num">Products</th><th>Needed by</th><th>Asked by</th><th>Sales order</th></tr></thead>
+    <tbody>
+    {% for r in requests %}
+    <tr class="{{ 'row-warn' if r.status == 'submitted' }}">
+      <td><a href="{{ url_for('dash.store_order', request_id=r.id) }}">{{ r.id }}</a></td>
+      <td>{{ names.get(r.store_code, r.store_code) }}</td><td>{{ r.status_label }}</td><td class="num">{{ r.lines }}</td>
+      <td>{{ r.needed_by or '—' }}</td><td>{{ r.requested_by or '—' }} <span class="muted small">{{ r.requested_at[:16] }}</span></td>
+      <td>{% if r.sales_order %}<a href="{{ url_for('dash.sales_detail', number=r.sales_order) }}">{{ r.sales_order }}</a>{% else %}—{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No requests{{ ' like that' if status or store }}.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

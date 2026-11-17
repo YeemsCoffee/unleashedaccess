@@ -29,7 +29,8 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
               "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines",
-              "vendor_email_settings", "po_emails", "sign_in_attempts")
+              "vendor_email_settings", "po_emails", "sign_in_attempts",
+              "store_pars", "store_requests", "store_request_lines")
 
 
 def sqlite_database(testcase):
@@ -921,6 +922,56 @@ class OrderPageTests(unittest.TestCase):
         empty = self.c.get("/purchases/new?supplier=SUP-PACK&to_order=1").get_data(as_text=True)
         if not any(r["recommended"] and r["supplier_code"] == "SUP-PACK" for r in self.reports.stock_on_hand()["rows"]):
             self.assertIn("Nothing from this supplier is at or below its minimum", empty)
+
+    def test_a_store_asks_the_warehouse_for_stock_and_gets_a_sales_order(self):
+        empty = self.c.get("/store-orders").get_data(as_text=True)
+        self.assertIn("No stores yet", empty)
+        self.app.extensions["unleashed"]["store"].set_state("cogs_stores", '["CATER-01"]')
+        page = self.c.get("/store-orders").get_data(as_text=True)
+        self.assertIn("Mock Catering Client", page)
+        self.assertIn("Set par levels", page)
+        # The warehouse sets the store's par levels; a product that isn't one is refused.
+        bad = self.c.post("/store-orders/pars", data={"store": "CATER-01", "product": ["NOPE"], "par": ["4"]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("NOPE: pick a product from the list", bad.get_data(as_text=True))
+        self._post("/store-orders/pars", store="CATER-01", product=["milk-whl-gal", "CRM-HVY-HG", "", "SYR-VAN-750"],
+                   par=["12", "4", "", "0"])  # typed in lower case; a par of 0 is left off
+        pars = self.app.extensions["store_orders"].pars("CATER-01")
+        self.assertEqual([(p["product_code"], p["par"]) for p in pars], [("MILK-WHL-GAL", 12.0), ("CRM-HVY-HG", 4.0)])
+        # The store counts and asks.
+        sheet = self.c.get("/store-orders/new?store=CATER-01").get_data(as_text=True)
+        self.assertIn('data-par="12.0"', sheet)
+        self.assertIn("Whole Milk 1 gal", sheet)
+        nothing = self.c.post("/store-orders/new", data={"store": "CATER-01", "product": ["MILK-WHL-GAL", "CRM-HVY-HG"],
+                                                          "on_hand-MILK-WHL-GAL": "12", "qty-MILK-WHL-GAL": "0"})
+        self.assertIn("Nothing is asked for", nothing.get_data(as_text=True))
+        res = self._post("/store-orders/new", store="CATER-01", product=["MILK-WHL-GAL", "CRM-HVY-HG"],
+                         **{"on_hand-MILK-WHL-GAL": "5", "qty-MILK-WHL-GAL": "7", "on_hand-CRM-HVY-HG": "4",
+                            "qty-CRM-HVY-HG": ""}, needed_by=(TODAY + dt.timedelta(days=2)).isoformat(), notes="Back door")
+        request_id = int(res.headers["Location"].rsplit("/", 1)[1])
+        found = self.app.extensions["store_orders"].request(request_id)
+        self.assertEqual([(l["product_code"], l["on_hand"], l["qty"]) for l in found["lines"]], [("MILK-WHL-GAL", 5.0, 7.0)])
+        self.assertIn("1 waiting", self.c.get("/store-orders").get_data(as_text=True))
+        # The warehouse sends 6 of the 7: a parked sales order to the store.
+        detail = self.c.get(f"/store-orders/{request_id}").get_data(as_text=True)
+        line_id = found["lines"][0]["id"]
+        self.assertIn(f'name="qty-{line_id}" value="7"', detail)
+        made = self._post(f"/store-orders/{request_id}/order", **{f"qty-{line_id}": "6", "warehouse": "GDN"})
+        number = made.headers["Location"].rsplit("/", 1)[1]
+        so = next(o for o in self.ds.sales_orders if o["OrderNumber"] == number)
+        self.assertEqual((so["CustomerCode"], so["OrderStatus"]), ("CATER-01", "Parked"))
+        self.assertEqual([(l["ProductCode"], l["OrderQuantity"]) for l in so["Lines"]], [("MILK-WHL-GAL", 6.0)])
+        found = self.app.extensions["store_orders"].request(request_id)
+        self.assertEqual((found["status"], found["sales_order"]), ("ordered", number))
+        again = self.c.post(f"/store-orders/{request_id}/order", data={f"qty-{line_id}": "6"}, follow_redirects=True)
+        self.assertIn("This request is sales order made", again.get_data(as_text=True))
+        self.assertEqual(sum(1 for o in self.ds.sales_orders if o["CustomerCode"] == "CATER-01" and o["OrderNumber"] == number), 1)
+        # A request can be cancelled while it waits.
+        second = int(self._post("/store-orders/new", store="CATER-01", product=["CRM-HVY-HG"], **{"qty-CRM-HVY-HG": "2"})
+                     .headers["Location"].rsplit("/", 1)[1])
+        self._post(f"/store-orders/{second}/cancel", reason="Found some")
+        self.assertEqual(self.app.extensions["store_orders"].request(second)["status"], "cancelled")
+        self.assertEqual(self.c.get("/store-orders/new?store=WHSL-01").status_code, 404)  # not a store
 
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
@@ -3768,6 +3819,39 @@ class TeamAccountTests(unittest.TestCase):
         db = Database.__new__(Database)
         db.dialect, db.url = "postgres", "postgresql://admin:first@SECONDHALF@db.example.test:5432/core"
         self.assertEqual(db.label, "PostgreSQL at db.example.test:5432 (shared)")
+
+    def test_store_staff_only_ask_for_stock(self):
+        """Someone with only Store ordering sees the store pages and nothing else of the Warehouse,
+        and can't set par levels or make the sales order."""
+        admin = self._admin_client()
+        self.app.extensions["unleashed"]["store"].set_state("cogs_stores", '["CATER-01"]')
+        admin.post("/store-orders/pars", data={"store": "CATER-01", "product": ["MILK-WHL-GAL"], "par": ["10"]})
+        profile = self.app.extensions["profiles"].save(None, "Store staff", ["store_orders"])
+        temp = self._add(admin, "Sam", "sam@yeems.test", profile="Store staff")
+        sam = self.app.test_client()
+        self._sign_in(sam, "sam@yeems.test", temp)
+        self._choose_password(sam, temp, "sams-own-password")
+        self.assertEqual(sam.get("/").headers["Location"], "/store-orders")  # their first page
+        page = sam.get("/store-orders").get_data(as_text=True)
+        self.assertIn("New request", page)
+        self.assertNotIn("Par levels", page)
+        self.assertNotIn(">Stock on hand<", page)
+        self.assertEqual(sam.get("/stock-on-hand").headers["Location"], "/store-orders")  # the tab's page they open
+        for url in ("/sales", "/purchases", "/cogs", "/stock-on-hand?format=csv&to_order=1"):
+            res = sam.get(url)
+            self.assertTrue(res.status_code == 403 or res.headers.get("Location") == "/store-orders", url)
+            self.assertNotIn(b"MILK-WHL-GAL,", res.data)
+        res = sam.post("/store-orders/new", data={"store": "CATER-01", "product": ["MILK-WHL-GAL"], "on_hand-MILK-WHL-GAL": "3",
+                                                  "qty-MILK-WHL-GAL": "7"})
+        request_id = int(res.headers["Location"].rsplit("/", 1)[1])
+        self.assertIn("Par levels are set by someone in Warehouse",
+                      sam.post("/store-orders/pars", data={"store": "CATER-01"}, follow_redirects=True).get_data(as_text=True))
+        line_id = self.app.extensions["store_orders"].request(request_id)["lines"][0]["id"]
+        self.assertNotIn("Make the sales order", sam.get(f"/store-orders/{request_id}").get_data(as_text=True))
+        refused = sam.post(f"/store-orders/{request_id}/order", data={f"qty-{line_id}": "7"}, follow_redirects=True)
+        self.assertIn("Only someone in Warehouse makes the sales order", refused.get_data(as_text=True))
+        self.assertEqual(self.app.extensions["store_orders"].request(request_id)["status"], "submitted")
+        self.assertIn("Make the sales order", admin.get(f"/store-orders/{request_id}").get_data(as_text=True))
 
     def test_an_admin_reset_says_on_the_sign_in_page_whether_it_applied(self):
         """ADMIN_RESET applies once for each ADMIN_PASSWORD. It used to do nothing, silently, the

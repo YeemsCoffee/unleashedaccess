@@ -145,6 +145,7 @@ _TABS = [
     ("finance", [("dash.overview", "Overview"), ("dash.cogs_page", "COGS")]),
     ("warehouse", [("dash.stock_on_hand", "Stock on hand"),
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
+                   ("dash.store_orders", "Store orders", "store_orders"),
                    ("dash.transactions", "Transactions")]),
     ("production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
@@ -185,6 +186,8 @@ _PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand",
             "dash.purchase_order_delete": "dash.purchases", "dash.purchase_order_email": "dash.purchases",
             "dash.purchase_vendors": "dash.purchases", "dash.purchase_vendors_test": "dash.purchases",
             "dash.purchase_order_pdf": "dash.purchases",
+            **{f"dash.{p}": "dash.store_orders" for p in ("store_order_new", "store_order", "store_order_make",
+                                                          "store_order_cancel", "store_pars")},
             "dash.credit_notes": "dash.sales", "dash.credit_detail": "dash.sales", "dash.sales_order_credit": "dash.sales",
             "dash.credit_complete": "dash.sales", "dash.credit_delete": "dash.sales",
             "dash.supplier_returns": "dash.purchases", "dash.supplier_return_detail": "dash.purchases",
@@ -1584,6 +1587,9 @@ def init_app(app):
     from vendor_email import VendorEmails
     app.extensions["vendor_emails"] = VendorEmails(db)
     import order_pages  # noqa: F401 (adds making, changing, completing and receiving orders)
+    import store_order_pages  # noqa: F401 (adds store ordering)
+    from store_orders import StoreOrders
+    app.extensions["store_orders"] = StoreOrders(db)
     import stock_pages  # noqa: F401 (adds the Transactions pages: adjustments, transfers, stock counts)
     app.register_blueprint(bp)
 

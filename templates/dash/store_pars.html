@@ -1,0 +1,31 @@
+{% extends "dash/base.html" %}
+{% block title %}Par levels: {{ name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Par levels for {{ name }}</h1>
+  <a href="{{ url_for('dash.store_orders') }}">← Store orders</a>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+<form method="post" class="card">
+  <input type="hidden" name="store" value="{{ code }}">
+  <p class="muted small">For each product the store carries, how many it should have after a delivery, in the unit it's stocked in.
+    The store's requests list these, in this order. Empty rows are left out; a par of 0 takes a product off.</p>
+  <div class="table-wrap"><table class="par-list">
+    <thead><tr><th>Product</th><th class="num">Par</th></tr></thead>
+    <tbody data-par-rows>
+    {% for p in pars %}
+    <tr><td><input class="text-input wide line-product" name="product" list="store-products" value="{{ p.product_code }}" autocomplete="off" placeholder="Type a product code or name" aria-label="Product">
+      <div class="muted small" data-par-name>{{ products[p.product_code].name if p.product_code in products }}</div></td>
+      <td class="num"><input class="qty-input" type="number" name="par" value="{{ ('%g'|format(p.par|float)) if p.par not in (none, '') else '' }}" min="0" step="any" inputmode="decimal" aria-label="Par"></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <template id="par-row-template"><tr><td><input class="text-input wide line-product" name="product" list="store-products" autocomplete="off" placeholder="Type a product code or name" aria-label="Product"><div class="muted small" data-par-name></div></td>
+    <td class="num"><input class="qty-input" type="number" name="par" min="0" step="any" inputmode="decimal" aria-label="Par"></td></tr></template>
+  <datalist id="store-products">{% for c, p in products|dictsort %}<option value="{{ c }}">{{ c }} · {{ p.name }}</option>{% endfor %}</datalist>
+  <script type="application/json" id="store-product-names">{{ names|tojson }}</script>
+  <div><button type="button" class="btn" data-add-par>+ Add a product</button></div>
+  <div class="run-actions"><button class="btn btn-primary">Save</button>
+    <a class="btn" href="{{ url_for('dash.store_orders') }}">Cancel</a></div>
+</form>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "dash/base.html" %}
+{% block title %}Store request {{ r.id }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Store request {{ r.id }}: {{ store_name }}</h1>
+  <a href="{{ url_for('dash.store_orders') }}">← Store orders</a>
+</div>
+<section class="card">
+  <dl class="facts">
+    <div><dt>Status</dt><dd>{{ r.status_label }}</dd></div>
+    <div><dt>Asked by</dt><dd>{{ r.requested_by or '—' }} <span class="muted small">{{ r.requested_at[:16] }} UTC</span></dd></div>
+    <div><dt>Needed by</dt><dd>{{ r.needed_by or '—' }}</dd></div>
+    {% if r.sales_order %}<div><dt>Sales order</dt><dd><a href="{{ url_for('dash.sales_detail', number=r.sales_order) }}">{{ r.sales_order }}</a></dd></div>{% endif %}
+    {% if r.handled_by %}<div><dt>{{ 'Ordered' if r.status == 'ordered' else 'Cancelled' }} by</dt><dd>{{ r.handled_by }}</dd></div>{% endif %}
+  </dl>
+  {% if r.notes %}<p class="instructions">{{ r.notes }}</p>{% endif %}
+  {% if r.cancel_reason %}<p class="muted">Why cancelled: {{ r.cancel_reason }}</p>{% endif %}
+  {% set can_order = warehouse and r.status == 'submitted' %}
+  <form method="post" action="{{ url_for('dash.store_order_make', request_id=r.id) }}">
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Asked for</th>{% if can_order %}<th class="num">Send</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for l in r.lines %}{% set prod = products.get(l.product_code, {}) %}
+    <tr><td>{{ prod.name or l.product_code }}<div class="muted small mono">{{ l.product_code }}{{ ' · ' ~ prod.unit if prod.unit }}</div></td>
+      <td class="num">{{ l.on_hand|qty if l.on_hand is not none else '—' }}</td><td class="num">{{ l.qty|qty }}</td>
+      {% if can_order %}<td class="num"><input class="qty-input" type="number" name="qty-{{ l.id }}" value="{{ '%g'|format(l.qty) }}" min="0" step="any" inputmode="decimal" aria-label="Send of {{ prod.name or l.product_code }}"></td>{% endif %}</tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if can_order %}
+    {% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+    <div class="filters new-order">
+      <label>Send from <select name="warehouse">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == default_warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+    </div>
+    <p class="muted small">Change what's sent if you can't send it all (0 leaves a product off). Core makes a parked sales order to
+      {{ store_name }} in Unleashed at each product's sell price; pick, complete and send it from there as usual.</p>
+    <div class="run-actions"><button class="btn btn-primary">Make the sales order</button></div>
+  {% endif %}
+  </form>
+  {% if r.status == 'submitted' %}
+  <form method="post" action="{{ url_for('dash.store_order_cancel', request_id=r.id) }}" class="cancel-request">
+    <label class="block small">Cancel this request <input class="text-input wide" name="reason" maxlength="300" placeholder="Why (optional)"></label>
+    <button class="btn btn-quiet">Cancel the request</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

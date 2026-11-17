@@ -436,3 +436,40 @@ CREATE TABLE IF NOT EXISTS po_emails (
     sent_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS po_emails_order ON po_emails (order_number);
+
+-- Store ordering (store_orders.py). A store is an Unleashed customer ticked as a store. Its par
+-- levels: how many of each product it should have after a delivery.
+CREATE TABLE IF NOT EXISTS store_pars (
+    store_code   TEXT NOT NULL,               -- Unleashed CustomerCode
+    product_code TEXT NOT NULL,
+    par          REAL NOT NULL,
+    position     INTEGER NOT NULL,
+    updated_by   TEXT,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (store_code, product_code)
+);
+
+-- A store's request for stock, and what the warehouse did with it.
+CREATE TABLE IF NOT EXISTS store_requests (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    store_code    TEXT NOT NULL,
+    status        TEXT NOT NULL,               -- submitted | ordered | cancelled
+    notes         TEXT,
+    needed_by     TEXT,                        -- a date, or none
+    requested_by  TEXT,
+    requested_at  TEXT NOT NULL,
+    sales_order   TEXT,                        -- the Unleashed sales order made from it
+    cancel_reason TEXT,
+    handled_by    TEXT,
+    handled_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS store_request_lines (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id   INTEGER NOT NULL,
+    product_code TEXT NOT NULL,
+    on_hand      REAL,                         -- what the store counted
+    qty          REAL NOT NULL,                -- what it asked for
+    position     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS store_request_lines_request ON store_request_lines (request_id);

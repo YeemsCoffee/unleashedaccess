@@ -170,6 +170,26 @@ much to **order**.
   stock and par levels behind it. Nothing is sent until the order is checked and made.
 - A past date (As at) has no par columns: the levels and what's on order are today's.
 
+## Store ordering
+
+Warehouse → **Store orders**: stores ask the warehouse for stock, and the warehouse turns the
+request into a sales order. A store is an Unleashed customer ticked as a store under
+Settings → COGS.
+
+- **Par levels** (set by someone in Warehouse, per store): for each product the store carries,
+  how many it should have after a delivery, in the unit it's stocked in. They're kept in Core.
+- **New request**: the store's products with their pars. Store staff type what's **on hand**,
+  and **Ask for** fills in with what's needed to get back to par (rounded up); it can be changed,
+  and 0 or empty asks for none. A needed-by date and a note are optional.
+- **The warehouse** opens the request, changes what's sent if it can't send it all, picks the
+  warehouse it's sent from, and presses **Make the sales order**: a parked sales order to the
+  store in Unleashed, at each product's sell price, referenced "Store request N". From there it's
+  an ordinary sales order: picked, completed, and counted in that store's COGS. A request can also
+  be cancelled, with a reason.
+- **Access**: the **Store ordering** area (Settings → Access profiles) opens only these pages: a
+  store's staff ask for stock and see the requests, nothing else in Warehouse. Setting par levels
+  and making the sales order need Warehouse, which includes Store ordering.
+
 ## Emailing purchase orders to vendors
 
 Unleashed's API has no "email this supplier their orders" setting and sends no email, so Core
@@ -899,6 +919,7 @@ unleashedaccess/
 ├── order_pages.py      # Making, changing, completing and receiving sales and purchase orders
 ├── stock_pages.py      # the Transactions tab: recent, history, adjustments, transfers, stock counts
 ├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
+├── store_orders.py     # store par levels and requests; store_order_pages.py: their pages
 ├── vendor_email.py     # vendors that take purchase orders by email; the email and its PDF; sending (Microsoft 365 or SMTP)
 ├── simple_pdf.py       # a small PDF writer (text, lines, boxes) with nothing to install
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders
