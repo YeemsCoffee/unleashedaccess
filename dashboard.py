@@ -6,6 +6,7 @@ import hmac
 import io
 import json
 import math
+import re
 import traceback
 from functools import wraps
 
@@ -315,9 +316,33 @@ def admin_only(view):
     return wrapper
 
 
-def _safe_next(target):
-    return target if target and target.startswith("/") and not target.startswith("//") \
-        else url_for("dash.overview")
+def _safe_next(target, default=None):
+    """`target` when it's a path on this site, else the overview (or `default`). A backslash or a
+    control character is refused: browsers and the redirect drop or turn them, which can make
+    "/\t/other.site" leave this site."""
+    if target and target.startswith("/") and not target.startswith("//") \
+            and not any(c == "\\" or ord(c) < 32 or ord(c) == 127 for c in target):
+        return target
+    return default or url_for("dash.overview")
+
+
+def _back(default):
+    """The page the person came from, when it's on this site (the Referer's path); else `default`."""
+    from urllib.parse import urlsplit
+    came = urlsplit(request.referrer or "")
+    if came.netloc.lower() != (request.host or "").lower():
+        return default
+    return _safe_next(came.path + (f"?{came.query}" if came.query else ""), default)
+
+
+def _client_address():
+    """Where a request comes from, for counting wrong sign-ins. Behind the load balancer (served
+    over HTTPS: SECURE_COOKIES) that's the last address in X-Forwarded-For, which the balancer
+    adds itself; otherwise the connection's own address, as the header could say anything."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if current_app.config.get("SESSION_COOKIE_SECURE") and forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.remote_addr or ""
 
 
 @bp.before_request
@@ -400,7 +425,7 @@ def login():
         if mode == "accounts":
             email = request.form.get("email", "")
             user, error = current_app.extensions["users"].authenticate(
-                email, request.form.get("password", ""))
+                email, request.form.get("password", ""), client=_client_address())
             if user:
                 session.clear()
                 session.permanent = True
@@ -421,6 +446,9 @@ def login():
 
 @bp.post("/logout")
 def logout():
+    # Signing out ends the person's sessions everywhere, so a copied cookie stops working too.
+    if current_app.config["AUTH_MODE"] == "accounts" and session.get("user_id"):
+        current_app.extensions["users"].sign_out_everywhere(session["user_id"])
     session.clear()
     return redirect(url_for("dash.login"))
 
@@ -624,12 +652,24 @@ def _round(v, places=2):
     return "" if v is None else round(v, places)
 
 
+def _csv_cell(value):
+    """A cell as a spreadsheet should take it: text that starts like a formula (= + - @, a tab or
+    a return) gets an apostrophe in front, so it's shown, not run. Numbers are left alone."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        try:
+            float(value.replace(",", ""))
+        except ValueError:
+            return "'" + value
+    return value
+
+
 def _csv(filename, columns, rows):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([c[0] for c in columns])
     for r in rows:
-        w.writerow([(c[1](r) if callable(c[1]) else r.get(c[1])) for c in columns])
+        w.writerow([_csv_cell(c[1](r) if callable(c[1]) else r.get(c[1])) for c in columns])
+    filename = re.sub(r"[^A-Za-z0-9._-]", "-", str(filename))[:120] or "export"
     return Response(buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'})
 
@@ -1423,7 +1463,7 @@ def connection():
 @bp.post("/sync")
 def sync_now():
     _sync_soon(full=request.form.get("full") == "1" and is_admin())
-    return redirect(request.referrer or url_for("dash.overview"))
+    return redirect(_back(url_for("dash.overview")))
 
 
 def _sync_soon(full=False):

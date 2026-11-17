@@ -87,8 +87,13 @@ class Database:
     def label(self):
         if self.dialect == "sqlite":
             return f"SQLite file {os.path.basename(self.path)} (this computer only)"
-        host = re.sub(r"^[^@]*@", "", self.url.split("://", 1)[1]).split("/", 1)[0]
-        return f"PostgreSQL at {host} (shared)"
+        from urllib.parse import urlsplit
+        try:  # the host only: a password with an @ in it would otherwise leave its tail here
+            parts = urlsplit(self.url)
+            host = (parts.hostname or "") + (f":{parts.port}" if parts.port else "")
+        except ValueError:
+            host = ""
+        return f"PostgreSQL at {host or 'the database server'} (shared)"
 
     @contextmanager
     def connect(self):

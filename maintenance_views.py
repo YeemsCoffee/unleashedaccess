@@ -403,7 +403,7 @@ def order_cost_delete(cost_id):
         order_id = _store().delete_cost(cost_id)
     except MaintenanceError as e:
         flash(str(e), "warn")
-        return redirect(request.referrer or url_for("maint.orders"))
+        return redirect(dashboard._back(url_for("maint.orders")))
     flash("Removed the cost.", "ok")
     return redirect(url_for("maint.order", order_id=order_id) + "#costs" if order_id else url_for("maint.orders"))
 

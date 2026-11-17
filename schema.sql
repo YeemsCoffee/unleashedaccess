@@ -84,6 +84,17 @@ CREATE TABLE IF NOT EXISTS app_users (
     created_at           TEXT NOT NULL
 );
 
+-- Wrong sign-in tries, by the email tried and where the try came from (a network address):
+-- after too many, sign-in with that email from there is refused for a while.
+CREATE TABLE IF NOT EXISTS sign_in_attempts (
+    email        TEXT NOT NULL,              -- as typed, lowercase (it may have no account)
+    client       TEXT NOT NULL,
+    failed       INTEGER NOT NULL,
+    locked_until TEXT,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (email, client)
+);
+
 -- App-wide settings, e.g. the generated key that signs sign-in cookies.
 CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,

@@ -280,6 +280,30 @@ Warehouse, Production: what every member could see before) for everyone already
 on the team, and **Maintenance technician** (Maintenance only). Without team
 accounts (a shared password, or none) everyone opens every tab.
 
+## Sign-in and security
+
+- **Passwords** are stored only as salted hashes. Five wrong tries lock sign-in with that
+  email **from that device** (network address) for 15 minutes. It's counted per email and
+  device, so someone guessing at an account locks themselves out, not its owner, and an
+  email with no account is treated the same, so the message doesn't say which emails have
+  one. A password reset (Team page, or `ADMIN_RESET`) lifts the lock.
+- **Signing out** ends that person's sessions everywhere, as a password change, a reset or
+  deactivation do; a copied sign-in cookie stops working.
+- **Changes only from Core's own pages.** Anything but a read is refused (403) when the
+  browser says it comes from another website, including another site under the same domain
+  (`Sec-Fetch-Site`, `Origin`, or the `Referer`); the sign-in cookie is also `SameSite=Lax`.
+- **Pages** can't be shown inside another site's frame, aren't kept by the browser after
+  sign-out (`Cache-Control: no-store`), and send `X-Content-Type-Options`, `Referrer-Policy`
+  and a `Content-Security-Policy`; over HTTPS (`SECURE_COOKIES=1`) also
+  `Strict-Transport-Security`. After signing in, Core only ever redirects to its own pages.
+- **The "can't start" page** says what to fix in plain words; the technical details (which
+  can name the database) are only in the server's log.
+- **CSV exports** put an apostrophe before text that starts like a formula, so a spreadsheet
+  shows it, not runs it.
+- `python tools/route_audit.py` walks every page as a visitor who isn't signed in and as
+  someone with the narrowest access, and reports anything they can reach (see Working on Core
+  with Claude Code).
+
 ## Maintenance
 
 The maintenance scheduler, brought into Core and kept in its database (the

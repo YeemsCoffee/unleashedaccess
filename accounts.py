@@ -15,6 +15,12 @@ MAX_FAILED_SIGN_INS = 5
 LOCK_SECONDS = 15 * 60
 ROLES = ("admin", "member")
 SIGN_IN_FAILED = "That email and password don't match an account."
+# After MAX_FAILED_SIGN_INS wrong tries, sign-in with that email is refused from that device
+# (network address) for LOCK_SECONDS. Counted per email and device, so someone guessing at an
+# account locks only themselves out, not its owner; and the same for an email with no account,
+# so the message doesn't say which emails have one.
+TOO_MANY_TRIES = ("Too many wrong tries from this device. Try again in 15 minutes, or ask an admin to reset "
+                  "your password.")
 # Checked when an email isn't found, so a wrong email takes as long as a wrong password.
 _UNUSED_HASH = generate_password_hash(secrets.token_hex(16))
 
@@ -68,25 +74,43 @@ class UserStore:
 
     # ------------------------------------------------------------ signing in
 
-    def authenticate(self, email, password):
-        """(user, None) on success, or (None, message to show)."""
+    def authenticate(self, email, password, client=""):
+        """(user, None) on success, or (None, message to show). `client`: where the try comes from
+        (a network address), which wrong tries are counted against."""
+        key, client = (email or "").strip().lower()[:254], (client or "")[:64]
+        tries = self._attempts(key, client)
+        if tries and tries["locked_until"] and tries["locked_until"] > utc_now():
+            check_password_hash(_UNUSED_HASH, password or "")
+            return None, TOO_MANY_TRIES
         user = self.by_email(email)
         if user is None or not user["active"]:
             check_password_hash(_UNUSED_HASH, password or "")
-            return None, SIGN_IN_FAILED
-        if user["locked_until"] and user["locked_until"] > utc_now():
-            return None, "Too many wrong passwords. Try again in 15 minutes, or ask an admin to reset it."
-        if check_password_hash(user["password_hash"], password or ""):
-            self._try_write("UPDATE app_users SET failed_sign_ins = 0, locked_until = NULL,"
-                            " last_sign_in_at = ? WHERE id = ?", (utc_now(), user["id"]))
+            user = None
+        elif check_password_hash(user["password_hash"], password or ""):
+            self._try_write("DELETE FROM sign_in_attempts WHERE email = ? AND client = ?", (key, client))
+            self._try_write("UPDATE app_users SET last_sign_in_at = ? WHERE id = ?", (utc_now(), user["id"]))
             return user, None
-        failed = user["failed_sign_ins"] + 1
-        if failed >= MAX_FAILED_SIGN_INS:
-            self._try_write("UPDATE app_users SET failed_sign_ins = 0, locked_until = ? WHERE id = ?",
-                            (utc_now(LOCK_SECONDS), user["id"]))
-            return None, "Too many wrong passwords. Try again in 15 minutes, or ask an admin to reset it."
-        self._try_write("UPDATE app_users SET failed_sign_ins = ? WHERE id = ?", (failed, user["id"]))
-        return None, SIGN_IN_FAILED
+        failed = (tries["failed"] if tries else 0) + 1
+        locked = failed >= MAX_FAILED_SIGN_INS
+        self._try_write("DELETE FROM sign_in_attempts WHERE email = ? AND client = ?", (key, client))
+        self._try_write("INSERT INTO sign_in_attempts (email, client, failed, locked_until, updated_at)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        (key, client, 0 if locked else failed, utc_now(LOCK_SECONDS) if locked else None, utc_now()))
+        # Tries from a day ago no longer count; clearing them keeps the table small.
+        self._try_write("DELETE FROM sign_in_attempts WHERE updated_at < ?", (utc_now(-24 * 3600),))
+        return None, TOO_MANY_TRIES if locked else SIGN_IN_FAILED
+
+    def _attempts(self, key, client):
+        try:
+            rows = self.db.query("SELECT failed, locked_until FROM sign_in_attempts WHERE email = ? AND client = ?",
+                                 (key, client))
+        except Exception:  # noqa: BLE001 (a viewer on a database from before this table)
+            return None
+        return rows[0] if rows else None
+
+    def sign_out_everywhere(self, user_id):
+        """End every session of this person (sign-out: a copied cookie stops working too)."""
+        self._try_write("UPDATE app_users SET session_version = session_version + 1 WHERE id = ?", (user_id,))
 
     def _try_write(self, sql, args):
         # View-only instances may use a read-only database login; sign-in still works there.
@@ -118,7 +142,10 @@ class UserStore:
             "UPDATE app_users SET password_hash = ?, must_change_password = ?,"
             " session_version = session_version + 1, failed_sign_ins = 0, locked_until = NULL"
             " WHERE id = ?", (generate_password_hash(password), 1 if must_change else 0, user_id))
-        return self.get(user_id)
+        user = self.get(user_id)
+        if user:  # a new password lifts any lock on signing in
+            self._try_write("DELETE FROM sign_in_attempts WHERE email = ?", (user["email"],))
+        return user
 
     def reset_password(self, user_id):
         """Give the person a temporary password they must change; returns it."""
@@ -167,10 +194,24 @@ class UserStore:
             self.db.execute("UPDATE app_users SET role = 'admin', active = 1 WHERE id = ?", (user["id"],))
             self.set_password(user["id"], password, must_change=True)
             note = f"restored admin access for {user['email']}"
-        self.db.execute("INSERT INTO app_settings (key, value) VALUES ('admin_reset_applied', ?)"
-                        " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                        (generate_password_hash(token),))
+        for key, value in (("admin_reset_applied", generate_password_hash(token)), ("admin_reset_applied_at", utc_now())):
+            self.db.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)"
+                            " ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
         return note
+
+    def reset_applied_at(self, email, password):
+        """When a reset with exactly this email and password was applied (UTC, "" if it was before
+        the time was kept); None if none has been. A reset applies once for each pair, so with the
+        same ADMIN_PASSWORD again, ADMIN_RESET changes nothing."""
+        try:
+            rows = {r["key"]: r["value"] for r in self.db.query(
+                "SELECT key, value FROM app_settings WHERE key IN ('admin_reset_applied', 'admin_reset_applied_at')")}
+        except Exception:  # noqa: BLE001
+            return None
+        token = f"{(email or '').strip().lower()}\n{password}"
+        if not rows.get("admin_reset_applied") or not check_password_hash(rows["admin_reset_applied"], token):
+            return None
+        return rows.get("admin_reset_applied_at") or ""
 
 
 def app_secret(db):

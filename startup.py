@@ -101,7 +101,6 @@ class StartupGuard:
 
     def _problem_page(self, environ, start_response):
         headline, todo = explain(self.error)
-        detail = f"{self.error.__class__.__name__}: {self.error}".strip()
         if environ.get("PATH_INFO") == "/healthz":
             body = '{"status": "error", "problem": %s}' % _json_string(headline)
             start_response("503 Service Unavailable", [("Content-Type", "application/json"),
@@ -120,7 +119,8 @@ pre{{white-space:pre-wrap;background:#f4f3f0;padding:12px;border-radius:8px;font
 <p class="todo">{html.escape(todo)}</p>
 <p class="muted">After you change a setting, the app restarts by itself. It also tries again every
 {self.retry_seconds} seconds, and this page refreshes on its own.</p>
-<p class="muted">Technical details:</p><pre>{html.escape(detail)}</pre>
+<p class="muted">The technical details are in the server's log (Elastic Beanstalk: Logs, Request logs), not
+on this page, which anyone can open.</p>
 </body></html>"""
         start_response("503 Service Unavailable", [("Content-Type", "text/html; charset=utf-8"),
                                                    ("Retry-After", str(self.retry_seconds))])

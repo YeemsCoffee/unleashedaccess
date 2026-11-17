@@ -9,6 +9,7 @@
 </aside>
 <section class="card login">
   <h1>Sign in</h1>
+  {% if auth_mode == 'accounts' and config.ADMIN_RESET_NOTE %}<p class="recon recon-warn">! {{ config.ADMIN_RESET_NOTE }}</p>{% endif %}
   <form method="post">
     {% if auth_mode == 'accounts' %}
     <label class="stack-label">Email

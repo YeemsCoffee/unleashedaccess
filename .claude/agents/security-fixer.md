@@ -11,9 +11,17 @@ You fix security findings in Core, a Flask app. You are given one confirmed find
 4. Run the targeted tests, then the whole suite (`python -m pytest -q`, about five minutes). Re-run `python tools/route_audit.py` when the fix touches access, cookies or headers.
 5. Update `README.md` and `docs/aws-setup.md` when a setting or behaviour changes.
 
-## Known open items (as of the first audit)
-- Forms have no CSRF token; the app relies on the `SameSite=Lax` cookie.
-- Pages send no Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Referrer-Policy or Strict-Transport-Security header (file downloads do send a CSP).
+## Already fixed (don't redo; check they still hold)
+- Changes from another site are refused in one place (`_own_forms_only` in `app.py`: Sec-Fetch-Site, Origin, Referer). There are still no per-form CSRF tokens.
+- Security headers come from `_security_headers` in `app.py`; `_safe_next` and `_back` in `dashboard.py` keep redirects on the site.
+- Wrong sign-ins are counted per email and device (`sign_in_attempts`, `accounts.py`); sign-out bumps the session version.
+- The can't-start page shows no technical details; CSV cells are neutralised (`_csv_cell`).
+
+## Still open from the first audit
+- `SECRET_KEY` falls back to a guessable value if reading it from the database fails at startup.
+- Any signed-in person can start a sync; shared-password mode has no limit on guesses.
+- No cap on how many 16 MB files one person can attach; `requirements.txt` has no pinned versions.
+- A few malformed URLs give a generic 500 (`/maintenance/locations?parent=abc`, list pages with `?endpoint=x`).
 Check whether each is still open before working on it.
 
 ## Report

@@ -29,7 +29,7 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "maint_completions", "maint_attachments", "maint_equipment", "maint_equipment_moves",
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
               "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines",
-              "vendor_email_settings", "po_emails")
+              "vendor_email_settings", "po_emails", "sign_in_attempts")
 
 
 def sqlite_database(testcase):
@@ -3615,17 +3615,139 @@ class TeamAccountTests(unittest.TestCase):
         self.assertIn("✓ Barista Bea", page)
         self.assertIn("Complete order", page)
 
-    def test_wrong_passwords_lock_the_account(self):
+    def test_wrong_passwords_lock_that_device_out_not_the_account(self):
+        """Five wrong tries lock sign-in with that email from that device for 15 minutes. Someone
+        guessing locks only themselves out; the owner still signs in from elsewhere."""
+        guesser, owner = {"REMOTE_ADDR": "203.0.113.9"}, {"REMOTE_ADDR": "198.51.100.4"}
         c = self.app.test_client()
-        unknown = self._sign_in(c, "nobody@yeems.test", "whatever-pass").get_data(as_text=True)
-        self.assertIn("don&#39;t match", unknown)
+
+        def sign_in(email, password, where):
+            return c.post("/login", data={"email": email, "password": password}, environ_base=where)
+
         for _ in range(4):
-            self.assertIn("don&#39;t match",
-                          self._sign_in(c, "owner@yeems.test", "wrong-pass").get_data(as_text=True))
-        self.assertIn("Too many wrong passwords",
-                      self._sign_in(c, "owner@yeems.test", "wrong-pass").get_data(as_text=True))
-        locked = self._sign_in(c, "owner@yeems.test", "first-temp-pass")
-        self.assertIn("Too many wrong passwords", locked.get_data(as_text=True))
+            self.assertIn("don&#39;t match", sign_in("owner@yeems.test", "wrong-pass", guesser).get_data(as_text=True))
+        self.assertIn("Too many wrong tries", sign_in("owner@yeems.test", "wrong-pass", guesser).get_data(as_text=True))
+        # From the guesser's device even the right password is refused now...
+        self.assertIn("Too many wrong tries", sign_in("owner@yeems.test", "first-temp-pass", guesser).get_data(as_text=True))
+        # ...but the owner, somewhere else, signs in.
+        self.assertEqual(sign_in("owner@yeems.test", "first-temp-pass", owner).headers["Location"], "/account")
+        # An email with no account is treated the same, so the message doesn't say which emails have one.
+        for _ in range(4):
+            self.assertIn("don&#39;t match", sign_in("nobody@yeems.test", "x", guesser).get_data(as_text=True))
+        self.assertIn("Too many wrong tries", sign_in("nobody@yeems.test", "x", guesser).get_data(as_text=True))
+        # A forged X-Forwarded-For doesn't get a new count unless Core is behind the load balancer.
+        forged = c.post("/login", data={"email": "owner@yeems.test", "password": "wrong-pass"}, environ_base=guesser,
+                        headers={"X-Forwarded-For": "10.9.9.9"})
+        self.assertIn("Too many wrong tries", forged.get_data(as_text=True))
+        # A password reset lifts the lock.
+        users = self.app.extensions["users"]
+        users.set_password(users.by_email("owner@yeems.test")["id"], "another-temp-pass", must_change=True)
+        self.assertEqual(sign_in("owner@yeems.test", "another-temp-pass", guesser).headers["Location"], "/account")
+
+    def test_changes_from_other_sites_are_refused_and_pages_carry_security_headers(self):
+        admin = self._admin_client()
+        mo = self._add(admin, "Mo", "mo@yeems.test")
+        mo_id = next(u["id"] for u in self.app.extensions["users"].all() if u["email"] == "mo@yeems.test")
+        # Another website posting with the admin's cookie: refused, and nothing changes.
+        for headers in ({"Origin": "https://evil.example"}, {"Referer": "https://evil.example/page"},
+                        {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site", "Origin": "https://shop.localhost"},
+                        {"Origin": "null"}):
+            res = admin.post(f"/team/{mo_id}", data={"action": "access", "access": "admin"}, headers=headers)
+            self.assertEqual(res.status_code, 403, headers)
+            self.assertIn("came from another website", res.get_data(as_text=True))
+        self.assertEqual(self.app.extensions["users"].get(mo_id)["role"], "member")
+        # Core's own page (the same host), and a request that says nothing, go through.
+        ok = admin.post(f"/team/{mo_id}", data={"action": "access", "access": "admin"},
+                        headers={"Origin": "http://localhost", "Sec-Fetch-Site": "same-origin"})
+        self.assertNotEqual(ok.status_code, 403)
+        self.assertEqual(self.app.extensions["users"].get(mo_id)["role"], "admin")
+        # Reading is never refused.
+        self.assertEqual(admin.get("/team", headers={"Sec-Fetch-Site": "cross-site"}).status_code, 200)
+
+        page = admin.get("/team")
+        self.assertEqual(page.headers["X-Frame-Options"], "DENY")
+        self.assertEqual(page.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(page.headers["Referrer-Policy"], "same-origin")
+        self.assertIn("frame-ancestors 'none'", page.headers["Content-Security-Policy"])
+        self.assertEqual(page.headers["Cache-Control"], "no-store")
+        self.assertNotIn("Strict-Transport-Security", page.headers)  # only when served over HTTPS
+        self.assertNotIn("no-store", self.app.test_client().get("/static/dash.css").headers.get("Cache-Control", ""))
+        secure = self._app(SESSION_COOKIE_SECURE=True).test_client().get("/login")
+        self.assertIn("max-age=", secure.headers["Strict-Transport-Security"])
+
+    def test_sign_in_never_redirects_off_the_site_and_sign_out_ends_every_session(self):
+        import dashboard
+        with self.app.test_request_context("/"):
+            for bad in ("//evil.example", "https://evil.example", "/\t/evil.example", "/\\evil.example", "/\n/x", "x"):
+                self.assertEqual(dashboard._safe_next(bad), "/", repr(bad))
+            self.assertEqual(dashboard._safe_next("/cogs?month=2026-07"), "/cogs?month=2026-07")
+        admin = self._admin_client()  # has chosen a password, so sign-in goes where `next` says
+        admin.post("/logout")
+        res = admin.post("/login?next=/%09/evil.example/login", data={"email": "owner@yeems.test",
+                                                                      "password": "owner-own-password"})
+        self.assertEqual(res.headers["Location"], "/")
+        # Sync now goes back to the page it was pressed on, never to another site.
+        self.assertEqual(admin.post("/sync", headers={"Referer": "http://localhost/cogs?month=2026-07"}).headers["Location"],
+                         "/cogs?month=2026-07")
+        # A copy of the sign-in cookie stops working once the person signs out.
+        copy = self.app.test_client()
+        cookie = admin.get_cookie("session")
+        copy.set_cookie("session", cookie.value)
+        self.assertEqual(copy.get("/team").status_code, 200)
+        admin.post("/logout")
+        self.assertIn("/login", copy.get("/team").headers["Location"])
+
+    def test_the_cant_start_page_keeps_technical_details_to_the_log(self):
+        from startup import StartupGuard
+        def broken():
+            raise RuntimeError('connection failed: invalid percent-encoded token: "hunter2%zz" at db.internal:5432')
+        guard = StartupGuard(broken, retry_seconds=30)
+        seen = {}
+        body = b"".join(guard({"PATH_INFO": "/", "REQUEST_METHOD": "GET"}, lambda status, headers: seen.update(status=status)))
+        self.assertTrue(seen["status"].startswith("503"))
+        for secret in (b"hunter2", b"db.internal", b"RuntimeError"):
+            self.assertNotIn(secret, body)
+        self.assertIn(b"server's log", body)
+
+    def test_exports_dont_run_formulas(self):
+        import dashboard
+        self.assertEqual(dashboard._csv_cell('=HYPERLINK("https://evil.example","click")'), "'=HYPERLINK(\"https://evil.example\",\"click\")")
+        self.assertEqual(dashboard._csv_cell("@SUM(A1)"), "'@SUM(A1)")
+        self.assertEqual(dashboard._csv_cell("-12.50"), "-12.50")  # a number stays a number
+        self.assertEqual(dashboard._csv_cell(-3.5), -3.5)
+        self.assertEqual(dashboard._csv_cell("Milk"), "Milk")
+        from unleashed.db import Database
+        db = Database.__new__(Database)
+        db.dialect, db.url = "postgres", "postgresql://admin:first@SECONDHALF@db.example.test:5432/core"
+        self.assertEqual(db.label, "PostgreSQL at db.example.test:5432 (shared)")
+
+    def test_an_admin_reset_says_on_the_sign_in_page_whether_it_applied(self):
+        """ADMIN_RESET applies once for each ADMIN_PASSWORD. It used to do nothing, silently, the
+        second time; the sign-in page now says what happened and which password to use."""
+        self._admin_client()  # the owner has chosen a password
+        self.assertNotIn("ADMIN_RESET", self.app.test_client().get("/login").get_data(as_text=True))
+        first = self._app(ADMIN_RESET=True, ADMIN_PASSWORD="reset-pass-one ")  # a space pasted after it
+        page = first.test_client().get("/login").get_data(as_text=True)
+        self.assertIn("Admin access was restored when Core started", page)
+        self.assertIn("not your old password", page)
+        self.assertNotIn("reset-pass-one", page)  # never the password itself
+        c = first.test_client()
+        self.assertIn("don&#39;t match", self._sign_in(c, "owner@yeems.test", "owner-own-password").get_data(as_text=True))
+        self.assertEqual(self._sign_in(c, "owner@yeems.test", "reset-pass-one").headers["Location"], "/account")
+        # Started again with the same password: nothing changes, and the page says so.
+        again = self._app(ADMIN_RESET=True, ADMIN_PASSWORD="reset-pass-one")
+        page = again.test_client().get("/login").get_data(as_text=True)
+        self.assertIn("was already applied with this ADMIN_PASSWORD on 20", page)
+        self.assertIn("never used for a reset", page)
+        # A reset lifts a lock: five wrong tries, then a new ADMIN_PASSWORD signs in straight away.
+        for _ in range(5):
+            self._sign_in(c, "owner@yeems.test", "wrong-pass")
+        self.assertIn("Too many wrong tries", self._sign_in(c, "owner@yeems.test", "reset-pass-one").get_data(as_text=True))
+        fresh = self._app(ADMIN_RESET=True, ADMIN_PASSWORD="reset-pass-two")
+        self.assertEqual(self._sign_in(fresh.test_client(), "owner@yeems.test", "reset-pass-two").headers["Location"], "/account")
+        # Without the email or the password, it says nothing was reset.
+        missing = self._app(ADMIN_RESET=True, ADMIN_PASSWORD="")
+        self.assertIn("ADMIN_EMAIL or ADMIN_PASSWORD is missing", missing.test_client().get("/login").get_data(as_text=True))
 
     def test_deactivating_or_resetting_signs_the_person_out(self):
         admin = self._admin_client()

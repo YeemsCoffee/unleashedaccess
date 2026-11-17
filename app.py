@@ -2,7 +2,7 @@
 import hashlib
 import os
 
-from flask import Flask, redirect, request
+from flask import Flask, redirect, request, render_template_string
 
 import dashboard
 import maintenance
@@ -39,7 +39,7 @@ def create_app(test_config=None):
         TIMEZONE=env("TIMEZONE", "").strip(),
         # Team accounts: the first admin (or, with ADMIN_RESET=1, restoring admin access).
         ADMIN_EMAIL=env("ADMIN_EMAIL", "").strip(),
-        ADMIN_PASSWORD=env("ADMIN_PASSWORD", ""),
+        ADMIN_PASSWORD=env("ADMIN_PASSWORD", "").strip(),  # a space pasted after it isn't part of it
         ADMIN_NAME=env("ADMIN_NAME", "").strip(),
         ADMIN_RESET=env("ADMIN_RESET", "") == "1",
         # Simpler alternative to accounts: one shared password (ignored once accounts exist).
@@ -119,13 +119,40 @@ def create_app(test_config=None):
     profiles = Profiles(db)
     app.extensions["profiles"] = profiles
     cfg["ADMIN_SETUP_NOTE"] = None
-    if cfg["ADMIN_EMAIL"] and cfg["ADMIN_PASSWORD"] and not viewer:
+    # What the sign-in page says while ADMIN_RESET is set: whether the reset applied and which
+    # password to use (it used to do nothing, silently, when it had already been used).
+    cfg["ADMIN_RESET_NOTE"] = None
+    cfg["ADMIN_PASSWORD"] = (cfg["ADMIN_PASSWORD"] or "").strip()  # a space pasted after it isn't part of it
+    # A view-only copy takes no part in setting up accounts, but a reset asked for is still tried.
+    if cfg["ADMIN_EMAIL"] and cfg["ADMIN_PASSWORD"] and (not viewer or cfg["ADMIN_RESET"]):
+        already = users.reset_applied_at(cfg["ADMIN_EMAIL"], cfg["ADMIN_PASSWORD"]) if cfg["ADMIN_RESET"] else None
         try:
             cfg["ADMIN_SETUP_NOTE"] = users.ensure_admin(
                 cfg["ADMIN_EMAIL"], cfg["ADMIN_PASSWORD"], name=cfg["ADMIN_NAME"],
                 reset=cfg["ADMIN_RESET"])
         except AccountError as e:
             raise AccountError(f"ADMIN_EMAIL / ADMIN_PASSWORD settings: {e}") from e
+        except Exception:  # noqa: BLE001 (a view-only copy whose database login can't write)
+            if not viewer:
+                raise
+            cfg["ADMIN_RESET_NOTE"] = ("ADMIN_RESET is set, but this copy of Core is view-only and couldn't change the "
+                                       "account. Apply it on the copy that has the Unleashed API settings.")
+        else:
+            if cfg["ADMIN_RESET"] and cfg["ADMIN_SETUP_NOTE"]:
+                cfg["ADMIN_RESET_NOTE"] = (
+                    "Admin access was restored when Core started. Sign in with the ADMIN_EMAIL address and the "
+                    "ADMIN_PASSWORD value from the settings, not your old password. You'll then choose a new one.")
+            elif cfg["ADMIN_RESET"] and already is not None:
+                cfg["ADMIN_RESET_NOTE"] = (
+                    f"ADMIN_RESET is set, and was already applied with this ADMIN_PASSWORD{' on ' + already[:16] + ' UTC' if already else ''}"
+                    ", so nothing changed this time. If you haven't chosen a new password since, sign in with the "
+                    "ADMIN_PASSWORD value. Otherwise set ADMIN_PASSWORD to one never used for a reset and apply again.")
+    elif cfg["ADMIN_RESET"]:
+        cfg["ADMIN_RESET_NOTE"] = ("ADMIN_RESET is set, but ADMIN_EMAIL or ADMIN_PASSWORD is missing, so nothing was reset. "
+                                   "Add both (the password at least 10 characters) and apply.")
+    for note in (cfg["ADMIN_SETUP_NOTE"], cfg["ADMIN_RESET_NOTE"]):
+        if note:
+            app.logger.warning("Team accounts: %s", note)
     if not viewer:
         profiles.seed()
     try:
@@ -146,6 +173,44 @@ def create_app(test_config=None):
                 return redirect(request.url.replace("http://", "https://", 1),
                                 code=301 if request.method in ("GET", "HEAD") else 308)
             return None
+
+    @app.before_request
+    def _own_forms_only():
+        """A change (anything but a read) must come from Core's own pages. Browsers say where a
+        request comes from (Sec-Fetch-Site, Origin, or the Referer): one from another site, or
+        from another site under the same domain, is refused, so a page elsewhere can't act as
+        the person signed in here. A request that says nothing (not a browser) is let through:
+        it carries no one's sign-in by accident."""
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+        from urllib.parse import urlsplit
+        site = request.headers.get("Sec-Fetch-Site", "").strip().lower()
+        source = request.headers.get("Origin") or request.headers.get("Referer")
+        foreign = site in ("cross-site", "same-site") or (
+            source is not None and urlsplit(source).netloc.lower() != (request.host or "").lower())
+        if not foreign:
+            return None
+        return render_template_string(
+            "<!doctype html><title>Not done</title><body style=\"font:16px/1.5 system-ui,sans-serif;max-width:560px;"
+            "margin:48px auto;padding:0 16px\"><h1 style=\"font-size:22px\">That wasn't done</h1><p>The request came "
+            "from another website, not from a Core page, so Core refused it. If you pressed a button in Core, go back, "
+            "reload the page and try again.</p>"), 403
+
+    @app.after_request
+    def _security_headers(response):
+        """Headers that limit what a browser lets other sites do with Core's pages. Set only where
+        a page hasn't set its own (file downloads have a stricter policy)."""
+        h = response.headers
+        h.setdefault("X-Frame-Options", "DENY")  # not shown inside another site's frame
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("Referrer-Policy", "same-origin")
+        h.setdefault("Content-Security-Policy",
+                     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")
+        if cfg["SESSION_COOKIE_SECURE"]:
+            h.setdefault("Strict-Transport-Security", "max-age=31536000")
+        if response.mimetype == "text/html":  # pages aren't kept by the browser after sign-out
+            h.setdefault("Cache-Control", "no-store")
+        return response
 
     dashboard.init_app(app)
     maintenance.init_app(app)
