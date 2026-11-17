@@ -185,6 +185,7 @@ class Reports:
             min_order = _first(supplier.get("MinimumOrderQuantity"), p.get("MinimumOrderQuantity"))
             position = (r["qty"] or 0) + (r["on_purchase"] or 0) - (r["allocated"] or 0)
             r.update({"par_min": low, "par_max": high, "par_by_warehouse": by_warehouse, "position": position,
+                      "made": bool(p.get("IsAssembledProduct")),
                       "supplier_code": supplier.get("SupplierCode"), "supplier_name": supplier.get("SupplierName"),
                       "min_order": min_order or None,
                       "recommended": recommended_order(position, low, high, min_order)})

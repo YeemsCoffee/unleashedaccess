@@ -57,7 +57,8 @@
       <td class="num" {% if r.par_by_warehouse %}title="{{ by_wh|trim }}"{% endif %}>{{ r.par_min|qty if r.par_min is not none else '—' }}</td>
       <td class="num" {% if r.par_by_warehouse %}title="{{ by_wh|trim }}"{% endif %}>{{ r.par_max|qty if r.par_max is not none else '—' }}</td>
       <td class="num">{% if r.recommended %}<strong>{{ r.recommended|qty }}</strong>{% if r.supplier_code %}
-        <div class="small"><a href="{{ url_for('dash.purchase_order_new', supplier=r.supplier_code, to_order=1) }}" title="A draft purchase order for everything {{ r.supplier_name }} needs to send">Order →</a></div>{% endif %}{% else %}—{% endif %}</td>{% endif %}
+        <div class="small"><a href="{{ url_for('dash.purchase_order_new', supplier=r.supplier_code, to_order=1) }}" title="A draft purchase order for everything {{ r.supplier_name }} needs to send">Order →</a></div>{% elif r.made %}
+        <div class="small"><a href="{{ url_for('dash.production_plan') }}" title="Made here: see what to make">Make →</a></div>{% endif %}{% else %}—{% endif %}</td>{% endif %}
       <td class="num">{{ r.avg_cost|money }}</td><td class="num">{{ r.value|money }}</td>
       <td class="num">{{ r.days_since_sale if r.days_since_sale is not none else '—' }}</td>
     </tr>

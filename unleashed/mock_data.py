@@ -493,8 +493,11 @@ class MockDataset:
         """(minimum, maximum) stock level of a bought product; (None, None) for one made in-house
         or not stocked."""
         p = self.products[code]
-        if not p.get("SupplierCode") or p.get("NonStock"):
+        if p.get("NonStock"):
             return None, None
+        if not p.get("SupplierCode"):  # made here: two days' use at least, four at most
+            low = math.ceil(p["DailyUse"] * 2) or 1
+            return float(low), float(max(math.ceil(p["DailyUse"] * 4), low + 1))
         sup = self.suppliers[p["SupplierCode"]]
         low = math.ceil(p["PlanUse"] * sup["LeadDays"] * 2) or 1
         return float(low), float(max(math.ceil(p["PlanUse"] * sup["CoverDays"]), low + 1))

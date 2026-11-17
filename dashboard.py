@@ -147,7 +147,8 @@ _TABS = [
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
                    ("dash.store_orders", "Store orders", "store_orders"),
                    ("dash.transactions", "Transactions"), ("dash.batches", "Batches")]),
-    ("production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
+    ("production", [("dash.production", "Overview"), ("dash.production_plan", "Plan"),
+                    ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
                     ("dash.production_boms", "Bills of materials"),
                     ("dash.production_usage", "Component usage")]),
@@ -1450,6 +1451,19 @@ def production_requirements():
             ("Source", lambda x: "Make" if x["made_here"] else "Buy"),
         ], req["components"])
     return _render_production("production_requirements", req=req, through=through, csv_url=_csv_url())
+
+
+@bp.get("/production/plan")
+def production_plan():
+    """What to make now, from the par levels of products made here."""
+    plan = _production().plan(no_quantity=current_app.extensions["production_runs"].no_quantity_guids())
+    if _wants_csv():
+        return _csv("production-plan", [
+            ("Product", "product_code"), ("Description", "description"), ("On hand", "on_hand"),
+            ("Open orders", "open_qty"), ("Min", "min"), ("Max", "max"), ("Make", "make"), ("Can make", "can_make"),
+            ("Short", lambda x: "; ".join(f"{s['product_code']} {round(s['need'] - s['available'], 4)}" for s in x["short"])),
+        ], plan["rows"])
+    return _render_production("production_plan", plan=plan, csv_url=_csv_url())
 
 
 @bp.get("/production/boms")

@@ -203,6 +203,68 @@ class Production:
             "shortage_value": sum(c["shortage_value"] for c in components.values()),
         }
 
+    # ------------------------------------------------------------ planning
+
+    def plan(self, no_quantity=frozenset()):
+        """What to make now, from the par levels of products made here: for each one at or below
+        its minimum, how many to make (to its maximum, as Stock on hand's recommended order), how
+        many the components on hand allow after the open production orders and the products more
+        urgent than it, and which components are short. `no_quantity`: the guids of open orders
+        opened without a quantity (their placeholder isn't counted as coming).
+
+        {"rows": [{"product_code", "description", "on_hand", "allocated", "open_qty", "open_orders",
+        "uncounted", "position", "min", "max", "make", "can_make", "short": [{"product_code",
+        "description", "need", "available"}], "unit_cost"}], "without_pars": [codes]}"""
+        from .reports import par_levels, recommended_order
+        boms = [b for b in self.reports.bills_of_materials() if not b["obsolete"]]
+        products = {p.get("ProductCode"): p for p in self.reports.products()}
+        stock = self._stock()
+        open_orders = [a for a in self.reports.assemblies() if a["open"]]
+        left = dict(_for_production(stock, open_orders, boms))
+        for o in open_orders:  # what the open orders will take comes off first
+            for n in _needs(o, bom_for(o["product_code"], boms)):
+                left[n["product_code"]] = left.get(n["product_code"], 0) - n["consumed"]
+        rows, without = [], []
+        for b in boms:
+            code = b["product_code"]
+            if any(r["product_code"] == code for r in rows):
+                continue
+            low, high, _ = par_levels(products.get(code) or {})
+            if low is None and high is None:
+                without.append(code)
+                continue
+            s = stock.get(code, {})
+            mine = [o for o in open_orders if o["product_code"] == code]
+            counted = [o for o in mine if o.get("guid") not in no_quantity]
+            open_qty = sum(o["qty"] or 0 for o in counted)
+            position = (s.get("qty") or 0) - (s.get("allocated") or 0) + open_qty
+            make = recommended_order(position, low, high)
+            rows.append({"product_code": code, "description": b["description"], "bom": b, "on_hand": s.get("qty") or 0,
+                         "allocated": s.get("allocated") or 0, "open_qty": open_qty, "open_orders": len(mine),
+                         "uncounted": len(mine) - len(counted), "position": position, "min": low, "max": high,
+                         "make": make, "unit_cost": b["unit_cost"]})
+        # The most urgent first (furthest below its minimum, for its size), taking components in turn.
+        rows.sort(key=lambda r: (r["make"] is None, (r["position"] - (r["min"] or 0)) / max(r["max"] or r["min"] or 1, 1),
+                                 r["product_code"]))
+        for r in rows:
+            r["short"], r["can_make"] = [], None
+            if not r["make"]:
+                continue
+            counts = []
+            for l in r["bom"]["lines"]:
+                if l["per_unit"] <= 0:
+                    continue
+                have = max(left.get(l["product_code"], 0), 0)
+                need = l["per_unit"] * r["make"]
+                counts.append(have / l["per_unit"])
+                if need > have + 1e-9:
+                    r["short"].append({"product_code": l["product_code"], "description": l["description"],
+                                       "need": need, "available": have})
+            r["can_make"] = min(int(min(counts) + 1e-9), int(r["make"])) if counts else int(r["make"])
+            for l in r["bom"]["lines"]:  # what this one will use isn't there for the next
+                left[l["product_code"]] = left.get(l["product_code"], 0) - l["per_unit"] * r["can_make"]
+        return {"rows": rows, "without_pars": without}
+
     # ------------------------------------------------------------ usage
 
     def usage(self, start, end, planned=None):

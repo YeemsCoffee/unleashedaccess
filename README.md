@@ -205,6 +205,20 @@ Warehouse → **Batches**, for batch-tracked products:
   component it used. One that used the product without saying (as older ones may) is listed
   separately under **May have gone into**, since any of its batches might be the one.
 
+## Production plan
+
+Production → **Plan**: what to make now, from the par levels of the products made here (their
+minimum and maximum stock levels in Unleashed, as on Stock on hand).
+
+- A product is due once its stock (on hand − allocated + open production orders) is down to its
+  minimum; **Make** is enough to get back to its maximum, rounded up. An open order opened without
+  a quantity isn't counted as coming (its 1 is a placeholder), and the page says so.
+- **Can make** is what the components on hand allow, after the open production orders and the
+  products above it in the list (the most urgent first), and **Short** names each component there
+  isn't enough of. **Start →** opens a new production order for it.
+- On Stock on hand, a product made here that's at or below its minimum has **Make →** (to this
+  page) instead of Order. Products made here without par levels are listed so they can be set.
+
 ## Supplier prices
 
 - **On a purchase order's form**, each line shows the last price paid for that product in that

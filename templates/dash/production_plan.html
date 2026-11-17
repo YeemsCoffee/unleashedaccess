@@ -1,0 +1,39 @@
+{% extends "dash/base.html" %}
+{% from "dash/_macros.html" import production_notice %}
+{% block title %}Production plan{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>What to make</h1>
+  <a class="btn" href="{{ csv_url }}">Export CSV</a>
+</div>
+{{ production_notice(problem) }}
+{% set due = plan.rows|selectattr('make')|list %}
+<p class="muted">Products made here, against their par levels (each product's minimum and maximum stock levels in Unleashed). One is
+  due to be made once its stock (on hand − allocated + open production orders) is down to its minimum; then enough to get back to its
+  maximum. <strong>Can make</strong> is what the components allow after the open production orders and the products above it.</p>
+<section class="card">
+  {% if due %}<p class="recon recon-warn">! {{ due|length }} product{{ 's' if due|length != 1 }} to make.</p>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Open orders</th><th class="num">Min</th><th class="num">Max</th>
+      <th class="num">Make</th><th class="num">Can make</th><th>Short</th><th></th></tr></thead>
+    <tbody>
+    {% for r in plan.rows %}
+    <tr class="{{ 'row-warn' if r.make and r.short }}">
+      <td>{{ r.description or r.product_code }}<div class="muted small mono">{{ r.product_code }}</div></td>
+      <td class="num">{{ r.on_hand|qty }}{% if r.allocated %}<div class="muted small">{{ r.allocated|qty }} allocated</div>{% endif %}</td>
+      <td class="num">{{ r.open_qty|qty if r.open_orders else '—' }}{% if r.uncounted %}<div class="muted small">{{ r.uncounted }} without a quantity yet</div>{% endif %}</td>
+      <td class="num">{{ r.min|qty if r.min is not none else '—' }}</td><td class="num">{{ r.max|qty if r.max is not none else '—' }}</td>
+      <td class="num">{% if r.make %}<strong>{{ r.make|qty }}</strong>{% else %}—{% endif %}</td>
+      <td class="num">{% if r.make %}{{ r.can_make|qty }}{% else %}{% endif %}</td>
+      <td>{% for s in r.short %}<div class="small due-late">{{ s.description or s.product_code }}: need {{ s.need|qty }}, {{ s.available|qty }} left</div>{% endfor %}</td>
+      <td>{% if r.make %}<a class="btn btn-quiet" href="{{ url_for('dash.production_new', product=r.product_code) }}">Start →</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9" class="muted">No product made here has par levels in Unleashed yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if plan.without_pars %}<p class="muted small">Made here without par levels (set them on the product in Unleashed to plan them): {{ plan.without_pars|join(', ') }}.</p>{% endif %}
+  <p class="muted small">Short components go on the next purchase order: Stock on hand → <a href="{{ url_for('dash.stock_on_hand', to_order=1) }}">To order only</a>.</p>
+</section>
+{% endblock %}

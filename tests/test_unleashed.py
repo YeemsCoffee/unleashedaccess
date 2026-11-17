@@ -852,7 +852,8 @@ class OrderPageTests(unittest.TestCase):
         low, high = self.ds.par_levels("MILK-WHL-GAL")
         self.assertEqual((milk["par_min"], milk["par_max"], milk["supplier_code"]), (low, high, "SUP-DAIRY"))
         self.assertEqual(rows["SYR-VAN-750"]["par_by_warehouse"][0]["warehouse"], "GDN")  # per warehouse in Unleashed
-        self.assertIsNone(rows["CB-CONC-GAL"]["par_min"])  # made in-house: no levels set
+        self.assertTrue(rows["CB-CONC-GAL"]["made"])  # made in-house: Make, not Order
+        self.assertIsNone(rows["CB-CONC-GAL"]["supplier_code"])
         self.assertIsNone(milk["recommended"])
         # Milk is counted down to 2 gallons: below its minimum, so the difference to its maximum is recommended.
         self.ds.count_stock(TODAY, {"MILK-WHL-GAL": 2})
@@ -867,7 +868,7 @@ class OrderPageTests(unittest.TestCase):
             self.assertIn(text, page)
         only = self.c.get("/stock-on-hand?to_order=1").get_data(as_text=True)
         self.assertIn("MILK-WHL-GAL", only)
-        self.assertNotIn("CB-CONC-GAL", only)
+        self.assertEqual("CB-CONC-GAL" in only, bool(rows["CB-CONC-GAL"]["recommended"]))
         header, *lines = self.c.get("/stock-on-hand?format=csv&to_order=1").get_data(as_text=True).splitlines()
         self.assertTrue(header.endswith("Par Min,Par Max,Recommended Order,Supplier"))
         self.assertTrue(any(l.startswith("MILK-WHL-GAL,") and l.endswith(",Mock Dairy Distributors") for l in lines))
@@ -1045,6 +1046,44 @@ class OrderPageTests(unittest.TestCase):
         csv_text = self.c.get("/purchases/prices?product=MILK-ALM-QT&format=csv").get_data(as_text=True)
         self.assertTrue(csv_text.startswith("Date,Order,Supplier,Product Code,Description,Unit,Qty,Price,Previous,Change"))
         self.assertIn("Price history", self.c.get("/purchases").get_data(as_text=True))
+
+    def test_the_production_plan_says_what_to_make_and_what_is_short(self):
+        # Vanilla sweet cream counted down to nothing: the open order for it covers it...
+        self.ds.count_stock(TODAY, {"VSC-HG": 0})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        production = self.app.extensions["unleashed"]["production"]
+        vsc = next(r for r in production.plan()["rows"] if r["product_code"] == "VSC-HG")
+        self.assertEqual((vsc["open_orders"], vsc["make"]), (1, None))
+        # ...unless that order was opened without a quantity (its 1 is a placeholder)...
+        guid = next(a["guid"] for a in self.reports.assemblies() if a["open"] and a["product_code"] == "VSC-HG")
+        vsc = next(r for r in production.plan(no_quantity={guid})["rows"] if r["product_code"] == "VSC-HG")
+        self.assertEqual((vsc["uncounted"], vsc["open_qty"]), (1, 0))
+        self.assertTrue(vsc["make"])
+        # ...or it's gone: then it's due, from cream and milk.
+        for a in self.ds.assemblies:
+            if a["Status"] == "Parked" and a["ProductCode"] == "VSC-HG":
+                a["Status"], a["Modified"] = "Deleted", dt.date.today()
+        self.app.extensions["unleashed"]["syncer"].sync(full=True)
+        plan = production.plan()
+        vsc = next(r for r in plan["rows"] if r["product_code"] == "VSC-HG")
+        low, high = self.ds.par_levels("VSC-HG")
+        self.assertEqual((vsc["min"], vsc["max"]), (low, high))
+        self.assertEqual(vsc["make"], high - vsc["position"])
+        self.assertLessEqual(vsc["can_make"], vsc["make"])
+        self.assertEqual(plan["rows"][0]["product_code"] if plan["rows"][0]["make"] else None,
+                         next(r["product_code"] for r in plan["rows"] if r["make"]))  # those to make come first
+        page = self.c.get("/production/plan").get_data(as_text=True)
+        for text in ("What to make", "Vanilla Sweet Cream", "/production/orders/new?product=VSC-HG", "Start →"):
+            self.assertIn(text, page)
+        # With the cream gone, it's short.
+        self.ds.count_stock(TODAY, {"CRM-HVY-HG": 0})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        vsc = next(r for r in self.app.extensions["unleashed"]["production"].plan()["rows"] if r["product_code"] == "VSC-HG")
+        self.assertEqual(vsc["can_make"], 0)
+        self.assertIn("CRM-HVY-HG", [x["product_code"] for x in vsc["short"]])
+        self.assertIn("Heavy Cream 1/2 gal: need", self.c.get("/production/plan").get_data(as_text=True))
+        self.assertTrue(self.c.get("/production/plan?format=csv").get_data(as_text=True).startswith("Product,Description"))
+        self.assertIn("Make →", self.c.get("/stock-on-hand?to_order=1").get_data(as_text=True))
 
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
