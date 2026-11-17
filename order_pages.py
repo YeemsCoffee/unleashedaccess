@@ -2,6 +2,7 @@
 Unleashed (unleashed/order_writes.py). Anyone who can open Sales (or Purchases) can use them;
 Unleashed records the change as the API user, and Core says who did it in its message."""
 import datetime as dt
+import math
 import re
 from email.utils import parseaddr
 from itertools import zip_longest
@@ -377,9 +378,45 @@ def sales_order_delete(number):
 
 # ---------------------------------------------------------------- purchase orders
 
+def _recommended_lines(supplier, choices):
+    """Order lines for what `supplier`'s products need now (Stock on hand's recommended order): each
+    in the unit the product is bought in when Core knows how many stock units are in one (rounded
+    up to whole ones), otherwise in the unit it's stocked in, at that unit's price. Each line says
+    what was recommended ("hint"), so the quantity can be checked."""
+    lines = []
+    if not supplier:
+        return lines
+    for row in reports().stock_on_hand()["rows"]:
+        option = choices["options_by_code"].get(row["product_code"])
+        if not row.get("recommended") or row.get("supplier_code") != supplier or not option:
+            continue
+        units = option.get("units") or []
+        stock = next((u for u in units if u["stock"]), None)
+        bought = next((u for u in units if not u["stock"] and (u["name"] or "").lower() == (option.get("unit") or "").lower()), None)
+        need = row["recommended"]
+        hint = f"To order: {_plain(need)} {stock['name'] if stock else ''}".strip() + \
+            f" (on hand {_plain(row['qty'])}, min {_plain(row['par_min'])}, max {_plain(row['par_max'])})"
+        if bought and bought.get("per"):
+            qty, unit = math.ceil(need / bought["per"] - 1e-9), bought
+            hint += f"; {_plain(bought['per'])} in a {bought['name']}"
+        else:
+            qty, unit = need, stock or (units[0] if units else {"name": None, "price": None})
+            if bought:
+                hint += f"; Core doesn't know how many are in a {bought['name']} yet, so it's in {unit['name']}"
+        lines.append({"guid": None, "product_code": row["product_code"], "qty": qty, "unit_name": unit["name"],
+                      "unit_price": unit.get("price"), "hint": hint})
+    return lines
+
+
+def _plain(value):
+    """A quantity as written: 12, 2.5, — for none."""
+    return "—" if value is None else f"{float(value):,.4f}".rstrip("0").rstrip(".")
+
+
 def _purchase_form(found=None, form=None, error=None):
     r = reports()
     choices = _choices("purchases")
+    recommended = None
     suppliers = sorted(r.suppliers(), key=lambda s: (s.get("SupplierName") or "").lower())
     if form is not None and hasattr(form, "getlist"):
         values = {k: form.get(k, "") for k in ("supplier", "warehouse", "order_date", "delivery_date",
@@ -408,7 +445,9 @@ def _purchase_form(found=None, form=None, error=None):
         values = {"supplier": request.args.get("supplier", ""), "warehouse": choices["default_warehouse"],
                   "order_date": reports().today.isoformat(), "delivery_date": "", "reference": "", "comments": "",
                   "place": "1"}
-        lines = []
+        # From Stock on hand's "to order": what this supplier's products need, already filled in.
+        lines = _recommended_lines(values["supplier"], choices) if request.args.get("to_order") else []
+        recommended = len(lines) if request.args.get("to_order") else None
     charges = [l for l in lines if l.get("charge")]
     lines = [l for l in lines if not l.get("charge")]
     lines += [{"guid": None, "product_code": "", "qty": None, "unit_price": None}] * max(1, 3 - len(lines))
@@ -417,7 +456,8 @@ def _purchase_form(found=None, form=None, error=None):
                            charges=charges, next_number=None if found else _next_number("PurchaseOrders", "PO-"),
                            parties=[(s.get("SupplierCode"), s.get("SupplierName") or s.get("SupplierCode"))
                                     for s in suppliers if not s.get("Obsolete")],
-                           stores=[], error=error, write_problem=_write_problem(), **choices)
+                           stores=[], error=error, write_problem=_write_problem(), recommended=recommended,
+                           **choices)
     return (html, 400) if error else html
 
 

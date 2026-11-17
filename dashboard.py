@@ -887,8 +887,21 @@ def stock_on_hand():
         ]), soh["rows"])
     return render_template("dash/stock_on_hand.html", soh=soh, val=val, groups=r.product_groups(),
                            group=group, as_at=as_at, csv_url=_csv_url(), to_order=to_order,
+                           order_from=_order_from(needed),
                            needed=len(needed), has_par=any(x.get("par_min") is not None or x.get("par_max") is not None
                                                            for x in soh["rows"]) or bool(needed))
+
+
+def _order_from(needed):
+    """The suppliers of the products to order: [{"code", "name", "products"}], the most first."""
+    found = {}
+    for row in needed:
+        if row.get("supplier_code"):
+            entry = found.setdefault(row["supplier_code"], {"code": row["supplier_code"],
+                                                            "name": row.get("supplier_name") or row["supplier_code"],
+                                                            "products": 0})
+            entry["products"] += 1
+    return sorted(found.values(), key=lambda e: (-e["products"], e["name"].lower()))
 
 
 @bp.get("/stock-valuation")

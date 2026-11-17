@@ -628,3 +628,8 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .simptww-hazards { width: 100%; table-layout: fixed; }
 .simptww-hazards th, .simptww-hazards td { white-space: normal; overflow-wrap: anywhere; }
 .simptww-body { min-width: 0; }
+
+/* Drafting a purchase order from what Stock on hand says to order. */
+.to-order-hint { color: var(--brand-soft-ink); margin-top: 2px; }
+.order-from { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 6px; }
+.order-from .btn { padding: 2px 10px; }

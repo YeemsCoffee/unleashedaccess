@@ -8,7 +8,8 @@
     <td><input type="hidden" name="line_guid" value="{{ l.guid or '' }}">
       <input name="product" class="line-product" list="order-products" value="{{ l.product_code or '' }}" autocomplete="off"
         placeholder="Type a product code or name" aria-label="Product">
-      <div class="muted small line-product-name" data-product-name>{{ product_names.get(l.product_code, '') if l.product_code }}</div></td>
+      <div class="muted small line-product-name" data-product-name>{{ product_names.get(l.product_code, '') if l.product_code }}</div>
+      {% if l.hint %}<div class="small to-order-hint">{{ l.hint }}</div>{% endif %}</td>
     <td class="num"><input class="qty-input" type="number" name="qty" value="{{ ('%g'|format(l.qty)) if l.qty else '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity"></td>
     {% if not sales %}{% set p = options_by_code.get(l.product_code) %}{% set picked = (l.unit_name or (p.unit if p else ''))|lower %}
     <td><select name="unit" class="unit-select" aria-label="Unit" data-unit data-code="{{ p.code if p else '' }}">
@@ -65,6 +66,11 @@
     <label>{{ 'Customer reference' if sales else 'Supplier reference' }} <input name="reference" value="{{ values.reference }}" maxlength="500" placeholder="Optional"></label>
   </div>
 
+  {% if recommended is not none and not sales %}
+  <p class="recon {{ 'recon-ok' if recommended else 'recon-warn' }}">{% if recommended %}✓ Filled in from Stock on hand: {{ recommended }} product{{ 's' if recommended != 1 }}
+    from this supplier at or below {{ 'their' if recommended != 1 else 'its' }} minimum, with what to order. Check each quantity and price,
+    then make the order. Nothing is sent until you do.{% else %}! Nothing from this supplier is at or below its minimum right now, so there's nothing filled in.{% endif %}</p>
+  {% endif %}
   <h2>Products</h2>
   <div class="table-wrap"><table class="order-lines">
     <thead><tr><th>Product</th><th class="num">Quantity</th>{% if not sales %}<th>Unit</th>{% endif %}<th class="num">{{ 'Unit price' if sales else 'Price per unit' }}</th><th class="num">Line total</th><th></th></tr></thead>

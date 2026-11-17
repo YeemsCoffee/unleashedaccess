@@ -161,8 +161,13 @@ much to **order**.
   maximum (to the minimum, when no maximum is set), rounded up to a whole unit, and at least the
   supplier's minimum order quantity. It's in the unit the product is stocked in. A product with no par levels is never
   recommended.
-- **To order only** lists just those products, with their supplier and an **Order →** link to a
-  new purchase order for that supplier; the CSV has the same columns.
+- **To order only** lists just those products, with their supplier; the CSV has the same columns.
+- **Draft an order**: a button for each supplier with something to order (and **Order →** on
+  each row) opens a new purchase order for that supplier with every product it needs already
+  on it. Each line is in the unit the product is bought in when Core knows how many stock units
+  are in one (from an earlier order in that unit), rounded up to whole ones; otherwise in the
+  unit it's stocked in, and the line says why. Each line shows what was recommended and the
+  stock and par levels behind it. Nothing is sent until the order is checked and made.
 - A past date (As at) has no par columns: the levels and what's on order are today's.
 
 ## Emailing purchase orders to vendors

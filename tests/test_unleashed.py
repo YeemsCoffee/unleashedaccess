@@ -874,6 +874,54 @@ class OrderPageTests(unittest.TestCase):
         past = self.c.get(f"/stock-on-hand?as_at={TODAY.replace(day=1).isoformat()}").get_data(as_text=True)
         self.assertNotIn("Par min", past)
 
+    def test_a_purchase_order_is_drafted_from_what_to_order(self):
+        """Stock on hand's recommended orders become a draft purchase order for each supplier."""
+        self.ds.count_stock(TODAY, {"MILK-WHL-GAL": 2, "MILK-OAT-QT": 1})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        rows = {r["product_code"]: r for r in self.reports.stock_on_hand()["rows"]}
+        milk, oat = rows["MILK-WHL-GAL"], rows["MILK-OAT-QT"]
+        self.assertTrue(milk["recommended"] and oat["recommended"])
+        page = self.c.get("/stock-on-hand").get_data(as_text=True)
+        self.assertIn("Draft an order:", page)
+        self.assertIn("/purchases/new?supplier=SUP-DAIRY&amp;to_order=1", page)
+        form = self.c.get("/purchases/new?supplier=SUP-DAIRY&to_order=1").get_data(as_text=True)
+        self.assertIn("Filled in from Stock on hand", form)
+        lines = re.findall(r'name="product" class="line-product" list="order-products" value="([^"]*)"', form)
+        self.assertIn("MILK-WHL-GAL", lines)
+        self.assertIn("MILK-OAT-QT", lines)
+        # Whole milk is bought as it's stocked: the recommended number of gallons.
+        i = lines.index("MILK-WHL-GAL")
+        qtys = re.findall(r'name="qty" value="([^"]*)"', form)
+        self.assertEqual(float(qtys[i]), milk["recommended"])
+        self.assertIn(f"To order: {milk['recommended']:g} Each", form)
+        # Oat milk is bought by the case; until Core has seen a case bought it can't say how many cartons
+        # are in one, so the line is in cartons, and says why.
+        self.assertIn("doesn&#39;t know how many are in a Case yet", form)
+        j = lines.index("MILK-OAT-QT")
+        selects = re.findall(r'<select name="unit".*?</select>', form, re.S)
+        self.assertIn('value="Each" selected', selects[j])
+        self.assertEqual(float(qtys[j]), oat["recommended"])
+        # Once a case has been bought, it's ordered in whole cases.
+        self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(), line_guid=[""],
+                   product=["MILK-OAT-QT"], unit=["Case"], qty=["1"], price=["37.20"], place="1")
+        self.app.extensions["unleashed"]["syncer"].sync()
+        self.ds.count_stock(TODAY, {"MILK-OAT-QT": 1})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        oat = next(r for r in self.reports.stock_on_hand()["rows"] if r["product_code"] == "MILK-OAT-QT")
+        form = self.c.get("/purchases/new?supplier=SUP-DAIRY&to_order=1").get_data(as_text=True)
+        lines = re.findall(r'name="product" class="line-product" list="order-products" value="([^"]*)"', form)
+        if oat["recommended"]:
+            j = lines.index("MILK-OAT-QT")
+            selects = re.findall(r'<select name="unit".*?</select>', form, re.S)
+            self.assertIn('value="Case" selected', selects[j])
+            import math
+            self.assertEqual(float(re.findall(r'name="qty" value="([^"]*)"', form)[j]), math.ceil(oat["recommended"] / 12))
+            self.assertIn("12 in a Case", form)
+        # A supplier with nothing to order says so.
+        empty = self.c.get("/purchases/new?supplier=SUP-PACK&to_order=1").get_data(as_text=True)
+        if not any(r["recommended"] and r["supplier_code"] == "SUP-PACK" for r in self.reports.stock_on_hand()["rows"]):
+            self.assertIn("Nothing from this supplier is at or below its minimum", empty)
+
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
         self.app.config["MAIL_FROM"] = "Yeems Purchasing <purchasing@yeems.test>"
