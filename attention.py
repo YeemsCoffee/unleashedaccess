@@ -56,8 +56,10 @@ def gather(app, areas, today):
         low = [r for r in stock if r.get("recommended")]
         section("warehouse", "At or below their minimum",
                 [{"text": f"{r['description'] or r['product_code']}: {_qty(r['qty'])} on hand, minimum {_qty(r['par_min'])}"
-                         f", order {_qty(r['recommended'])}" + (f" from {r['supplier_name']}" if r.get("supplier_name") else ""),
-                  "url": url_for("dash.stock_on_hand", to_order=1)} for r in low],
+                         + (f", make {_qty(r['recommended'])}" if r.get("made") else
+                            f", order {_qty(r['recommended'])}" + (f" from {r['supplier_name']}" if r.get("supplier_name") else "")),
+                  "url": url_for("dash.production_plan") if r.get("made") else url_for("dash.stock_on_hand", to_order=1)}
+                 for r in low],
                 more=url_for("dash.stock_on_hand", to_order=1))
         placed = safely(lambda: reports.purchase_orders(today - dt.timedelta(days=120), today, status="Placed")) or []
         late = sorted((o for o in placed if o.get("required_date") and o["required_date"] < today),
