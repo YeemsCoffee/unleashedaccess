@@ -1,0 +1,51 @@
+{% extends "dash/base.html" %}
+{% block title %}Waste{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Waste</h1>
+</div>
+{% if error %}<p class="recon recon-warn">! {{ error }}</p>{% endif %}
+{% if write_problem %}<p class="recon recon-warn">! {{ write_problem }}</p>{% endif %}
+<form method="post" class="card waste-form" data-waste-form>
+  <h2>Record waste</h2>
+  <p class="muted small">What was thrown out, how much (in the unit it's stocked in) and why. It's taken out of stock in Unleashed straight
+    away, as one stock adjustment at average cost, and counts in COGS as written off.</p>
+  <label class="block">Where <select name="warehouse">{% for w in warehouses %}<option value="{{ w.WarehouseCode }}" {{ 'selected' if w.WarehouseCode == default_warehouse }}>{{ w.WarehouseName or w.WarehouseCode }}</option>{% endfor %}</select></label>
+  <div data-waste-lines>
+  {% for code, qty, why, note in lines %}
+  <fieldset class="waste-line">
+    <label class="block">Product <input class="text-input wide line-product" name="product" list="waste-products" value="{{ code }}" autocomplete="off" placeholder="Type a product code or name"></label>
+    <div class="waste-row">
+      <label>How much <input class="qty-input" type="number" name="qty" value="{{ qty }}" min="0" step="any" inputmode="decimal"></label>
+      <label>Why <select name="reason"><option value="">Choose…</option>{% for r in reasons %}<option {{ 'selected' if r == why }}>{{ r }}</option>{% endfor %}</select></label>
+    </div>
+    <label class="block small">Note <input class="text-input wide" name="note" value="{{ note }}" maxlength="200" placeholder="Optional, e.g. fridge left open overnight"></label>
+  </fieldset>
+  {% endfor %}
+  </div>
+  <template id="waste-line-template"><fieldset class="waste-line">
+    <label class="block">Product <input class="text-input wide line-product" name="product" list="waste-products" autocomplete="off" placeholder="Type a product code or name"></label>
+    <div class="waste-row"><label>How much <input class="qty-input" type="number" name="qty" min="0" step="any" inputmode="decimal"></label>
+      <label>Why <select name="reason"><option value="">Choose…</option>{% for r in reasons %}<option>{{ r }}</option>{% endfor %}</select></label></div>
+    <label class="block small">Note <input class="text-input wide" name="note" maxlength="200" placeholder="Optional"></label></fieldset></template>
+  <datalist id="waste-products">{% for p in products %}<option value="{{ p.code }}">{{ p.code }} · {{ p.name }}{{ ' (' ~ p.unit ~ ')' if p.unit }}</option>{% endfor %}</datalist>
+  <div class="run-actions"><button type="button" class="btn" data-add-waste>+ Another product</button>
+    <button class="btn btn-primary" {{ 'disabled' if write_problem }}>Record it</button></div>
+</form>
+<section class="card">
+  <h2>This month ({{ month.strftime('%B') }}): {{ summary.total|money }}</h2>
+  {% if summary.by_reason %}
+  <div class="waste-summary">
+    <div><h3>By reason</h3><table><tbody>{% for r in summary.by_reason %}<tr><td>{{ r.reason }}</td><td class="num">{{ r.value|money }}</td></tr>{% endfor %}</tbody></table></div>
+    <div><h3>By product</h3><table><tbody>{% for p in summary.by_product[:10] %}<tr><td>{{ p.description or p.product_code }}</td><td class="num">{{ p.qty|qty }}</td><td class="num">{{ p.value|money }}</td></tr>{% endfor %}</tbody></table></div>
+  </div>
+  <h3>Recorded</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Day</th><th>Product</th><th class="num">Qty</th><th class="num">Value</th><th>Why</th><th>By</th><th>Adjustment</th></tr></thead>
+    <tbody>{% for e in summary.entries %}<tr><td class="nowrap">{{ e.day }}</td><td>{{ e.description or e.product_code }}{% if e.note %}<div class="muted small">{{ e.note }}</div>{% endif %}</td>
+      <td class="num">{{ e.qty|qty }}</td><td class="num">{{ e.value|money }}</td><td>{{ e.reason }}</td><td>{{ e.recorded_by or '—' }}</td>
+      <td>{% if e.adjustment_number %}<a href="{{ url_for('dash.adjustment_detail', number=e.adjustment_number) }}">{{ e.adjustment_number }}</a>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">Nothing recorded this month.</p>{% endif %}
+</section>
+{% endblock %}

@@ -7,6 +7,7 @@ from itertools import zip_longest
 from flask import abort, current_app, flash, redirect, render_template, request, url_for
 
 from dashboard import _csv, _csv_url, _ext, _person, _range_args, _round, _wants_csv, bp, reports
+import dashboard
 from order_pages import _blocked, _done, _number, _saved
 from stock_counts import CountError, differences
 from unleashed.client import UnleashedError
@@ -683,3 +684,116 @@ def batches():
                            trace=trace, product=product, number=number, tracked=tracked,
                            names={p.get("ProductCode"): p.get("ProductDescription") for p in r.products()},
                            value=sum(b["value"] for b in expiring), csv_url=_csv_url())
+
+
+# ---------------------------------------------------------------- waste log
+
+@bp.route("/waste", methods=["GET", "POST"])
+def waste():
+    """Record what was thrown out (posted to Unleashed as one stock adjustment), and see this
+    month's waste by reason and by product."""
+    from waste import MAX_LINES, REASONS
+    r = reports()
+    log = current_app.extensions["waste"]
+    today = r.today
+    warehouses = r.warehouses()
+    default = next((w.get("WarehouseCode") for w in warehouses if w.get("IsDefault")),
+                   warehouses[0].get("WarehouseCode") if warehouses else None)
+    products = _stock_products()
+    by_code = {p["code"]: p for p in products}
+    form, error = request.form, None
+    if request.method == "POST":
+        blocked = _blocked(url_for("dash.waste"))
+        if blocked:
+            return blocked
+        warehouse = form.get("warehouse") or default
+        rows = []
+        try:
+            for code, qty, why, note in zip_longest(form.getlist("product"), form.getlist("qty"), form.getlist("reason"),
+                                                    form.getlist("note"), fillvalue=""):
+                code = _code(code, products)
+                if not code and not (qty or "").strip():
+                    continue
+                if code not in by_code:
+                    raise ValueError(f"{code or 'A line'}: pick a product from the list.")
+                amount = _number(qty)
+                if not amount or amount <= 0:
+                    raise ValueError(f"Say how much {by_code[code]['name'] or code} was thrown out.")
+                if why not in REASONS:
+                    raise ValueError(f"Choose why {by_code[code]['name'] or code} was thrown out.")
+                rows.append({"product_code": code, "qty": amount, "reason": why, "note": (note or "").strip()[:200] or None})
+            if not rows:
+                raise ValueError("Nothing to record: add a product and how much.")
+            if len(rows) > MAX_LINES:
+                raise ValueError(f"{MAX_LINES} lines at most at a time.")
+        except ValueError as e:
+            error = str(e)
+        if error is None:
+            try:
+                have = _stock_in(warehouse)
+            except UnleashedError as e:
+                have, error = None, f"Couldn't read the stock in {warehouse} from Unleashed: {e}"
+        if error is None:
+            totals = {}
+            for row in rows:
+                totals[row["product_code"]] = totals.get(row["product_code"], 0.0) + row["qty"]
+            short = [c for c, q in totals.items() if have.get(c, {"qty": 0.0})["qty"] + 1e-9 < q]
+            if short:
+                error = (f"{', '.join(short)}: there's less than that in {warehouse} in Unleashed. Check the amount, "
+                         "or count it first.")
+        if error is None:
+            lines = []
+            for row in rows:
+                now = have.get(row["product_code"], {"qty": 0.0, "value": 0.0, "avg": 0.0})
+                line = {"product_code": row["product_code"], "change": -row["qty"],
+                        "value_change": _value_change(now, -row["qty"], None),
+                        "comments": (f"Waste: {row['reason']}" + (f" - {row['note']}" if row["note"] else ""))[:200]}
+                if by_code[row["product_code"]]["batch"]:  # soonest expiring first
+                    need, picked = row["qty"], []
+                    for b in _batches(row["product_code"], warehouse):
+                        take = min(need, b["qty"])
+                        if take > 0:
+                            picked.append({"number": b["number"], "change": -take, "expiry": None})
+                            need -= take
+                    if need > 1e-9:
+                        error = f"{row['product_code']}: its batches in {warehouse} don't hold that much."
+                        break
+                    line["batches"] = picked
+                lines.append(line)
+            reason = _waste_reason()
+        if error is None:
+            try:
+                made = create_adjustment(_ext()["client"], {"warehouse": warehouse, "reason": reason, "lines": lines},
+                                         stock_fn=_quantities)
+            except (StockWriteError, UnleashedError) as e:
+                error = f"The waste wasn't recorded: {_failed(e)}"
+            else:
+                _saved("StockAdjustments", made)
+                log.record(today, warehouse, [dict(row, description=by_code[row["product_code"]]["name"],
+                                                   value=-l["value_change"]) for row, l in zip(rows, lines)],
+                           made.get("AdjustmentNumber"), _person())
+                worth = sum(-l["value_change"] for l in lines)
+                flash(f"Recorded {len(rows)} line{'s' if len(rows) != 1 else ''} of waste, worth ${worth:,.2f}, as "
+                      f"stock adjustment {made.get('AdjustmentNumber')}.", "ok")
+                return redirect(url_for("dash.waste"))
+    start = today.replace(day=1)
+    summary = log.summary(start, today)
+    lines = list(zip_longest(form.getlist("product"), form.getlist("qty"), form.getlist("reason"), form.getlist("note"),
+                             fillvalue="")) if error else []
+    lines += [("", "", "", "")] * max(1, 3 - len(lines))
+    html = render_template("dash/waste.html", products=products, warehouses=warehouses, default_warehouse=form.get("warehouse") or default,
+                           reasons=REASONS, lines=lines, error=error, summary=summary, month=start, max_lines=MAX_LINES,
+                           write_problem=dashboard._write_problem())
+    return (html, 400) if error else html
+
+
+def _waste_reason():
+    """The Unleashed adjustment reason waste goes under: one named for waste or spoilage if the
+    account has one, else the first it lists (the line comments say why each was thrown out)."""
+    reasons = _reasons()
+    names = [r if isinstance(r, str) else (r.get("name") or r.get("AdjustmentReason") or "") for r in reasons]
+    for word in ("waste", "wastage", "spoil", "write"):
+        found = next((n for n in names if word in n.lower()), None)
+        if found:
+            return found
+    return names[0] if names else "Waste"

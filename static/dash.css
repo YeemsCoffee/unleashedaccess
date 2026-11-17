@@ -648,3 +648,10 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .header-link:hover { background: rgba(255,255,255,.08); }
 .attention-list { margin: 0; padding-left: 18px; }
 .attention-list li { margin: 4px 0; }
+
+/* The waste log: one product per block, easy to fill in on a phone. */
+.waste-line { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.waste-row { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 6px 0; }
+.waste-row .qty-input { width: 7rem; }
+.waste-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; }
+.waste-summary td { padding: 3px 12px 3px 0; }

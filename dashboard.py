@@ -146,7 +146,8 @@ _TABS = [
     ("warehouse", [("dash.stock_on_hand", "Stock on hand"),
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
                    ("dash.store_orders", "Store orders", "store_orders"),
-                   ("dash.transactions", "Transactions"), ("dash.batches", "Batches")]),
+                   ("dash.transactions", "Transactions"), ("dash.batches", "Batches"),
+                   ("dash.waste", "Waste", "waste")]),
     ("production", [("dash.production", "Overview"), ("dash.production_plan", "Plan"),
                     ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
@@ -814,6 +815,7 @@ def cogs_page():
     names = {w.get("WarehouseCode"): w.get("WarehouseName") or w.get("WarehouseCode") for w in r.warehouses()}
     return render_template(
         "dash/cogs.html", c=c, recon=r.cogs_reconciliation(month, warehouses=view), history=history, split=split,
+        waste=current_app.extensions["waste"].summary(c["month"], c["through"]) if c["through"] >= c["month"] else None,
         settings=settings, names=names, store_options=store_options, store=store, sent=sent,
         store_name=dict(store_options).get(store),
         warehouse_name=r.warehouse_names(c["warehouses"]) if c["warehouses"] else None,
@@ -1685,6 +1687,8 @@ def init_app(app):
     import store_order_pages  # noqa: F401 (adds store ordering)
     from store_orders import StoreOrders
     app.extensions["store_orders"] = StoreOrders(db)
+    from waste import WasteLog
+    app.extensions["waste"] = WasteLog(db)
     import stock_pages  # noqa: F401 (adds the Transactions pages: adjustments, transfers, stock counts)
     app.register_blueprint(bp)
 

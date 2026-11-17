@@ -205,6 +205,23 @@ Warehouse → **Batches**, for batch-tracked products:
   component it used. One that used the product without saying (as older ones may) is listed
   separately under **May have gone into**, since any of its batches might be the one.
 
+## Waste log
+
+Warehouse → **Waste**: staff record what was thrown out, from a phone. For each product: how much
+(in the unit it's stocked in), why (spoiled, expired, damaged, spilled or dropped, made wrong,
+tasting or samples, other) and an optional note.
+
+- **Record it** takes it out of stock in Unleashed straight away as one completed stock
+  adjustment, at average cost, each line's comment saying why ("Waste: Spoiled - fridge left
+  open"). A batch-tracked product is taken from its soonest-expiring batches. It's refused if
+  Unleashed has less than that in stock. The adjustment goes under an Unleashed adjustment reason
+  named for waste, wastage, spoilage or write-offs if the account has one, else its first reason.
+- The page shows this month's waste **by reason** and **by product**, and every line recorded
+  with who recorded it and the adjustment. The COGS page says how much of the month's write-offs
+  was logged as waste, by reason.
+- **Access**: the **Waste log** area opens only this page (for kitchen or store staff); Warehouse
+  includes it.
+
 ## Production plan
 
 Production → **Plan**: what to make now, from the par levels of the products made here (their
@@ -983,6 +1000,7 @@ unleashedaccess/
 ├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
 ├── store_orders.py     # store par levels and requests; store_order_pages.py: their pages
 ├── attention.py        # what needs attention, by role: the page and the morning email
+├── waste.py            # the waste log kept beside the adjustments it posts
 ├── vendor_email.py     # vendors that take purchase orders by email; the email and its PDF; sending (Microsoft 365 or SMTP)
 ├── simple_pdf.py       # a small PDF writer (text, lines, boxes) with nothing to install
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders

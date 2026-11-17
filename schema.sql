@@ -479,3 +479,21 @@ CREATE TABLE IF NOT EXISTS user_prefs (
     user_id     INTEGER PRIMARY KEY,
     daily_email INTEGER NOT NULL DEFAULT 0
 );
+
+-- The waste log (waste.py): what was thrown out and why, each line posted to Unleashed in a
+-- stock adjustment (adjustment_number).
+CREATE TABLE IF NOT EXISTS waste_entries (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    day               TEXT NOT NULL,
+    warehouse         TEXT NOT NULL,
+    product_code      TEXT NOT NULL,
+    description       TEXT,
+    qty               REAL NOT NULL,              -- what was lost (positive)
+    value             REAL NOT NULL,              -- at average cost (positive)
+    reason            TEXT NOT NULL,
+    note              TEXT,
+    adjustment_number TEXT,
+    recorded_by       TEXT,
+    recorded_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS waste_entries_day ON waste_entries (day);

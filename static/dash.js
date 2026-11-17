@@ -905,3 +905,17 @@ function fromTemplate(id, values) {
     row.querySelector("input").focus();
   });
 })();
+
+// The waste log: another product's line, without saving.
+(function () {
+  "use strict";
+  var add = document.querySelector("[data-add-waste]");
+  if (!add) return;
+  var lines = document.querySelector("[data-waste-lines]");
+  add.addEventListener("click", function () {
+    if (lines.querySelectorAll(".waste-line").length >= 40) return;
+    var line = fromTemplate("waste-line-template", {});
+    lines.appendChild(line);
+    line.querySelector("input").focus();
+  });
+})();

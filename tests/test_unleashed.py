@@ -30,7 +30,8 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
               "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines",
               "vendor_email_settings", "po_emails", "sign_in_attempts",
-              "store_pars", "store_requests", "store_request_lines", "user_prefs")
+              "store_pars", "store_requests", "store_request_lines", "user_prefs",
+              "waste_entries")
 
 
 def sqlite_database(testcase):
@@ -380,10 +381,10 @@ class DashboardPageTests(unittest.TestCase):
         self.assertEqual(overview[5:], ["Overview", "COGS"])  # Finance's pages
         self.assertEqual(links("/", active=True), ["Finance", "Overview"])
         # Stock movement and adjustments are under Transactions, with transfers and stock counts.
-        warehouse = ["Stock on hand", "Purchases", "Sales", "Transactions"]
+        warehouse = ["Stock on hand", "Purchases", "Sales", "Store orders", "Transactions", "Batches", "Waste"]
         for path in ("/stock-on-hand", "/transactions", "/stock-movement", "/adjustments", "/transfers",
                      "/stock-counts", "/transactions/history", "/adjustments/new", "/transfers/new"):
-            self.assertEqual(links(path)[5:9], warehouse, path)
+            self.assertEqual(links(path)[5:12], warehouse, path)
         for path in ("/stock-movement", "/adjustments", "/transfers", "/stock-counts", "/transactions/history"):
             self.assertEqual(links(path, active=True), ["Warehouse", "Transactions"], path)
         sub = self.client.get("/stock-movement").get_data(as_text=True)
@@ -1084,6 +1085,42 @@ class OrderPageTests(unittest.TestCase):
         self.assertIn("Heavy Cream 1/2 gal: need", self.c.get("/production/plan").get_data(as_text=True))
         self.assertTrue(self.c.get("/production/plan?format=csv").get_data(as_text=True).startswith("Product,Description"))
         self.assertIn("Make →", self.c.get("/stock-on-hand?to_order=1").get_data(as_text=True))
+
+    def test_waste_is_recorded_as_an_adjustment_and_shown_by_reason(self):
+        page = self.c.get("/waste").get_data(as_text=True)
+        self.assertIn("Record waste", page)
+        self.assertIn("Spoiled", page)
+        before_milk, before_cream = self.ds.stock_qty("MILK-WHL-GAL"), self.ds.stock_qty("CRM-HVY-HG")
+        bad = self.c.post("/waste", data={"warehouse": "GDN", "product": ["MILK-WHL-GAL"], "qty": ["2"], "reason": [""], "note": [""]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("Choose why", bad.get_data(as_text=True))
+        too_much = self.c.post("/waste", data={"warehouse": "GDN", "product": ["MILK-WHL-GAL"], "qty": ["9999"],
+                                               "reason": ["Spoiled"], "note": [""]})
+        self.assertIn("less than that in GDN", too_much.get_data(as_text=True))
+        res = self.c.post("/waste", data={"warehouse": "GDN", "product": ["milk-whl-gal", "CRM-HVY-HG", ""],
+                                          "qty": ["2", "1", ""], "reason": ["Spoiled", "Expired", ""],
+                                          "note": ["Fridge left open", "", ""]}, follow_redirects=True)
+        page = res.get_data(as_text=True)
+        self.assertIn("Recorded 2 lines of waste", page)
+        self.assertAlmostEqual(self.ds.stock_qty("MILK-WHL-GAL"), before_milk - 2)
+        self.assertAlmostEqual(self.ds.stock_qty("CRM-HVY-HG"), before_cream - 1)
+        sa = self.ds.stock_adjustments[-1]
+        self.assertEqual([l["Comments"] for l in sa["Lines"]], ["Waste: Spoiled - Fridge left open", "Waste: Expired"])
+        cream = next(b for b in self.ds.batches if b["Number"] == "CRM-HVY-HG-A")
+        self.assertAlmostEqual(cream["Quantity"], 6.0)  # taken from the soonest-expiring batch
+        summary = self.app.extensions["waste"].summary(TODAY.replace(day=1), TODAY)
+        self.assertEqual([r["reason"] for r in summary["by_reason"]][:2], sorted(["Spoiled", "Expired"],
+                         key=lambda r: -next(x["value"] for x in summary["by_reason"] if x["reason"] == r)))
+        self.assertGreater(summary["total"], 0)
+        for text in ("Spoiled", "Expired", "Fridge left open", sa["AdjustmentNumber"]):
+            self.assertIn(text, page)
+        # It's a write-off in COGS, like any adjustment.
+        self.app.extensions["unleashed"]["syncer"].sync()
+        rows = [r for r in self.reports.stock_adjustments(TODAY, TODAY)["rows"] if r["number"] == sa["AdjustmentNumber"]]
+        self.assertAlmostEqual(-sum(r["value_change"] for r in rows), summary["total"], places=2)
+        cogs = self.c.get("/cogs").get_data(as_text=True)
+        self.assertIn("was logged as waste", cogs)
+        self.assertIn("spoiled $", cogs)
 
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
@@ -4015,6 +4052,19 @@ class TeamAccountTests(unittest.TestCase):
         tia.post("/account/prefs", data={})
         self.assertFalse(attention.wants_email(self.app.extensions["db"], self.app.extensions["users"].by_email("tia@yeems.test")["id"]))
 
+    def test_waste_log_only_staff_record_waste_and_nothing_else(self):
+        admin = self._admin_client()
+        profile = self.app.extensions["profiles"].save(None, "Kitchen", ["waste"])
+        temp = self._add(admin, "Kit", "kit@yeems.test", profile="Kitchen")
+        kit = self.app.test_client()
+        self._sign_in(kit, "kit@yeems.test", temp)
+        self._choose_password(kit, temp, "kits-own-password")
+        self.assertEqual(kit.get("/").headers["Location"], "/waste")
+        self.assertIn("Record waste", kit.get("/waste").get_data(as_text=True))
+        self.assertEqual(kit.get("/stock-on-hand").headers["Location"], "/waste")
+        for url in ("/sales", "/purchases", "/adjustments", "/store-orders"):
+            self.assertEqual(kit.get(url).status_code, 403, url)
+
     def test_an_admin_reset_says_on_the_sign_in_page_whether_it_applied(self):
         """ADMIN_RESET applies once for each ADMIN_PASSWORD. It used to do nothing, silently, the
         second time; the sign-in page now says what happened and which password to use."""
@@ -4088,10 +4138,10 @@ class TeamAccountTests(unittest.TestCase):
         profiles = restarted.extensions["profiles"]
         self.assertEqual([p["name"] for p in profiles.all()], ["Maintenance technician", "Standard"])
         bea = restarted.extensions["users"].by_email("bea@yeems.test")
-        self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production", "store_orders"})  # Warehouse includes it
+        self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production", "store_orders", "waste"})  # Warehouse includes them
         owner = restarted.extensions["users"].by_email("owner@yeems.test")
         self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance", "maint_requests",
-                                                    "store_orders"})
+                                                    "store_orders", "waste"})
 
     def test_profiles_decide_which_tabs_each_person_opens(self):
         admin = self._admin_client()

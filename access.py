@@ -13,12 +13,12 @@ from unleashed.store import utc_now
 
 AREAS = (("finance", "Finance"), ("warehouse", "Warehouse"), ("production", "Production"),
          ("maintenance", "Maintenance"), ("maint_requests", "Maintenance requests"),
-         ("store_orders", "Store ordering"))
+         ("store_orders", "Store ordering"), ("waste", "Waste log"))
 # Opening a tab includes these narrower areas within it.
-INCLUDES = {"maintenance": ("maint_requests",), "warehouse": ("store_orders",)}
+INCLUDES = {"maintenance": ("maint_requests",), "warehouse": ("store_orders", "waste")}
 AREA_KEYS = tuple(key for key, _ in AREAS)
 # Tabs that show data from Unleashed (and its sync status).
-UNLEASHED_AREAS = ("finance", "warehouse", "production", "store_orders")
+UNLEASHED_AREAS = ("finance", "warehouse", "production", "store_orders", "waste")
 # Made the first time this runs, so the people already on the team keep the tabs they had.
 STANDARD = "Standard"
 STARTER_PROFILES = ((STANDARD, UNLEASHED_AREAS), ("Maintenance technician", ("maintenance",)))

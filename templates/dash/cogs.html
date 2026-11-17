@@ -62,6 +62,8 @@
     = {{ recon.total|money }}{% if diff|abs >= 1 %} — differs from the formula by {{ diff|money }}
     (see "COGS vs cost of sales" below){% else %} — matches the formula{% endif %}.
     {% if recon.adjustments_missing %}{{ recon.adjustments_missing }} adjustment line(s) without a value change aren't included in this cross-check.{% endif %}
+    {% if waste and waste.total %}<br><span class="small">Of the write-offs, {{ waste.total|money }} was logged as waste:
+      {% for r in waste.by_reason[:4] %}{{ r.reason|lower }} {{ r.value|money }}{{ ', ' if not loop.last }}{% endfor %} · <a href="{{ url_for('dash.waste') }}">Waste →</a></span>{% endif %}
   </p>
   <details class="explain">
     <summary>COGS vs cost of sales — what's the difference?</summary>
@@ -109,7 +111,9 @@
     {% endfor %}
     <tr class="row-total"><td>Sent to stores</td><td></td><td class="num">{{ split.sent|money }}</td><td class="num">{{ split.sent_share|pct }}</td></tr>
     <tr><td>Other customers</td><td class="num">{{ split.other_orders }}</td><td class="num">{{ split.other_customers|money }}{% if split.other_returned %}<div class="muted small">after {{ split.other_returned|money }} returned</div>{% endif %}</td><td class="num">{{ split.other_share|pct }}</td></tr>
-    <tr><td>Stock written off</td><td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
+    <tr><td>Stock written off{% if waste and waste.total %}<div class="muted small">of which logged as waste {{ waste.total|money }}:
+        {% for r in waste.by_reason[:4] %}{{ r.reason|lower }} {{ r.value|money }}{{ ', ' if not loop.last }}{% endfor %} · <a href="{{ url_for('dash.waste') }}">Waste →</a></div>{% endif %}</td>
+      <td></td><td class="num">{{ split.written_off|money }}</td><td class="num">{{ split.written_off_share|pct }}</td></tr>
     <tr><td>Not on an order or write-off <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}">What's in this →</a>
         <a class="small" href="{{ url_for('dash.cogs_unaccounted', month=month.strftime('%Y-%m')) }}#daily">Day by day →</a>
         <div class="muted small">Usage not recorded, production costs, stock moved out of {{ warehouse_name or 'the warehouses' }} without an order</div></td>
