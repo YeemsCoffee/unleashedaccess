@@ -1,0 +1,18 @@
+{% extends "dash/base.html" %}
+{% block title %}Needs attention{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Needs attention today</h1>
+  {% if user %}<form method="post" action="{{ url_for('dash.attention_email') }}"><button class="btn btn-quiet" {{ 'disabled' if not can_email }}>Email this to me now</button></form>{% endif %}
+</div>
+{% if user and not daily_email %}<p class="muted small">Get this by email each morning: tick it on <a href="{{ url_for('dash.account') }}">your account</a>.</p>{% endif %}
+{% for s in sections %}
+<section class="card attention-section">
+  <h2>{{ s.title }} <span class="pill pill-placed">{{ s.count }}</span></h2>
+  <ul class="attention-list">{% for i in s['items'] %}<li><a href="{{ i.url }}">{{ i.text }}</a></li>{% endfor %}</ul>
+  {% if s.count > s['items']|length and s.more %}<p class="small"><a href="{{ s.more }}">… and {{ s.count - s['items']|length }} more →</a></p>{% endif %}
+</section>
+{% else %}
+<section class="card"><p>✓ Nothing needs attention in the tabs you open.</p></section>
+{% endfor %}
+{% endblock %}

@@ -642,3 +642,9 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .cancel-request { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
 .trace-table td { padding: 4px 12px 4px 0; vertical-align: top; }
 #trace h4 { margin: 14px 0 4px; font-size: 14px; }
+
+/* Needs attention. */
+.header-link { color: var(--header-ink); text-decoration: none; font-size: 14px; padding: 6px 10px; border-radius: 8px; }
+.header-link:hover { background: rgba(255,255,255,.08); }
+.attention-list { margin: 0; padding-left: 18px; }
+.attention-list li { margin: 4px 0; }

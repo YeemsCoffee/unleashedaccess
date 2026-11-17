@@ -64,6 +64,10 @@ def create_app(test_config=None):
         MS_CLIENT_SECRET=env("MS_CLIENT_SECRET", "").strip(),
         # The business's name on emails to vendors.
         COMPANY_NAME=env("COMPANY_NAME", "Yeems Coffee").strip(),
+        # The morning "needs attention" email goes after this hour (business time zone), and its
+        # links start with PUBLIC_URL (e.g. https://dashboard.yeemscoffee.com; none: no links).
+        DAILY_EMAIL_HOUR=int(env("DAILY_EMAIL_HOUR", "7") or 7),
+        PUBLIC_URL=env("PUBLIC_URL", "").strip().rstrip("/"),
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # maintenance attachments are up to 16 MB
         # Browsers keep the stylesheet, script, icon and fonts for a year: pages link them with a
         # fingerprint of their contents (static_version), so a changed file is fetched afresh.

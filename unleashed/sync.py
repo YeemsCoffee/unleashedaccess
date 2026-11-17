@@ -318,8 +318,9 @@ class Syncer:
 class SyncScheduler:
     """Background thread: syncs on start, then every `interval_minutes`, or when triggered."""
 
-    def __init__(self, syncer, interval_minutes=15):
+    def __init__(self, syncer, interval_minutes=15, after=None):
         self.syncer = syncer
+        self.after = after  # run after each sync (the morning email checks if it's due)
         self.interval = interval_minutes * 60 if interval_minutes > 0 else None
         self._wake = threading.Event()
         self._full_requested = False
@@ -342,5 +343,10 @@ class SyncScheduler:
         while True:
             full, self._full_requested = self._full_requested, False
             self.syncer.sync(full=True if full else None)
+            if self.after:
+                try:
+                    self.after()
+                except Exception:  # noqa: BLE001 (it never stops the syncing)
+                    traceback.print_exc()
             self._wake.wait(timeout=self.interval)
             self._wake.clear()

@@ -30,7 +30,7 @@ APP_TABLES = ("unleashed_api_log", "ul_records", "ul_documents", "ul_stock_snaps
               "maint_counters", "maint_readings", "maint_tasklists", "maint_requests", "maint_orders",
               "maint_order_costs", "maint_files", "prod_step_pictures", "stock_counts", "stock_count_lines",
               "vendor_email_settings", "po_emails", "sign_in_attempts",
-              "store_pars", "store_requests", "store_request_lines")
+              "store_pars", "store_requests", "store_request_lines", "user_prefs")
 
 
 def sqlite_database(testcase):
@@ -3893,6 +3893,56 @@ class TeamAccountTests(unittest.TestCase):
         self.assertIn("Only someone in Warehouse makes the sales order", refused.get_data(as_text=True))
         self.assertEqual(self.app.extensions["store_orders"].request(request_id)["status"], "submitted")
         self.assertIn("Make the sales order", admin.get(f"/store-orders/{request_id}").get_data(as_text=True))
+
+    def test_what_needs_attention_by_role_on_a_page_and_in_a_morning_email(self):
+        import attention
+        outbox = []
+        self.app.config.update(MAIL_OUTBOX=outbox, MAIL_FROM="Yeems Core <core@yeems.test>", PUBLIC_URL="https://core.example.test")
+        admin = self._admin_client()
+        ds = self.app.extensions["unleashed"]["client"].transport.app.config["DATASET"]
+        ds.count_stock(ds.today, {"MILK-WHL-GAL": 2})
+        self.app.extensions["unleashed"]["syncer"].sync()
+        maint = self.app.extensions["maintenance"]
+        kitchen = maint.save_location(None, {"name": "Kitchen", "code": "", "parent_id": ""})
+        maint.save_task(None, {"name": "Descale", "frequency_days": "30", "next_due": (ds.today - dt.timedelta(days=3)).isoformat(),
+                               "location_id": str(kitchen)}, set(), "x", ds.today)
+        page = admin.get("/attention").get_data(as_text=True)
+        for text in ("At or below their minimum", "Whole Milk 1 gal: 2 on hand", "Maintenance tasks overdue", "Descale"):
+            self.assertIn(text, page)
+        self.assertIn('href="/attention"', admin.get("/team").get_data(as_text=True))  # in the header
+        # Someone in Maintenance only sees maintenance.
+        profile = self.app.extensions["profiles"].save(None, "Tech", ["maintenance"])
+        temp = self._add(admin, "Tia", "tia@yeems.test", profile="Tech")
+        tia = self.app.test_client()
+        self._sign_in(tia, "tia@yeems.test", temp)
+        self._choose_password(tia, temp, "tias-own-password")
+        mine = tia.get("/attention").get_data(as_text=True)
+        self.assertIn("Descale", mine)
+        self.assertNotIn("At or below their minimum", mine)
+        # The morning email is opt-in, goes once a day after the hour, and only to who asked.
+        self.assertIn("Email me what needs attention each morning", tia.get("/account").get_data(as_text=True))
+        tia.post("/account/prefs", data={"daily_email": "1"})
+        self.app.config["DAILY_EMAIL_HOUR"] = 0
+        self.assertEqual(attention.send_daily(self.app), 1)
+        self.assertEqual(attention.send_daily(self.app), 0)  # already sent today
+        (message,) = outbox
+        self.assertEqual(message["To"], "tia@yeems.test")
+        self.assertIn("need", message["Subject"])
+        text = message.get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("Descale", text)
+        self.assertNotIn("Whole Milk", text)
+        self.assertIn("https://core.example.test/maintenance/tasks/", text)
+        # Not before the hour.
+        self.app.extensions["db"].execute("DELETE FROM app_settings WHERE key LIKE 'attention_sent:%'")
+        self.app.config["DAILY_EMAIL_HOUR"] = 24
+        self.assertEqual(attention.send_daily(self.app), 0)
+        # "Email this to me now" sends the person theirs straight away.
+        sent = admin.post("/attention/email", follow_redirects=True).get_data(as_text=True)
+        self.assertIn("Sent it to owner@yeems.test", sent)
+        self.assertEqual(outbox[-1]["To"], "owner@yeems.test")
+        self.assertIn("Whole Milk", outbox[-1].get_body(preferencelist=("plain",)).get_content())
+        tia.post("/account/prefs", data={})
+        self.assertFalse(attention.wants_email(self.app.extensions["db"], self.app.extensions["users"].by_email("tia@yeems.test")["id"]))
 
     def test_an_admin_reset_says_on_the_sign_in_page_whether_it_applied(self):
         """ADMIN_RESET applies once for each ADMIN_PASSWORD. It used to do nothing, silently, the

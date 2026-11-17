@@ -473,3 +473,9 @@ CREATE TABLE IF NOT EXISTS store_request_lines (
     position     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS store_request_lines_request ON store_request_lines (request_id);
+
+-- Each person's choices: whether they get the morning "needs attention" email.
+CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id     INTEGER PRIMARY KEY,
+    daily_email INTEGER NOT NULL DEFAULT 0
+);

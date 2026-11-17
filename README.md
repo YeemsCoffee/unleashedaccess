@@ -170,6 +170,25 @@ much to **order**.
   stock and par levels behind it. Nothing is sent until the order is checked and made.
 - A past date (As at) has no par columns: the levels and what's on order are today's.
 
+## Needs attention
+
+**Needs attention** (in the header, for everyone signed in) lists what needs doing today, in the
+tabs the person opens:
+
+- **Warehouse**: products at or below their minimum (with what to order), purchase orders overdue
+  for delivery (placed, past their delivery date), batches expired or expiring within 3 days, and
+  store requests waiting for the warehouse.
+- **Maintenance**: machines down, tasks overdue, new requests.
+- **Production**: production orders due today or earlier and not completed.
+- **Finance**: yesterday's COGS that no document explains, when it's $25 or more.
+
+Each item links to where it's dealt with. **The morning email**: each person can tick *Email me
+what needs attention each morning* on their Account page. It goes once a day after
+`DAILY_EMAIL_HOUR` (7 am in the business's time zone unless set), only on days there's something,
+through the same email as purchase orders (Microsoft 365 sends it from the person's own mailbox to
+themselves). Its links need `PUBLIC_URL` (e.g. `https://dashboard.yeemscoffee.com`). **Email this
+to me now** on the page sends today's straight away, to check it.
+
 ## Batches: expiry and trace
 
 Warehouse → **Batches**, for batch-tracked products:
@@ -918,6 +937,8 @@ Calculator for your region.
 | `SMTP_SECURITY` | `starttls` | `starttls` (port 587), `ssl` (port 465) or `none` |
 | `MAIL_FROM` | — | Who emails to vendors are from, e.g. `Yeems Coffee Purchasing <purchasing@yourdomain.com>` (an address the mail server lets you send as) |
 | `COMPANY_NAME` | `Yeems Coffee` | The business's name on emails to vendors |
+| `DAILY_EMAIL_HOUR` | `7` | The morning "needs attention" email goes after this hour, business time |
+| `PUBLIC_URL` | — | Core's address, e.g. `https://dashboard.yeemscoffee.com`, for the links in emails |
 | `WEB_CONCURRENCY`, `GUNICORN_THREADS` | `1`, `8` | gunicorn workers and threads (`gunicorn.conf.py`) |
 | `ENV_FILE` | `.env` | Settings file to load instead of `.env` |
 | `PORT` | `8000` | Web server port |
@@ -936,6 +957,7 @@ unleashedaccess/
 ├── stock_pages.py      # the Transactions tab: recent, history, adjustments, transfers, stock counts
 ├── stock_counts.py     # stock counts kept in Core, posted to Unleashed as an adjustment
 ├── store_orders.py     # store par levels and requests; store_order_pages.py: their pages
+├── attention.py        # what needs attention, by role: the page and the morning email
 ├── vendor_email.py     # vendors that take purchase orders by email; the email and its PDF; sending (Microsoft 365 or SMTP)
 ├── simple_pdf.py       # a small PDF writer (text, lines, boxes) with nothing to install
 ├── maintenance_views.py # Maintenance pages: equipment, counters, files, requests, work orders

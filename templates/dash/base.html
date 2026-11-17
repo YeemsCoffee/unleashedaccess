@@ -23,6 +23,7 @@
     </div>
     {% if not signed_out %}
     <div class="header-actions">
+      {% if not signed_out %}<a class="header-link" href="{{ url_for('dash.attention') }}">Needs attention</a>{% endif %}
       {% if shows_unleashed %}
       <span class="sync-status">
         {% if sync_last and sync_last.status == 'running' %}

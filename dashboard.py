@@ -219,7 +219,7 @@ _PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand",
 _AREA_OF_PAGE = {page[0]: (page[2] if len(page) > 2 else area) for area, pages in _TABS for page in pages}
 # Pages anyone signed in can open; Settings pages check for admins themselves.
 _GENERAL_ENDPOINTS = {"dash.login", "dash.logout", "dash.healthz", "dash.account", "dash.sync_now",
-                      "dash.no_access"}
+                      "dash.no_access", "dash.attention", "dash.attention_email", "dash.account_prefs"}
 
 
 def area_of(endpoint):
@@ -478,7 +478,56 @@ def account():
             return redirect(url_for("dash.overview"))
         except AccountError as e:
             error = str(e)
-    return render_template("dash/account.html", user=user, error=error)
+    import attention
+    return render_template("dash/account.html", user=user, error=error,
+                           daily_email=attention.wants_email(current_app.extensions["db"], user["id"]),
+                           can_email=_can_email())
+
+
+def _can_email():
+    from vendor_email import can_send
+    return can_send(current_app.config)
+
+
+@bp.post("/account/prefs")
+def account_prefs():
+    import attention
+    user = current_user()
+    if current_app.config["AUTH_MODE"] != "accounts" or user is None:
+        return redirect(url_for("dash.overview"))
+    on = bool(request.form.get("daily_email"))
+    attention.set_wants_email(current_app.extensions["db"], user["id"], on)
+    flash("You'll get what needs attention by email each morning." if on else "No more morning emails.", "ok")
+    return redirect(url_for("dash.account"))
+
+
+@bp.get("/attention", endpoint="attention")
+def attention_page():
+    """What needs attention today, in the tabs the person opens."""
+    import attention
+    areas = user_areas()
+    sections = attention.gather(current_app._get_current_object(), areas, _ext()["today_fn"]())
+    user = current_user()
+    return render_template("dash/attention.html", sections=sections, user=user, can_email=_can_email(),
+                           daily_email=bool(user) and attention.wants_email(current_app.extensions["db"], user["id"]))
+
+
+@bp.post("/attention/email")
+def attention_email():
+    """Send the person today's email now (to check it)."""
+    import attention
+    from vendor_email import MailError
+    user = current_user()
+    if user is None:
+        flash("Sign in with your own account to get it by email.", "warn")
+        return redirect(url_for("dash.attention"))
+    try:
+        attention.send_daily(current_app._get_current_object(), force_user=user)
+    except MailError as e:
+        flash(str(e), "warn")
+    else:
+        flash(f"Sent it to {user['email']}.", "ok")
+    return redirect(url_for("dash.attention"))
 
 
 @bp.get("/no-access")
@@ -1565,7 +1614,11 @@ def init_app(app):
         syncer = Syncer(client, store, today_fn=today_fn,
                         history_months=cfg["SYNC_HISTORY_MONTHS"],
                         max_workers=4 if mode == "live" else 1)
-        scheduler = SyncScheduler(syncer, cfg["SYNC_INTERVAL_MINUTES"])
+        def morning_email():
+            import attention
+            with app.app_context():
+                attention.send_daily(app)
+        scheduler = SyncScheduler(syncer, cfg["SYNC_INTERVAL_MINUTES"], after=morning_email)
         store.mark_interrupted()
     store_client = LocalStoreClient(store, live=client, today_fn=today_fn,
                                     fetch_snapshot=syncer.fetch_snapshot if syncer else None)

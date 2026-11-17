@@ -24,4 +24,16 @@
   </form>
   <p class="muted">Changing your password signs you out on your other devices.</p>
 </section>
+{% if not user.must_change_password %}
+<section class="card login">
+  <h2>Morning email</h2>
+  <form method="post" action="{{ url_for('dash.account_prefs') }}">
+    <label class="check-field"><input type="checkbox" name="daily_email" value="1" {{ 'checked' if daily_email }}> Email me what needs attention each morning</label>
+    <p class="muted small">Only on days something does, in the tabs you open: stock to order, late deliveries, batches expiring,
+      store requests, maintenance overdue, production due, COGS not explained. <a href="{{ url_for('dash.attention') }}">See today's</a>.
+      {% if not can_email %}Email isn't set up yet, so none are sent until it is.{% endif %}</p>
+    <button class="btn">Save</button>
+  </form>
+</section>
+{% endif %}
 {% endblock %}
