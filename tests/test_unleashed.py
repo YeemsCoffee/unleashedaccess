@@ -3926,9 +3926,10 @@ class TeamAccountTests(unittest.TestCase):
         profiles = restarted.extensions["profiles"]
         self.assertEqual([p["name"] for p in profiles.all()], ["Maintenance technician", "Standard"])
         bea = restarted.extensions["users"].by_email("bea@yeems.test")
-        self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production"})
+        self.assertEqual(profiles.areas_of(bea), {"finance", "warehouse", "production", "store_orders"})  # Warehouse includes it
         owner = restarted.extensions["users"].by_email("owner@yeems.test")
-        self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance", "maint_requests"})
+        self.assertEqual(profiles.areas_of(owner), {"finance", "warehouse", "production", "maintenance", "maint_requests",
+                                                    "store_orders"})
 
     def test_profiles_decide_which_tabs_each_person_opens(self):
         admin = self._admin_client()
