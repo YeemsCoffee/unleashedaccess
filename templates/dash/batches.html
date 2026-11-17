@@ -1,0 +1,74 @@
+{% extends "dash/base.html" %}
+{% block title %}Batches{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Batches</h1>
+  <form method="get" class="filters">
+    <label>Expiring within <select name="within">{% for d in (3, 7, 14, 30, 60) %}<option value="{{ d }}" {{ 'selected' if d == within }}>{{ d }} days</option>{% endfor %}</select></label>
+    <button class="btn">Show</button>
+    <a class="btn" href="{{ url_for('dash.batches', within=within, format='csv', only='expiring') }}">Export CSV</a>
+  </form>
+</div>
+{% if problem %}<p class="recon recon-warn">! {{ problem }}</p>{% endif %}
+<section class="card" id="expiring">
+  <h2>Expired or expiring within {{ within }} days</h2>
+  {% if expiring %}<p class="recon recon-warn">! {{ expiring|length }} batch{{ 'es' if expiring|length != 1 }} worth {{ value|money }}: use, sell or write off first.</p>{% endif %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th>Batch</th><th>Warehouse</th><th class="num">Qty</th><th>Expires</th><th class="num">Value</th><th></th></tr></thead>
+    <tbody>
+    {% for b in expiring %}
+    <tr class="{{ 'row-warn' if b.days_left < 0 }}">
+      <td>{{ b.description or b.product_code }}<div class="muted small mono">{{ b.product_code }}</div></td>
+      <td class="mono">{{ b.number }}</td><td>{{ b.warehouse or '—' }}</td><td class="num">{{ b.qty|qty }}</td>
+      <td class="nowrap">{{ b.expiry|d }} <span class="{{ 'due-late' if b.days_left < 0 else 'muted' }} small">{{ ('expired ' ~ (-b.days_left) ~ ' day' ~ ('s' if b.days_left != -1) ~ ' ago') if b.days_left < 0 else ('today' if b.days_left == 0 else 'in ' ~ b.days_left ~ ' day' ~ ('s' if b.days_left != 1)) }}</span></td>
+      <td class="num">{{ b.value|money }}</td>
+      <td><a class="small" href="{{ url_for('dash.batches', within=within, product=b.product_code, batch=b.number) }}#trace">Trace →</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">{{ "Nothing expires in that time." if not problem else "—" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">From Unleashed's batch list, for batch-tracked products, valued at each product's average cost. {{ rows|length }} batch{{ 'es' if rows|length != 1 }} in stock in all
+    (<a href="{{ url_for('dash.batches', format='csv') }}">CSV of all</a>).</p>
+</section>
+<section class="card" id="trace">
+  <h2>Trace a batch</h2>
+  <form method="get" class="filters">
+    <input type="hidden" name="within" value="{{ within }}">
+    <label>Product <input class="text-input" name="product" list="batch-products" value="{{ product }}" autocomplete="off" placeholder="Product code" required></label>
+    <label>Batch <input class="text-input" name="batch" value="{{ number }}" maxlength="50" placeholder="Batch number" required></label>
+    <button class="btn btn-primary">Trace</button>
+  </form>
+  <datalist id="batch-products">{% for c in tracked %}<option value="{{ c }}">{{ c }} · {{ names.get(c, '') }}</option>{% endfor %}</datalist>
+  {% if trace %}
+  {% set t = trace %}
+  <h3>{{ names.get(t.product_code, t.product_code) }} · batch <span class="mono">{{ t.number }}</span></h3>
+  {% if not (t.received or t.made or t.used_in or t.sent or t.credited or t.adjusted or t.in_stock) %}
+  <p class="recon recon-warn">! Nothing found for that batch in the last 12 months. Check the product and the batch number as Unleashed has them.</p>{% endif %}
+  {% macro docs(title, items, link, cols) %}
+    {% if items %}<h4>{{ title }}</h4><div class="table-wrap"><table class="trace-table"><tbody>
+      {% for x in items %}<tr><td class="nowrap">{{ x.date|d if x.date else '—' }}</td>
+        <td>{% if link %}<a href="{{ url_for(link, number=x.number) }}">{{ x.number }}</a>{% else %}{{ x.number }}{% endif %}</td>
+        <td>{{ caller(x) }}</td><td class="num">{{ x.qty|qty if x.qty is not none else '' }}</td></tr>{% endfor %}
+    </tbody></table></div>{% endif %}
+  {% endmacro %}
+  {% call(x) docs('Received', t.received, 'dash.purchase_detail', 0) %}from {{ x.party }}{% if x.expiry %} · expires {{ x.expiry|d }}{% endif %}{% endcall %}
+  {% call(x) docs('Made', t.made, 'dash.production_order', 0) %}production order{% endcall %}
+  {% call(x) docs('Went into', t.used_in, 'dash.production_order', 0) %}to make {{ names.get(x.made, x.made) }}{% if x.made_batches %}, batch {{ x.made_batches|join(', ') }}{% endif %}
+    {% if x.sent %}<div class="small">which went to: {% for s in x.sent %}<a href="{{ url_for('dash.sales_detail', number=s.number) }}">{{ s.party }}</a>{{ ' (store)' if s.store }}{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}{% endcall %}
+  {% call(x) docs('Sent', t.sent, 'dash.sales_detail', 0) %}to {{ x.party }}{{ ' (store)' if x.store }}{% if x.status and x.status != 'Completed' %} · {{ x.status|lower }}{% endif %}{% endcall %}
+  {% call(x) docs('Came back', t.credited, 'dash.credit_detail', 0) %}from {{ x.party }}{% endcall %}
+  {% call(x) docs('Adjusted', t.adjusted, 'dash.adjustment_detail', 0) %}{{ x.party or 'adjustment' }}{% endcall %}
+  {% if t.maybe_used_in %}<h4>May have gone into</h4>
+    <p class="muted small">Unleashed doesn't say which batch these production orders used, so any of them may have used this one.</p>
+    <div class="table-wrap"><table class="trace-table"><tbody>{% for x in t.maybe_used_in %}<tr><td class="nowrap">{{ x.date|d }}</td>
+      <td><a href="{{ url_for('dash.production_order', number=x.number) }}">{{ x.number }}</a></td><td>to make {{ names.get(x.made, x.made) }}</td><td class="num">{{ x.qty|qty }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+  <h4>In stock now</h4>
+  {% if t.in_stock is none %}<p class="muted">Unleashed's batch list couldn't be read.</p>
+  {% elif t.in_stock %}<p>{% for b in t.in_stock %}{{ b.qty|qty }} in {{ b.warehouse }}{{ ' · expires ' ~ (b.expiry|d) if b.expiry }}{{ '; ' if not loop.last }}{% endfor %}</p>
+  {% else %}<p class="muted">None left.</p>{% endif %}
+
+  {% endif %}
+</section>
+{% endblock %}

@@ -640,3 +640,5 @@ fieldset.simptww-part h3 { font-size: 13px; margin: 4px 0 2px; color: var(--text
 .store-card .run-actions { margin-top: 8px; }
 .par-sheet td, .par-list td { vertical-align: top; }
 .cancel-request { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.trace-table td { padding: 4px 12px 4px 0; vertical-align: top; }
+#trace h4 { margin: 14px 0 4px; font-size: 14px; }

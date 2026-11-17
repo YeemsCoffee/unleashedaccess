@@ -384,6 +384,21 @@ class MockDataset:
         for line in asm["Lines"]:
             if self._qty[line["ProductCode"]] + 1e-9 < line["Quantity"] + line["WastageQuantity"]:
                 return line["ProductCode"]
+        # A batch-tracked component is taken from its batches soonest expiring first, and the
+        # line says which (as Unleashed's assembly lines do once completed).
+        for line in asm["Lines"]:
+            if line["ProductCode"] in BATCH_TRACKED:
+                need, used = line["Quantity"] + line["WastageQuantity"], []
+                warehouse = asm.get("SourceWarehouse") or "GDN"
+                for b in sorted((b for b in self.batches if b["ProductCode"] == line["ProductCode"]
+                                 and b["WarehouseCode"] == warehouse and b["Quantity"] > 0),
+                                key=lambda b: (b.get("ExpiryDate") or dt.date.max, b["Number"])):
+                    take = min(need, b["Quantity"])
+                    if take > 0:
+                        b["Quantity"] -= take
+                        used.append({"Number": b["Number"], "Quantity": take})
+                        need -= take
+                line["BatchNumbers"] = used
         self._complete(asm, self.today)
         asm["Modified"] = dt.date.today()  # Unleashed stamps changes with the real clock
         for b in asm.get("Batches") or []:
@@ -454,6 +469,7 @@ class MockDataset:
                 for b in line.get("PendingBatchNumbers") or []:
                     self._add_batch(code, po.get("WarehouseCode") or "GDN", b["Number"], b["Quantity"],
                                     b.get("ExpiryDate"))
+                line["BatchNumbers"] = (line.get("BatchNumbers") or []) + list(line.get("PendingBatchNumbers") or [])
                 line["PendingBatchNumbers"] = []
                 line["Received"] = want
                 line["ReceiptQuantity"] = want

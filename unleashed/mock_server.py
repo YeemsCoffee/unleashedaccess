@@ -506,6 +506,9 @@ def _purchase_order(ds, po):
             "DueDate": _ms(po["RequiredDate"]),
             "PendingBatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"],
                                      "ExpiryDate": _ms(b.get("ExpiryDate"))} for b in l.get("PendingBatchNumbers") or []],
+            # The batches received on it.
+            "BatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"],
+                              "ExpiryDate": _ms(b.get("ExpiryDate"))} for b in l.get("BatchNumbers") or []],
         })
     freight = po["Freight"]
     tax_total = po.get("TaxTotal", 0.0)
@@ -581,6 +584,9 @@ def _assembly(ds, a):
             "Product": _product_ref(ds, l["ProductCode"]),
             "Quantity": l["Quantity"], "WastageQuantity": l["WastageQuantity"],
             **({"UnitCost": l["UnitCost"]} if "UnitCost" in l else {}),
+            # A batch-tracked component: which of its batches went in (once completed).
+            **({"BatchNumbers": [{"Number": b["Number"], "Quantity": b["Quantity"]} for b in l["BatchNumbers"]]}
+               if l.get("BatchNumbers") is not None else {}),
         })
     return {
         "Guid": a["Guid"], "AssemblyNumber": a["AssemblyNumber"],

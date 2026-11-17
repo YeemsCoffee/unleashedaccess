@@ -650,3 +650,36 @@ def stock_count_cancel(count_id):
     _counts().cancel(count_id)
     flash("Cancelled the count. Nothing was sent to Unleashed.", "ok")
     return redirect(url_for("dash.stock_counts"))
+
+
+# ---------------------------------------------------------------- batches
+
+@bp.get("/batches")
+def batches():
+    """Batches in stock: those expiring soon (or expired) first, and a trace of any one batch."""
+    r = reports()
+    try:
+        within = max(0, min(int(request.args.get("within") or 14), 365))
+    except ValueError:
+        within = 14
+    problem, rows = None, []
+    try:
+        rows = r.batches()
+    except UnleashedError as e:
+        problem = f"Unleashed's batch list couldn't be read: {e}"
+    expiring = [b for b in rows if b["days_left"] is not None and b["days_left"] <= within]
+    if _wants_csv():
+        return _csv("batches", [("Product Code", "product_code"), ("Description", "description"), ("Warehouse", "warehouse"),
+                                ("Batch", "number"), ("Qty", "qty"), ("Expiry", lambda b: b["expiry"].isoformat() if b["expiry"] else ""),
+                                ("Days Left", "days_left"), ("Value", lambda b: _round(b["value"]))],
+                    expiring if request.args.get("only") == "expiring" else rows)
+    product = (request.args.get("product") or "").strip()
+    number = (request.args.get("batch") or "").strip()
+    codes = {p.get("ProductCode", "").lower(): p.get("ProductCode") for p in r.products()}
+    product = codes.get(product.lower(), product)
+    trace = r.batch_trace(product, number) if product and number else None
+    tracked = sorted({b["product_code"] for b in rows} | {p.get("ProductCode") for p in r.products() if p.get("IsBatchTracked")})
+    return render_template("dash/batches.html", rows=rows, expiring=expiring, within=within, problem=problem,
+                           trace=trace, product=product, number=number, tracked=tracked,
+                           names={p.get("ProductCode"): p.get("ProductDescription") for p in r.products()},
+                           value=sum(b["value"] for b in expiring), csv_url=_csv_url())

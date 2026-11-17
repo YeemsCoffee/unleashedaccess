@@ -973,6 +973,47 @@ class OrderPageTests(unittest.TestCase):
         self.assertEqual(self.app.extensions["store_orders"].request(second)["status"], "cancelled")
         self.assertEqual(self.c.get("/store-orders/new?store=WHSL-01").status_code, 404)  # not a store
 
+    def test_batches_expiring_and_a_batch_traced_to_the_stores_it_reached(self):
+        self.app.extensions["unleashed"]["store"].set_state("cogs_stores", '["CATER-01"]')
+        page = self.c.get("/batches?within=7").get_data(as_text=True)
+        self.assertIn("Expired or expiring within 7 days", page)
+        self.assertIn("CRM-HVY-HG-A", page)
+        self.assertNotIn(">CRM-HVY-HG-B<", page)  # 12 days away
+        self.assertIn("CRM-HVY-HG-B", self.c.get("/batches?within=14").get_data(as_text=True))
+        csv_text = self.c.get("/batches?format=csv").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Product Code,Description,Warehouse,Batch,Qty,Expiry,Days Left,Value"))
+        # Cream batch A goes into vanilla sweet cream (batch VSC-T1), which goes to a store.
+        asm = self.ds.create_assembly("VSC-HG", 2)
+        asm["Batches"] = [{"Number": "VSC-T1", "Quantity": 2, "ExpiryDate": TODAY + dt.timedelta(days=6)}]
+        self.assertIsNone(self.ds.complete(asm))
+        cream_line = next(l for l in asm["Lines"] if l["ProductCode"] == "CRM-HVY-HG")
+        self.assertEqual([b["Number"] for b in cream_line["BatchNumbers"]], ["CRM-HVY-HG-A"])  # soonest expiring first
+        self.app.extensions["unleashed"]["syncer"].sync()
+
+        def sell(customer, code, batch, qty):
+            res = self._post("/sales/new", customer=customer, warehouse="GDN", order_date=TODAY.isoformat(), line_guid=[""],
+                             product=[code], qty=[str(qty)], price=["30"])
+            number = res.headers["Location"].rsplit("/", 1)[1]
+            line = self.reports.sales_order(number)["lines"][0]
+            self._post(f"/sales/{number}/complete", **{f"batch-{line['guid']}": batch, f"batch-qty-{line['guid']}": str(qty)})
+            return number
+
+        to_store = sell("CATER-01", "VSC-HG", "VSC-T1", 1)
+        direct = sell("WHSL-01", "CRM-HVY-HG", "CRM-HVY-HG-A", 2)
+        self.app.extensions["unleashed"]["syncer"].sync()
+        trace = self.reports.batch_trace("CRM-HVY-HG", "crm-hvy-hg-a")  # any case
+        self.assertEqual([x["number"] for x in trace["used_in"]], [asm["AssemblyNumber"]])
+        used = trace["used_in"][0]
+        self.assertEqual((used["made"], used["made_batches"]), ("VSC-HG", ["VSC-T1"]))
+        self.assertEqual([(s["number"], s["store"]) for s in used["sent"]], [(to_store, True)])
+        self.assertEqual([(x["number"], x["store"], x["qty"]) for x in trace["sent"]], [(direct, False, 2.0)])
+        self.assertTrue(trace["in_stock"])
+        page = self.c.get("/batches?product=crm-hvy-hg&batch=CRM-HVY-HG-A").get_data(as_text=True)
+        for text in ("Went into", asm["AssemblyNumber"], "batch VSC-T1", "Mock Catering Client</a> (store)", "Sent", direct,
+                     "In stock now"):
+            self.assertIn(text, page)
+        self.assertIn("Nothing found for that batch", self.c.get("/batches?product=CRM-HVY-HG&batch=NOPE").get_data(as_text=True))
+
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
         self.app.config["MAIL_FROM"] = "Yeems Purchasing <purchasing@yeems.test>"

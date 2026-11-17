@@ -290,6 +290,9 @@ class Reports:
             converted = bought is not None and abs(bought - stock_qty) > 1e-9
             price = _first(l.get("BCUnitPrice"), l.get("UnitPrice"))
             lines.append({"guid": l.get("Guid"), "product_code": code, "description": prod.get("ProductDescription"),
+                          "batches": [{"number": b.get("Number"), "qty": b.get("Quantity"),
+                                       "expiry": parse_date(b.get("ExpiryDate"))}
+                                      for b in (l.get("BatchNumbers") or l.get("PendingBatchNumbers") or [])],
                           "qty": stock_qty,
                           "received_qty": l.get("ReceiptQuantity"),
                           "unit_price": price,
@@ -604,6 +607,111 @@ class Reports:
         return [dict(r, kind="Adjustment") for r in self.stock_adjustments(start, end)["rows"]] + \
             self.stock_count_changes(start, end)
 
+    # ------------------------------------------------------------ batches
+
+    def batches(self, product=None):
+        """Batches in stock now, from Unleashed's batch list: [{"product_code", "description",
+        "warehouse", "number", "qty", "expiry", "days_left", "avg_cost", "value"}], soonest expiring
+        first (no expiry last). Raises UnleashedError when the list can't be read."""
+        items = self.client.get_all("BatchNumbers", {"ProductCode": product} if product else {})
+        stock = {(r["product_code"], r["warehouse"]): r for r in self.stock_on_hand()["rows"]}
+        names = {p.get("ProductCode"): p.get("ProductDescription") for p in self.products()}
+        out = []
+        for b in items:
+            qty = float(b.get("Quantity") or 0)
+            code = b.get("ProductCode") or (b.get("Product") or {}).get("ProductCode")
+            if qty <= 0 or not code:
+                continue
+            expiry = parse_date(b.get("ExpiryDate"))
+            warehouse = b.get("WarehouseCode") or _warehouse_code(b.get("Warehouse"))
+            row = stock.get((code, warehouse)) or next((r for (c, _), r in stock.items() if c == code), {})
+            avg = row.get("avg_cost") or 0
+            out.append({"product_code": code, "description": names.get(code) or row.get("description"),
+                        "warehouse": warehouse, "number": b.get("Number"), "qty": qty, "expiry": expiry,
+                        "days_left": (expiry - self.today).days if expiry else None, "avg_cost": avg, "value": qty * avg})
+        out.sort(key=lambda r: (r["expiry"] is None, r["expiry"] or dt.date.max, r["product_code"], r["number"] or ""))
+        return out
+
+    def expiring_batches(self, within_days=14):
+        """Batches in stock that have expired or expire within `within_days`."""
+        return [b for b in self.batches() if b["days_left"] is not None and b["days_left"] <= within_days]
+
+    def batch_trace(self, product_code, number, months=12):
+        """Where one batch came from and went, from the documents of the last `months`:
+        {"received": purchase orders it came in on, "made": production orders that made it,
+        "used_in": production orders it went into (with the batches they made, and where those went),
+        "maybe_used_in": production orders that used the product without Unleashed saying which batch,
+        "sent": sales orders it went out on (to which customer: a store's is marked), "credited":
+        credit notes it came back on, "adjusted": stock adjustments to it, "in_stock": what's left}."""
+        start, end = add_months(month_start(self.today), -months), self.today
+        key = (number or "").strip().lower()
+
+        def has(batches):
+            return [b for b in batches or [] if (b.get("number") or "").strip().lower() == key]
+
+        stores = set(self.cogs_settings()["stores"])
+        result = {"product_code": product_code, "number": number, "received": [], "made": [], "used_in": [],
+                  "maybe_used_in": [], "sent": [], "credited": [], "adjusted": [], "in_stock": []}
+        for o in self.purchase_orders(start, end):
+            for l in o["lines"]:
+                for b in has(l["batches"]) if l["product_code"] == product_code else []:
+                    result["received"].append({"number": o["number"], "date": o.get("received_date") or o["order_date"],
+                                               "party": o["supplier_name"], "qty": b["qty"], "expiry": b.get("expiry")})
+        made_from = []  # production orders the batch went into, to follow what they made
+        for a in self.assemblies(start, end):
+            if not a["completed"]:
+                continue
+            if a["product_code"] == product_code:
+                for b in has(a["batches"]):
+                    result["made"].append({"number": a["number"], "date": a["completed_date"], "qty": b.get("qty")})
+            for l in a["lines"]:
+                if l["product_code"] != product_code:
+                    continue
+                if l["batches"] is None:
+                    result["maybe_used_in"].append({"number": a["number"], "date": a["completed_date"],
+                                                    "made": a["product_code"], "qty": l["consumed"]})
+                for b in has(l["batches"]):
+                    result["used_in"].append({"number": a["number"], "date": a["completed_date"], "made": a["product_code"],
+                                              "qty": b["qty"], "made_batches": [x["number"] for x in a["batches"] or []]})
+                    made_from.append(a)
+        for o in self.sales_orders(start, end):
+            if (o.get("status") or "").lower() in ("deleted",):
+                continue
+            for l in o["lines"]:
+                for b in has(l["batches"]) if l["product_code"] == product_code else []:
+                    result["sent"].append({"number": o["number"], "date": o.get("completed_date") or o["order_date"],
+                                           "party": o["customer_name"], "store": o.get("customer_code") in stores,
+                                           "qty": b["qty"], "status": o.get("status")})
+        # Where what it went into was sent: the batches those production orders made.
+        for a in made_from:
+            made = {(x["number"] or "").strip().lower() for x in a["batches"] or []}
+            for o in self.sales_orders(start, end):
+                for l in o["lines"]:
+                    if l["product_code"] == a["product_code"] and any(
+                            (b.get("number") or "").strip().lower() in made for b in l["batches"]):
+                        entry = next(u for u in result["used_in"] if u["number"] == a["number"])
+                        entry.setdefault("sent", []).append({"number": o["number"], "party": o["customer_name"],
+                                                             "store": o.get("customer_code") in stores})
+        for c in self.credit_notes(start, end):
+            for l in c["lines"]:
+                for b in has(l["batches"]) if l["product_code"] == product_code else []:
+                    result["credited"].append({"number": c["number"], "date": c.get("date"), "party": c.get("customer_name"),
+                                               "qty": b["qty"]})
+        for a in self.client.get_all("StockAdjustments", {"startDate": start.isoformat(), "endDate": end.isoformat()}):
+            if (a.get("Status") or "").lower() in INACTIVE_ADJUSTMENT_STATUSES:
+                continue
+            for l in a.get("StockAdjustmentLines") or []:
+                if (l.get("Product") or {}).get("ProductCode") != product_code:
+                    continue
+                for b in has([{"number": x.get("Number"), "qty": x.get("Quantity")} for x in l.get("BatchNumbers") or []]):
+                    result["adjusted"].append({"number": a.get("AdjustmentNumber"), "date": parse_date(a.get("AdjustmentDate")),
+                                               "party": a.get("AdjustmentReason"), "qty": b["qty"]})
+        try:
+            result["in_stock"] = [b for b in self.batches(product_code) if (b["number"] or "").strip().lower() == key]
+        except UnleashedError:
+            result["in_stock"] = None
+        return result
+
     def stock_adjustment(self, number):
         """One adjustment, any status: {"number", "guid", "date", "warehouse", "reason", "status",
         "lines": [{"product_code", "description", "qty_change", "value_change", "comments",
@@ -724,6 +832,9 @@ class Reports:
             if unit is None:
                 unit = total / consumed if total is not None and consumed else costs.get(code, 0)
             lines.append({"product_code": code, "description": prod.get("ProductDescription"),
+                          # Which of the component's batches went in, when Unleashed says (None: it doesn't).
+                          "batches": None if l.get("BatchNumbers") is None else
+                          [{"number": b.get("Number"), "qty": b.get("Quantity")} for b in l.get("BatchNumbers") or []],
                           "qty": used, "wastage": wastage, "consumed": consumed,
                           "unit_cost": unit, "cost": consumed * unit, "estimated": estimated})
         prod = i.get("Product") or {}

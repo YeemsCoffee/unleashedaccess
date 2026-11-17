@@ -170,6 +170,22 @@ much to **order**.
   stock and par levels behind it. Nothing is sent until the order is checked and made.
 - A past date (As at) has no par columns: the levels and what's on order are today's.
 
+## Batches: expiry and trace
+
+Warehouse → **Batches**, for batch-tracked products:
+
+- **Expired or expiring** within 3 to 60 days (14 to start with): each batch in stock, where it
+  is, how many, when it expires and what it's worth at average cost, from Unleashed's batch list.
+  The CSV has every batch in stock.
+- **Trace a batch** (a product and a batch number, any case): from the last 12 months'
+  documents, where it came from (the purchase order it was received on, or the production order
+  that made it), what it went into (production orders, with the batches they made and the
+  customers and stores those went to), which sales orders sent it out (stores marked), what came
+  back on credit notes, stock adjustments to it, and what's left in stock. For a recall.
+- A production order is only listed under "went into" when Unleashed says which batch of the
+  component it used. One that used the product without saying (as older ones may) is listed
+  separately under **May have gone into**, since any of its batches might be the one.
+
 ## Store ordering
 
 Warehouse → **Store orders**: stores ask the warehouse for stock, and the warehouse turns the

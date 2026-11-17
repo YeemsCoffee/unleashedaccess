@@ -146,7 +146,7 @@ _TABS = [
     ("warehouse", [("dash.stock_on_hand", "Stock on hand"),
                    ("dash.purchases", "Purchases"), ("dash.sales", "Sales"),
                    ("dash.store_orders", "Store orders", "store_orders"),
-                   ("dash.transactions", "Transactions")]),
+                   ("dash.transactions", "Transactions"), ("dash.batches", "Batches")]),
     ("production", [("dash.production", "Overview"), ("dash.production_orders", "Production orders"),
                     ("dash.production_requirements", "Material requirements"),
                     ("dash.production_boms", "Bills of materials"),
