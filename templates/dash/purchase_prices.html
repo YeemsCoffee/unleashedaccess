@@ -1,0 +1,49 @@
+{% extends "dash/base.html" %}
+{% block title %}Price history{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Price history{{ ': ' ~ (names.get(product) or product) if product }}</h1>
+  <form method="get" class="filters">
+    <label>Product <input class="text-input" name="product" list="price-products" value="{{ product }}" autocomplete="off" placeholder="Product code"></label>
+    <button class="btn btn-primary">Show</button>
+    <a class="btn" href="{{ csv_url }}">Export CSV</a>
+  </form>
+  <datalist id="price-products">{% for c, n in names|dictsort %}<option value="{{ c }}">{{ c }} · {{ n }}</option>{% endfor %}</datalist>
+</div>
+{% if product %}
+<section class="card">
+  <h2>Every order in the last 12 months</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Ordered</th><th>Order</th><th>Supplier</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Change</th></tr></thead>
+    <tbody>
+    {% for x in history %}
+    <tr><td class="nowrap">{{ x.date|d }}</td><td><a href="{{ url_for('dash.purchase_detail', number=x.number) }}">{{ x.number }}</a></td>
+      <td>{{ x.supplier }}</td><td class="num">{{ x.qty|qty }} {{ x.unit }}</td><td class="num">{{ x.price|money }} <span class="muted small">per {{ x.unit }}</span></td>
+      <td class="num {{ 'due-late' if x.change is not none and (x.change|abs) >= 0.02 }}">{{ ('+' if x.change > 0 else '') ~ ('%.1f'|format(x.change * 100)) ~ '%' if x.change is not none else '—' }}</td></tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No purchase orders for it in the last 12 months.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="small"><a href="{{ url_for('dash.purchase_prices') }}">← All price changes</a></p>
+</section>
+{% else %}
+<section class="card">
+  <h2>Prices that changed (last 6 months)</h2>
+  <p class="muted small">Each product's latest price against the order before it (same unit), where it moved 2% or more.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Product</th><th>Supplier</th><th class="num">Before</th><th class="num">Latest</th><th class="num">Change</th><th>Ordered</th></tr></thead>
+    <tbody>
+    {% for x in changes %}
+    <tr><td><a href="{{ url_for('dash.purchase_prices', product=x.product_code) }}">{{ x.description or x.product_code }}</a><div class="muted small mono">{{ x.product_code }}</div></td>
+      <td>{{ x.supplier }}</td><td class="num">{{ x.previous|money }}</td><td class="num">{{ x.price|money }} <span class="muted small">per {{ x.unit }}</span></td>
+      <td class="num {{ 'due-late' if x.change > 0 }}">{{ '+' if x.change > 0 }}{{ '%.1f'|format(x.change * 100) }}%</td>
+      <td class="nowrap"><a href="{{ url_for('dash.purchase_detail', number=x.number) }}">{{ x.number }}</a> · {{ x.date|d }}</td></tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No price moved 2% or more.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

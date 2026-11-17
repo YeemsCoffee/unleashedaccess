@@ -9,7 +9,8 @@
       <input name="product" class="line-product" list="order-products" value="{{ l.product_code or '' }}" autocomplete="off"
         placeholder="Type a product code or name" aria-label="Product">
       <div class="muted small line-product-name" data-product-name>{{ product_names.get(l.product_code, '') if l.product_code }}</div>
-      {% if l.hint %}<div class="small to-order-hint">{{ l.hint }}</div>{% endif %}</td>
+      {% if l.hint %}<div class="small to-order-hint">{{ l.hint }}</div>{% endif %}
+      {% if not sales %}<div class="small price-hint" data-price-hint hidden></div>{% endif %}</td>
     <td class="num"><input class="qty-input" type="number" name="qty" value="{{ ('%g'|format(l.qty)) if l.qty else '' }}" min="0" step="any" inputmode="decimal" aria-label="Quantity"></td>
     {% if not sales %}{% set p = options_by_code.get(l.product_code) %}{% set picked = (l.unit_name or (p.unit if p else ''))|lower %}
     <td><select name="unit" class="unit-select" aria-label="Unit" data-unit data-code="{{ p.code if p else '' }}">

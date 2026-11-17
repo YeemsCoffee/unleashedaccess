@@ -185,7 +185,7 @@ _PAGE_OF = {"dash.stock_valuation": "dash.stock_on_hand",
             "dash.purchase_order_receive": "dash.purchases", "dash.purchase_order_complete": "dash.purchases",
             "dash.purchase_order_delete": "dash.purchases", "dash.purchase_order_email": "dash.purchases",
             "dash.purchase_vendors": "dash.purchases", "dash.purchase_vendors_test": "dash.purchases",
-            "dash.purchase_order_pdf": "dash.purchases",
+            "dash.purchase_order_pdf": "dash.purchases", "dash.purchase_prices": "dash.purchases",
             **{f"dash.{p}": "dash.store_orders" for p in ("store_order_new", "store_order", "store_order_make",
                                                           "store_order_cancel", "store_pars")},
             "dash.credit_notes": "dash.sales", "dash.credit_detail": "dash.sales", "dash.sales_order_credit": "dash.sales",
@@ -1008,8 +1008,36 @@ def purchase_detail(number):
     if po is None:
         abort(404)
     emails = current_app.extensions["vendor_emails"]
+    # Each line's price against the order before this one (same product and unit).
+    was = {}
+    try:
+        for row in reports().purchase_prices(12):
+            if row["number"] == number and row["previous"] is not None:
+                was[row["product_code"]] = row
+    except UnleashedError:
+        pass
     return render_template("dash/purchase_detail.html", po=po, vendor_email=emails.setting(po["supplier_code"]),
-                           emailed=emails.sent(number))
+                           emailed=emails.sent(number), was=was)
+
+
+@bp.get("/purchases/prices")
+def purchase_prices():
+    """What's been paid for each product: the latest changes, and one product's history."""
+    r = reports()
+    product = (request.args.get("product") or "").strip()
+    codes = {p.get("ProductCode", "").lower(): p.get("ProductCode") for p in r.products()}
+    product = codes.get(product.lower(), product)
+    history = list(reversed(r.purchase_prices(12, product=product))) if product else None
+    changes = r.price_changes(6)
+    if _wants_csv():
+        return _csv("price-history" if product else "price-changes", [
+            ("Date", lambda x: x["date"].isoformat() if x["date"] else ""), ("Order", "number"), ("Supplier", "supplier"),
+            ("Product Code", "product_code"), ("Description", "description"), ("Unit", "unit"), ("Qty", "qty"),
+            ("Price", "price"), ("Previous", "previous"), ("Change", lambda x: _round(x["change"], 4))],
+            history if product else changes)
+    return render_template("dash/purchase_prices.html", product=product, history=history, changes=changes,
+                           names={p.get("ProductCode"): p.get("ProductDescription") for p in r.products()},
+                           csv_url=_csv_url())
 
 
 @bp.get("/sales")

@@ -205,6 +205,17 @@ Warehouse → **Batches**, for batch-tracked products:
   component it used. One that used the product without saying (as older ones may) is listed
   separately under **May have gone into**, since any of its batches might be the one.
 
+## Supplier prices
+
+- **On a purchase order's form**, each line shows the last price paid for that product in that
+  unit (when, on which order, from whom); when the price on the line is 2% or more away from it,
+  the note turns red with the change.
+- **On a purchase order's page**, a line priced differently from the order before it (same
+  product and unit) says what it was and the change.
+- **Purchases → Price history**: every product whose latest price moved 2% or more in the last 6
+  months, biggest change first; pick a product for every order of it in the last 12 months, with
+  the change at each. Both have a CSV.
+
 ## Store ordering
 
 Warehouse → **Store orders**: stores ask the warehouse for stock, and the warehouse turns the

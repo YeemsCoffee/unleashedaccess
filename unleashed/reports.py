@@ -258,6 +258,49 @@ class Reports:
             "total": sum(o["goods"] + o["shipping"] for o in orders),
         }
 
+    def purchase_prices(self, months=12, product=None):
+        """What was paid for each product, order by order, over the last `months`: [{"product_code",
+        "description", "unit" (the unit it was bought in), "price" (per that unit), "qty", "date"
+        (order date), "number", "supplier", "previous" (the price of the order before it, same
+        product and unit), "change" (fraction, e.g. 0.05 for 5% more)}], oldest first. Deleted
+        orders and charge lines are left out."""
+        start = add_months(month_start(self.today), -months)
+        stock_units = {p.get("ProductCode"): (p.get("UnitOfMeasure") or {}).get("Name") for p in self.products()}
+        rows = []
+        for o in self.purchase_orders(start, self.today):
+            if o["status"] == "Deleted":
+                continue
+            for l in o["lines"]:
+                if product and l["product_code"] != product:
+                    continue
+                price = l.get("order_price")
+                if price is None or not l.get("order_qty"):
+                    continue
+                unit = (l.get("order_unit") if l.get("stock_per_unit") else None) or stock_units.get(l["product_code"]) \
+                    or l.get("order_unit") or ""
+                rows.append({"product_code": l["product_code"], "description": l["description"], "unit": unit,
+                             "price": round(float(price), 4), "qty": l["order_qty"], "date": o["order_date"],
+                             "number": o["number"], "supplier": o["supplier_name"], "supplier_code": o["supplier_code"]})
+        rows.sort(key=lambda r: (r["date"] or dt.date.min, r["number"]))
+        last = {}
+        for r in rows:
+            key = (r["product_code"], (r["unit"] or "").lower())
+            before = last.get(key)
+            r["previous"] = before["price"] if before else None
+            r["previous_number"] = before["number"] if before else None
+            r["change"] = (r["price"] - before["price"]) / before["price"] if before and before["price"] else None
+            last[key] = r
+        return rows
+
+    def price_changes(self, months=6, at_least=0.02):
+        """Each product's latest price, where it differs from the one before by `at_least` (2%) or
+        more: the latest purchase_prices row of each product and unit, biggest change first."""
+        latest = {}
+        for r in self.purchase_prices(months):
+            latest[(r["product_code"], (r["unit"] or "").lower())] = r
+        changed = [r for r in latest.values() if r["change"] is not None and abs(r["change"]) >= at_least]
+        return sorted(changed, key=lambda r: -abs(r["change"]))
+
     def received_purchases(self, start, end):
         """POs whose stock was received between start and end (inclusive)."""
         lookback = start - dt.timedelta(days=180)

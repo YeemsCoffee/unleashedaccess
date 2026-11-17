@@ -654,8 +654,22 @@ function fromTemplate(id, values) {
     price.value = Math.abs(v * 100 - Math.round(v * 100)) < 1e-9 ? v.toFixed(2) : String(v);
     price.dataset.auto = price.value;  // filled in, not typed: changing the unit may change it
   }
+  // A purchase order line: the price last paid for it in this unit, flagged when this one differs.
+  function priceHint(row, p) {
+    var hint = row.querySelector("[data-price-hint]");
+    if (!hint) return;
+    var unit = unitOf(row, p), last = unit && unit.last, price = parseFloat(row.querySelector("[name=price]").value);
+    if (!last || isNaN(price)) { hint.hidden = true; return; }
+    var change = last.price ? (price - last.price) / last.price : 0;
+    hint.hidden = false;
+    hint.classList.toggle("due-late", Math.abs(change) >= 0.02);
+    hint.textContent = "Last paid " + money(last.price) + " per " + unit.name + (last.date ? " on " + last.date : "") +
+      " (" + last.number + (last.supplier ? ", " + last.supplier : "") + ")" +
+      (Math.abs(change) >= 0.005 ? ": this is " + (change > 0 ? "+" : "") + (change * 100).toFixed(1) + "%" : "");
+  }
   // The product's name, and for a unit other than its stock unit, what's in one when known.
   function describe(row, p) {
+    priceHint(row, p);
     var label = row.querySelector("[data-product-name]"), unit = unitOf(row, p);
     var stock = p.units ? p.units.filter(function (u) { return u.stock; })[0] : null;
     if (unit && !unit.stock) {
@@ -699,6 +713,17 @@ function fromTemplate(id, values) {
     });
   }
   body.addEventListener("input", sum);
+  body.addEventListener("input", function (e) {
+    if (!e.target.matches("[name=price]")) return;
+    var row = e.target.closest("[data-line]");
+    var p = byCode[(row.querySelector(".line-product").value || "").trim().toLowerCase()];
+    if (p) priceHint(row, p);
+  });
+  // Lines drawn with the page (an order being edited, or drafted from what to order) show theirs too.
+  body.querySelectorAll("[data-line]").forEach(function (row) {
+    var p = byCode[(row.querySelector(".line-product").value || "").trim().toLowerCase()];
+    if (p) priceHint(row, p);
+  });
   body.addEventListener("click", function (e) {
     var remove = e.target.closest("[data-remove-line]");
     if (!remove) return;

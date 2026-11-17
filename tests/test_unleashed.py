@@ -1014,6 +1014,38 @@ class OrderPageTests(unittest.TestCase):
             self.assertIn(text, page)
         self.assertIn("Nothing found for that batch", self.c.get("/batches?product=CRM-HVY-HG&batch=NOPE").get_data(as_text=True))
 
+    def test_supplier_prices_are_tracked_and_a_change_is_flagged(self):
+        def order(price):
+            res = self._post("/purchases/new", supplier="SUP-DAIRY", warehouse="GDN", order_date=TODAY.isoformat(),
+                             line_guid=[""], product=["MILK-ALM-QT"], unit=["Each"], qty=["6"], price=[price], place="1")
+            return res.headers["Location"].rsplit("/", 1)[1]
+
+        first = order("2.90")
+        second = order("3.15")
+        rows = [r for r in self.reports.purchase_prices(12, product="MILK-ALM-QT") if r["number"] in (first, second)]
+        self.assertEqual([(r["number"], r["price"]) for r in rows], [(first, 2.9), (second, 3.15)])
+        self.assertAlmostEqual(rows[1]["change"], (3.15 - 2.9) / 2.9)
+        changed = {r["product_code"]: r for r in self.reports.price_changes(6)}
+        self.assertEqual(changed["MILK-ALM-QT"]["number"], second)
+        # The order shows it against the one before; the form knows the last price paid.
+        detail = self.c.get(f"/purchases/{second}").get_data(as_text=True)
+        self.assertIn("was $2.90: +8.6%", detail)
+        form = self.c.get("/purchases/new").get_data(as_text=True)
+        data = {p["code"]: p for p in json.loads(re.search(r'id="order-product-data">(.*?)</script>', form, re.S).group(1))}
+        last = data["MILK-ALM-QT"]["units"][0]["last"]
+        self.assertEqual((last["price"], last["number"], last["supplier"]), (3.15, second, "Mock Dairy Distributors"))
+        self.assertIn("data-price-hint", form)
+        # The history page: the changes, and one product's orders.
+        page = self.c.get("/purchases/prices").get_data(as_text=True)
+        self.assertIn("Almond Milk Barista 32 oz", page)
+        self.assertIn("+8.6%", page)
+        history = self.c.get("/purchases/prices?product=milk-alm-qt").get_data(as_text=True)
+        self.assertIn(first, history)
+        self.assertIn(second, history)
+        csv_text = self.c.get("/purchases/prices?product=MILK-ALM-QT&format=csv").get_data(as_text=True)
+        self.assertTrue(csv_text.startswith("Date,Order,Supplier,Product Code,Description,Unit,Qty,Price,Previous,Change"))
+        self.assertIn("Price history", self.c.get("/purchases").get_data(as_text=True))
+
     def test_a_purchase_order_is_emailed_to_a_vendor_set_to_take_them(self):
         outbox = self.app.config["MAIL_OUTBOX"] = []
         self.app.config["MAIL_FROM"] = "Yeems Purchasing <purchasing@yeems.test>"

@@ -116,19 +116,30 @@ def _choices(kind):
     charges = r.charge_codes()
 
     last_paid = _last_paid() if kind == "purchases" else {}
+    # The last price paid for each product in each unit, to flag a different one on the form.
+    paid_before = {}
+    if kind == "purchases":
+        try:
+            for row in reports().purchase_prices(12):
+                paid_before[(row["product_code"], (row["unit"] or "").lower())] = row
+        except UnleashedError:
+            paid_before = {}
 
     def unit_choice(p, unit):
         """A unit the product can be bought in, at its price: for the stock unit the default purchase
         price; for another (a case of 12), the supplier's price for one in Unleashed, or what was
         last paid for one. (The default purchase price is for a stock unit, and which way Unleashed's
         conversion rate runs isn't documented, so Core doesn't convert one into the other.)"""
+        before = paid_before.get((p.get("ProductCode"), (unit.get("Name") or "").lower()))
+        last = {"price": before["price"], "date": before["date"].isoformat() if before["date"] else None,
+                "number": before["number"], "supplier": before["supplier"]} if before else None
         if unit["stock"]:
-            return {"name": unit.get("Name"), "price": p.get(price), "per": 1, "stock": True}
+            return {"name": unit.get("Name"), "price": p.get(price), "per": 1, "stock": True, "last": last}
         supplier = p.get("Supplier") or {}
         paid = last_paid.get((p.get("ProductCode"), (unit.get("Name") or "").lower())) or {}
         cost = supplier.get("SupplierProductPrice") if same_unit(supplier.get("UnitOfMeasure"), unit) and \
             supplier.get("SupplierProductPrice") is not None else paid.get("price")
-        return {"name": unit.get("Name"), "price": cost, "per": paid.get("per"), "stock": False}
+        return {"name": unit.get("Name"), "price": cost, "per": paid.get("per"), "stock": False, "last": last}
 
     def option(p):
         base = (p.get("UnitOfMeasure") or {}).get("Name")
