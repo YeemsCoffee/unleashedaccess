@@ -3,7 +3,8 @@ email.
 
   Warehouse:    products at or below their minimum, purchase orders overdue for delivery,
                 batches expired or expiring within 3 days, store requests waiting.
-  Maintenance:  machines down, tasks overdue, new requests.
+  Maintenance:  machines down, tasks overdue, tasks due in the next 7 days (yours first), parts to
+                order for them (by their lead time), new requests.
   Production:   production orders due today or earlier and not completed.
   Finance:      yesterday's COGS not explained by any document (over $25).
 
@@ -18,6 +19,7 @@ from email.message import EmailMessage
 
 from flask import url_for
 
+from maintenance_common import DUE_SOON_DAYS
 from unleashed.client import UnleashedError
 
 EXPIRING_DAYS = 3
@@ -33,9 +35,16 @@ def _money(value):
     return f"${float(value or 0):,.2f}"
 
 
-def gather(app, areas, today):
+def _where(t):
+    where = t.get("equipment_name") or t.get("location")
+    return f" ({where})" if where else ""
+
+
+def gather(app, areas, today, user=None):
     """[{"title", "area", "count", "items": [{"text", "url"}], "more": url, "note"}] of what needs
-    attention in `areas`, sections with nothing left out. Run with an app (and request) context."""
+    attention in `areas`, sections with nothing left out. `user` (the person it's for, or None):
+    maintenance tasks assigned to them come first and say so. Run with an app (and request)
+    context."""
     sections = []
     ext = app.extensions["unleashed"]
     reports = ext.get("reports")
@@ -92,11 +101,38 @@ def gather(app, areas, today):
                 [{"text": f"{r['number']}: {r['title']}" + (f" ({r['location_path']})" if r.get("location_path") else ""),
                   "url": url_for("maint.request", request_id=r["id"])} for r in requests if r.get("breakdown")],
                 more=url_for("maint.requests"))
-        overdue = [t for t in store.tasks(today) if t["status"] == "overdue"]
+        tasks = store.tasks(today)
+        me = (user or {}).get("id")
+
+        def who(t):
+            if me is not None and t.get("assigned_to") == me:
+                return ", assigned to you"
+            return f", {t['assignee_name']}" if t.get("assignee_name") else ", not assigned"
+
+        def mine_first(ts, key):
+            return sorted(ts, key=lambda t: (not (me is not None and t.get("assigned_to") == me), key(t), t["name"]))
+
+        far = dt.date.max
+        overdue = mine_first([t for t in tasks if t["status"] == "overdue"], lambda t: t.get("next_due") or far)
         section("maintenance", "Maintenance tasks overdue",
-                [{"text": f"{t['name']}" + (f" ({t['equipment_name'] or t['location']})" if t.get("equipment_name") or t.get("location") else "")
-                          + f": {t['due_label']}", "url": url_for("maint.task", task_id=t["id"])} for t in overdue],
+                [{"text": f"{t['name']}{_where(t)}: {t['due_label']}" + (who(t) if user else ""),
+                  "url": url_for("maint.task", task_id=t["id"])} for t in overdue],
                 more=url_for("maint.tasks", status="overdue"))
+        soon = mine_first([t for t in tasks if t["due_soon"]], lambda t: t.get("next_due") or far)
+        section("maintenance", f"Maintenance tasks due in the next {DUE_SOON_DAYS} days",
+                [{"text": f"{t['name']}{_where(t)}: {t['due_label'].replace('Due in', 'due in').replace('Due today', 'due today')}"
+                          + (", started" if t["status"] == "in_progress" else "") + who(t),
+                  "url": url_for("maint.task", task_id=t["id"])} for t in soon],
+                more=url_for("maint.tasks", status="soon"))
+        parts = mine_first([t for t in tasks if t.get("order_now") and t["status"] != "overdue"], lambda t: t["order_by"])
+        section("maintenance", "Parts to order for upcoming maintenance",
+                [{"text": f"{t['part_name']} for {t['name']}{_where(t)}" + (f" from {t['vendor']}" if t.get("vendor") else "")
+                          + (": order today" if t["order_by"] == today else
+                             f": should have been ordered {t['order_by']:%b} {t['order_by'].day}" if t["order_by"] < today else
+                             f": order by {t['order_by']:%b} {t['order_by'].day}")
+                          + (f" ({t['lead_time_days']} days' lead time)" if t.get("lead_time_days") else ""),
+                  "url": url_for("maint.task", task_id=t["id"])} for t in parts],
+                more=url_for("maint.overview"))
         section("maintenance", "New maintenance requests",
                 [{"text": f"{r['number']}: {r['title']}", "url": url_for("maint.request", request_id=r["id"])}
                  for r in requests if r["status"] == "open" and not r.get("breakdown")], more=url_for("maint.requests"))
@@ -189,7 +225,8 @@ def send_daily(app, force_user=None):
     today = ext["today_fn"]()
     now = dt.datetime.now(ext.get("display_tz") or dt.timezone.utc)
     if force_user is None:
-        if now.hour < int(cfg.get("DAILY_EMAIL_HOUR") or 7):
+        hour = cfg.get("DAILY_EMAIL_HOUR")
+        if now.hour < int(7 if hour in (None, "") else hour):  # 0 is midnight, not "unset"
             return 0
         # Claim the day, so only one instance (and one thread) sends it.
         with _sending:
@@ -209,7 +246,7 @@ def send_daily(app, force_user=None):
     for user in people:
         areas = set(AREA_KEYS) if user["role"] == "admin" else profiles.areas_of(user)
         with app.test_request_context(base_url=cfg.get("PUBLIC_URL") or "http://localhost"):
-            sections = gather(app, areas, today)
+            sections = gather(app, areas, today, user)
         if not sections and not force_user:
             continue
         sender, mailbox, _ = sender_for(cfg, user, company)

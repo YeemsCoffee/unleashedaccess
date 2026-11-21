@@ -4027,6 +4027,28 @@ class TeamAccountTests(unittest.TestCase):
         mine = tia.get("/attention").get_data(as_text=True)
         self.assertIn("Descale", mine)
         self.assertNotIn("At or below their minimum", mine)
+        # Tasks coming up in the next 7 days: hers first, then everyone else's; parts to order by
+        # their lead time; nothing further out.
+        tia_id = self.app.extensions["users"].by_email("tia@yeems.test")["id"]
+        soon = lambda days: (ds.today + dt.timedelta(days=days)).isoformat()
+        maint.save_task(None, {"name": "Clean grinder burrs", "frequency_days": "14", "next_due": soon(5),
+                               "location_id": str(kitchen)}, set(), "x", ds.today)
+        maint.save_task(None, {"name": "Replace water filter", "frequency_days": "90", "next_due": soon(3),
+                               "location_id": str(kitchen), "assigned_to": str(tia_id)}, {tia_id}, "x", ds.today)
+        maint.save_task(None, {"name": "Gasket swap", "frequency_days": "180", "next_due": soon(20), "location_id": str(kitchen),
+                               "part_name": "Group gasket", "vendor": "Parts Co", "lead_time_days": "16"}, set(), "x", ds.today)
+        maint.save_task(None, {"name": "Deep clean hood", "frequency_days": "365", "next_due": soon(30),
+                               "location_id": str(kitchen)}, set(), "x", ds.today)
+        mine = tia.get("/attention").get_data(as_text=True)
+        self.assertIn("Maintenance tasks due in the next 7 days", mine)
+        self.assertIn("Replace water filter (Kitchen): due in 3 days, assigned to you", mine)
+        self.assertIn("Clean grinder burrs (Kitchen): due in 5 days, not assigned", mine)
+        self.assertLess(mine.index("Replace water filter"), mine.index("Clean grinder burrs"))
+        self.assertIn("Parts to order for upcoming maintenance", mine)
+        self.assertIn("Group gasket for Gasket swap (Kitchen) from Parts Co: order by", mine)
+        self.assertNotIn("Deep clean hood", mine)
+        # Someone else sees whose it is.
+        self.assertIn("Replace water filter (Kitchen): due in 3 days, Tia", admin.get("/attention").get_data(as_text=True))
         # The morning email is opt-in, goes once a day after the hour, and only to who asked.
         self.assertIn("Email me what needs attention each morning", tia.get("/account").get_data(as_text=True))
         tia.post("/account/prefs", data={"daily_email": "1"})
@@ -4038,6 +4060,8 @@ class TeamAccountTests(unittest.TestCase):
         self.assertIn("need", message["Subject"])
         text = message.get_body(preferencelist=("plain",)).get_content()
         self.assertIn("Descale", text)
+        self.assertIn("Replace water filter (Kitchen): due in 3 days, assigned to you", text)
+        self.assertIn("Group gasket for Gasket swap", text)
         self.assertNotIn("Whole Milk", text)
         self.assertIn("https://core.example.test/maintenance/tasks/", text)
         # Not before the hour.

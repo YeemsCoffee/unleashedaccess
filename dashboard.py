@@ -508,8 +508,8 @@ def attention_page():
     """What needs attention today, in the tabs the person opens."""
     import attention
     areas = user_areas()
-    sections = attention.gather(current_app._get_current_object(), areas, _ext()["today_fn"]())
     user = current_user()
+    sections = attention.gather(current_app._get_current_object(), areas, _ext()["today_fn"](), user)
     return render_template("dash/attention.html", sections=sections, user=user, can_email=_can_email(),
                            daily_email=bool(user) and attention.wants_email(current_app.extensions["db"], user["id"]))
 

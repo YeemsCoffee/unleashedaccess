@@ -178,7 +178,10 @@ tabs the person opens:
 - **Warehouse**: products at or below their minimum (with what to order), purchase orders overdue
   for delivery (placed, past their delivery date), batches expired or expiring within 3 days, and
   store requests waiting for the warehouse.
-- **Maintenance**: machines down, tasks overdue, new requests.
+- **Maintenance**: machines down, tasks overdue, **tasks due in the next 7 days** (with who
+  they're assigned to; your own first, marked *assigned to you*), **parts to order** for upcoming
+  tasks (a part with a lead time is due to be ordered that many days before the task), and new
+  requests.
 - **Production**: production orders due today or earlier and not completed.
 - **Finance**: yesterday's COGS that no document explains, when it's $25 or more.
 
